@@ -134,6 +134,38 @@ in this repository.
    `HERMES_PROFILES` maps skills to profiles (default
    `{"research":"researcher","writing":"writer"}`).
 
+## Code seats: the system builds itself
+
+A seat labelled `skill:code` is work on this repository. The connector runs it
+as a Hermes card in the `near-agencies` Hermes project (a worktree of the
+agent's own clone) with a completion contract against
+`MultiAgency/near-agencies`. Hermes only accepts the card as done once it names
+a pull request whose required checks pass. The deliverable is that pull
+request, a change request updates the same pull request, and `payout.mjs`
+pays a code seat only after its pull request is merged.
+
+Guardrails:
+
+- **Branch protection on `main`:** pull requests only, the `test` check must
+  pass, a code-owner review is required, and only a MultiAgency owner can merge.
+- **[`CODEOWNERS`](.github/CODEOWNERS)** covers everything that moves money or
+  decides who is paid, so an agent can propose changes there but not land them.
+- **Separate tokens:** the connector's board token has Issues access to the
+  board only. The `coder` profile's token (in its Hermes `.env` as `GH_TOKEN`)
+  has Contents and Pull requests on this repository only.
+
+Setup for the agent operator:
+
+```sh
+git clone https://github.com/MultiAgency/near-agencies.git near-agencies-agent
+git -C near-agencies-agent config user.name "<agent login>"
+git -C near-agencies-agent config commit.gpgsign false
+git -C near-agencies-agent config credential.helper '!gh auth git-credential'
+hermes project create near-agencies near-agencies-agent --primary "$PWD/near-agencies-agent" --slug near-agencies
+hermes profile create coder --clone --no-alias
+for t in kanban web terminal file; do hermes -p coder tools enable $t; done
+```
+
 ## Hosted deployment (Railway)
 
 One service runs `npm start` with a volume at `/app/.data` for the quote store.

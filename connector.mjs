@@ -17,8 +17,11 @@
 //   GITHUB_TOKEN_FILE=... node connector.mjs [--once]
 //
 // HERMES_PROFILES maps skills to Hermes profiles (default research=researcher,
-// writing=writer). The agent never holds the GitHub token: only this
-// connector does, and Hermes workers only see their card.
+// writing=writer, code=coder). Research and writing workers only see their
+// card; the board token stays with this connector. Code seats run in the
+// Hermes project HERMES_PROJECT (a worktree of CODE_REPO) under a completion
+// contract, so a card finishes only with a pull request whose required checks
+// pass; the coder profile holds its own token scoped to CODE_REPO.
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
@@ -28,7 +31,10 @@ import { byGithub } from "./lib/roster.mjs";
 import { comments, eligibility, isClaim, openSeats, swapLabel } from "./lib/seats.mjs";
 
 const run = promisify(execFile);
-const profiles = JSON.parse(process.env.HERMES_PROFILES ?? '{"research":"researcher","writing":"writer"}');
+const profiles = JSON.parse(process.env.HERMES_PROFILES ?? '{"research":"researcher","writing":"writer","code":"coder"}');
+const CODE_REPO = process.env.CODE_REPO ?? "MultiAgency/near-agencies";
+const HERMES_PROJECT = process.env.HERMES_PROJECT ?? "near-agencies";
+const PULL = /https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
 const INTERVAL_MS = 30_000;
 const DELIVERABLE = "**Deliverable**";
 
@@ -79,18 +85,23 @@ async function work(seat) {
 // handoff reaches the new worker.
 async function cardFor(seat, profile, revision, thread, parent, request) {
   const suffix = revision ? `:r${revision}` : "";
+  const code = isCodeSeat(seat);
   const body = [await briefing(seat)];
+  let pullRequest = null;
   if (request) {
     const previous = thread.filter(c => c.user.login === login && c.body.startsWith(DELIVERABLE) && c.created_at < request.created_at).at(-1);
+    pullRequest = previous?.body.match(PULL)?.[0] ?? null;
     body.push("", "## Changes requested by the reviewer", request.body.split("```changes")[0].trim());
-    if (previous) body.push("", "## Your previous deliverable (revise it; keep what was right)", previous.body);
+    if (pullRequest) body.push("", `## Your pull request\n\n${pullRequest}: check out its branch and push the fixes there, so the same pull request is updated.`);
+    else if (previous) body.push("", "## Your previous deliverable (revise it; keep what was right)", previous.body);
   }
   return hermes(["kanban", "create", `[#${seat.number}${revision ? ` r${revision}` : ""}] ${seat.title}`,
     "--assignee", profile,
     "--idempotency-key", `github:${board}#${seat.number}${suffix}`,
     "--body", body.join("\n"),
     ...(parent ? ["--parent", parent] : []),
-    "--max-runtime", "45m",
+    ...(code ? ["--project", HERMES_PROJECT, "--completion-contract", pullRequest ?? CODE_REPO] : []),
+    "--max-runtime", code ? "90m" : "45m",
     "--max-retries", "2",
     "--json"]);
 }
@@ -99,6 +110,19 @@ async function publish(seat, cardId, profile, request, revision) {
   const since = request?.created_at ?? "";
   const thread = (await comments(seat.number)).filter(c => c.created_at > since);
   let delivered = thread.find(c => c.user.login === login && c.body.startsWith(DELIVERABLE));
+  const { runs } = await hermes(["kanban", "show", cardId, "--json"]);
+  const completed = runs.filter(r => r.outcome === "completed").at(-1);
+  const pullRequest = isCodeSeat(seat) ? completed?.metadata?.published_pr ?? null : null;
+  if (isCodeSeat(seat) && !pullRequest) {
+    return reportBlock(seat, cardId, { last_failure_error: "the card finished without a published pull request" });
+  }
+  if (!delivered && pullRequest) {
+    delivered = await comment(seat.number, [
+      `${DELIVERABLE}${revision ? ` (revision ${revision})` : ""} for #${seat.number}, by @${login} (Hermes \`${profile}\` profile on NEAR AI): pull request ${pullRequest}`,
+      "",
+      completed.summary ?? "",
+    ].join("\n"));
+  }
   if (!delivered) {
     const attachments = await hermes(["kanban", "attachments", cardId, "--json"]);
     const file = attachments.find(a => a.filename === "deliverable.md");
@@ -111,14 +135,15 @@ async function publish(seat, cardId, profile, request, revision) {
     ].join("\n"));
   }
   if (!thread.some(c => fenced(c.body, "handoff"))) {
-    const { runs } = await hermes(["kanban", "show", cardId, "--json"]);
-    const summary = runs.filter(r => r.outcome === "completed").at(-1)?.summary ?? "Deliverable posted.";
+    const summary = completed?.summary ?? "Deliverable posted.";
     await comment(seat.number, [
       `**Handoff:** ${summary}`,
       "",
       fence("handoff", {
-        links: [delivered.html_url],
-        verification: ["Read the deliverable comment against the seat and engagement brief"],
+        links: pullRequest ? [pullRequest, delivered.html_url] : [delivered.html_url],
+        verification: pullRequest
+          ? ["Review the pull request; its required checks passed before this handoff", "Merge it to accept the work"]
+          : ["Read the deliverable comment against the seat and engagement brief"],
         payout: { account_id: builder.nearAccount },
         hermes: { card: cardId, profile },
       }),
@@ -161,10 +186,22 @@ async function briefing(seat) {
     ...(inputs.length ? ["", "## Inputs from earlier seats", ...inputs] : []),
     "",
     "## How to deliver",
-    "Write the complete deliverable as `deliverable.md` in your workspace: markdown, with sources cited inline as links wherever you state facts.",
-    "Then call kanban_complete with a one-sentence summary and artifacts ['deliverable.md'].",
+    ...(isCodeSeat(seat) ? [
+      `Work in your worktree of ${CODE_REPO}. Keep the change focused on this seat, follow the existing code style, and add or update tests.`,
+      "Run `npm ci`, `npm run check` and `npm test`; all must pass.",
+      `Commit, push your branch, and open a pull request against main with \`gh pr create\`. Title it "Seat #${seat.number}: <what changed>" and link ${seat.url} in its body.`,
+      "Changes to payouts, claims, deposits, the roster, dependencies or CI need a MultiAgency owner's review; do not try to route around that.",
+      "When the pull request's checks pass, call kanban_complete with a one-sentence summary and metadata {\"published_pr\": \"<pull request URL>\"}.",
+    ] : [
+      "Write the complete deliverable as `deliverable.md` in your workspace: markdown, with sources cited inline as links wherever you state facts.",
+      "Then call kanban_complete with a one-sentence summary and artifacts ['deliverable.md'].",
+    ]),
     "If you cannot do the work, call kanban_block with the reason.",
   ].join("\n");
+}
+
+function isCodeSeat(seat) {
+  return seat.skills.includes("skill:code");
 }
 
 function profileFor(seat) {

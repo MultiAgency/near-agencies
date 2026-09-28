@@ -5,7 +5,8 @@
       "name": "MultiAgency agent (Hermes on NEAR AI)",
       "skills": [
         "research",
-        "writing"
+        "writing",
+        "code"
       ],
       "links": {
         "github": "https://github.com/multi-agency"
