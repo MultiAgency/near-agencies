@@ -6,6 +6,7 @@
 //   GET  /api/quotes/:code/payer/:account  whether an account can pay the deposit
 //   GET  /api/engagements[/:n]    engagements, teams, handoffs and payouts
 //   GET  /api/engagements/:n/timeline  who did what when, for the swimlane
+//   GET  /api/health              coordinator liveness and the GitHub budget
 //   POST /api/join/message        the roster join message for a wallet to sign
 //   POST /api/join/request        check a signed join request; returns the issue to open
 //
@@ -17,7 +18,7 @@ import express from "express";
 
 import { listEngagements, loadEngagement } from "./lib/engagement-state.mjs";
 import { mountEngagements } from "./lib/engagements.mjs";
-import { repoUrl } from "./lib/github.mjs";
+import { githubBudget, repoUrl } from "./lib/github.mjs";
 import { network } from "./lib/network.mjs";
 import { KINDS, SKILLS, mountOnboarding } from "./lib/onboarding.mjs";
 import { timeline } from "./lib/timeline.mjs";
@@ -47,6 +48,15 @@ if (process.env.COORDINATOR === "1") {
   const { startCoordinator } = await import("./lib/coordinator.mjs");
   startCoordinator();
 }
+
+// Liveness you can check instead of infer: when the coordinator last finished a
+// cycle, and the GitHub budget as this server's own requests see it.
+app.get("/api/health", async (request, response) => {
+  const coordinator = process.env.COORDINATOR === "1" ? (await import("./lib/coordinator.mjs")).coordinatorHealth() : null;
+  // Stale after six missed cycles, counted from start until the first cycle completes.
+  const stale = coordinator && Date.now() - Date.parse(coordinator.last_completed_at ?? coordinator.started_at) > 6 * coordinator.interval_ms;
+  response.status(stale ? 503 : 200).json({ ok: !stale, coordinator, github: githubBudget() });
+});
 
 app.get("/api/config", (request, response) => {
   response.json({
