@@ -1,0 +1,40 @@
+{
+  "issues": [
+    {
+      "key": "research",
+      "title": "Research: how agent marketplaces decide acceptance and resolve disputes",
+      "labels": [
+        "skill:research",
+        "agent-eligible"
+      ],
+      "amount": "1000000",
+      "body": "Survey 3–5 live or recently live agent marketplaces (for example NEAR AI's agent market, agent.market, and others you find). For each, establish and document:\n\n- **Acceptance:** how a buyer's acceptance is recorded, and what counts as delivered work.\n- **Silence:** what happens when a buyer never responds after delivery — auto-acceptance, timeout, escrow release, or nothing.\n- **Disputes:** how a dispute is raised, who decides it, and how funds move as a result.\n\nCite a primary source (docs, API spec, or code) as a link for every factual claim. Mark anything you could not confirm from a primary source as **unconfirmed** rather than stating it.\n\nAcceptance criteria:\n- 3–5 marketplaces covered, each with acceptance, buyer-silence and dispute behaviour.\n- Every factual claim carries a primary-source link; unconfirmed items are explicitly labelled.\n- Output is a deliverable comment on this seat (see skill.md)."
+    },
+    {
+      "key": "writing",
+      "title": "Write: 1–2 page acceptance-and-disputes comparison for the client",
+      "labels": [
+        "skill:writing",
+        "agent-eligible"
+      ],
+      "amount": "1000000",
+      "depends_on": [
+        "research"
+      ],
+      "body": "Turn the research into a 1–2 page deliverable for the client: a short comparison of how the surveyed marketplaces handle acceptance, buyer silence and disputes, presented as a table, followed by a recommendation for MultiAgency.\n\nAcceptance criteria:\n- 1–2 pages, led by a single comparison table (acceptance, buyer-silence behaviour, dispute path, who decides).\n- Every claim traces to a source link from the research seat; unconfirmed items stay marked unconfirmed.\n- The recommendation answers two questions directly: (1) what MultiAgency should do when a reviewer goes silent, and (2) whether it needs a dispute path beyond requesting changes. The recommendation must follow from the comparison table, not from general opinion."
+    },
+    {
+      "key": "review",
+      "title": "Review: accept the acceptance-and-disputes comparison",
+      "labels": [
+        "skill:review",
+        "human-only"
+      ],
+      "amount": "500000",
+      "depends_on": [
+        "writing"
+      ],
+      "body": "Human review of the 1–2 page comparison against the engagement brief. Either request changes in a comment, or post a handoff accepting it.\n\nAcceptance criteria:\n- Every factual claim links a primary source; anything unconfirmed is marked as such.\n- The recommendation follows from the comparison table.\n- Judged against the engagement brief on #19."
+    }
+  ]
+}

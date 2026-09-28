@@ -240,9 +240,96 @@ async function renderJoin(owner) {
   });
 }
 
+// The relay: one lane per participant, every event where it happened, joined
+// in time order; and the deposit split into what each seat is paid.
+const EVENT_NAMES = {
+  "deposit": "Deposit", "team-draft": "Team drafted", "team-approved": "Team approved",
+  "claim": "Claimed", "assigned": "Assigned", "seat-opened": "Seat opened",
+  "deliverable": "Delivered", "handoff": "Handed off", "changes-requested": "Changes requested",
+  "reopened": "Reopened for revision", "payout-proposed": "Payout proposed", "paid": "Paid",
+  "complete": "Engagement complete", "retrospective": "Retrospective", "note": "Note",
+};
+const GAP_CAP_MS = 12 * 60_000;
+// Events seconds apart (a deliverable and its handoff) still get their own place.
+const GAP_MIN_MS = 2 * 60_000;
+
+function relaySection(relay, e) {
+  return html`
+    <section class="relay" aria-labelledby="relay-h">
+      <h2 id="relay-h">Who did what</h2>
+      <div class="relay-scroll">${swimlane(relay)}</div>
+      <p class="hint">Each dot is a real event on the board or the chain; select one to open it. Long waits are shortened and labelled with their real length.</p>
+      ${moneyStrip(e)}
+    </section>`;
+}
+
+function swimlane({ lanes, events, open }) {
+  const W = 960, LEFT = 170, RIGHT = 24, ROW = 46, TOP = 30;
+  const H = TOP + lanes.length * ROW + 10;
+  const row = new Map(lanes.map((lane, i) => [lane.key, TOP + i * ROW + ROW / 2]));
+  // Time runs left to right, with each gap capped so long waits stay legible.
+  const times = events.map(ev => Date.parse(ev.t));
+  const pos = [0];
+  const breaks = [];
+  for (let i = 1; i < times.length; i++) {
+    const gap = times[i] - times[i - 1];
+    pos.push(pos[i - 1] + Math.max(Math.min(gap, GAP_CAP_MS), GAP_MIN_MS));
+    if (gap > GAP_CAP_MS) breaks.push({ at: (pos[i - 1] + pos[i]) / 2, gap });
+  }
+  const span = pos.at(-1) || 1;
+  const x = p => LEFT + (p / span) * (W - LEFT - RIGHT);
+  const tone = key => key === "treasury" ? "paid" : key === "client" ? "client"
+    : lanes.find(l => l.key === key)?.role === "Person" ? "human" : ["coordinator", "maintainer"].includes(key) ? "system" : "agent";
+  const latest = events.length && Date.now() - times.at(-1) < 3 * 60_000 && open ? events.length - 1 : -1;
+  return html`
+    <svg class="swimlane" viewBox="0 0 ${W} ${H}" role="img" aria-label="${`${events.length} events across ${lanes.length} participants`}">
+      ${lanes.map(lane => html`
+        <g class="lane">
+          <line x1="${LEFT}" x2="${W - RIGHT}" y1="${row.get(lane.key)}" y2="${row.get(lane.key)}"/>
+          <text x="0" y="${row.get(lane.key) - 3}" class="lane-name">${lane.name}</text>
+          <text x="0" y="${row.get(lane.key) + 13}" class="lane-role">${lane.role}</text>
+        </g>`)}
+      ${breaks.map(b => html`
+        <g class="gap">
+          <line x1="${x(b.at)}" x2="${x(b.at)}" y1="${TOP - 6}" y2="${H - 10}"/>
+          <text x="${x(b.at)}" y="${TOP - 12}">${duration(b.gap)}</text>
+        </g>`)}
+      ${events.slice(1).map((ev, i) => ev.lane === events[i].lane ? "" : html`
+        <line class="handoff-line" x1="${x(pos[i])}" y1="${row.get(events[i].lane)}" x2="${x(pos[i + 1])}" y2="${row.get(ev.lane)}"/>`)}
+      ${events.map((ev, i) => html`
+        <a href="${ev.url}" target="_blank" rel="noopener">
+          <circle class="ev ${tone(ev.lane)} ${ev.kind} ${i === latest ? "latest" : ""}" cx="${x(pos[i])}" cy="${row.get(ev.lane)}" r="${["deliverable", "paid", "complete", "deposit"].includes(ev.kind) ? 7 : 5}">
+            <title>${`${EVENT_NAMES[ev.kind] ?? ev.kind}${ev.seat ? ` on #${ev.seat}` : ""}, ${new Date(ev.t).toLocaleString()}`}</title>
+          </circle>
+        </a>`)}
+    </svg>`;
+}
+
+function moneyStrip(e) {
+  const total = Number(e.totals.deposit);
+  const part = amount => `${(Number(amount) / total) * 100}%`;
+  return html`
+    <div class="money" role="img" aria-label="${`${usdc(e.totals.deposit)} USDC deposit: ${usdc(e.totals.paid)} paid, ${usdc(e.totals.margin)} ${e.stage === "complete" ? "kept by MultiAgency" : "not yet allocated"}`}">
+      ${e.members.map(m => html`
+        <a class="seg ${m.paid ? "paid" : ""} ${m.human ? "human" : ""}" style="${`width:${part(m.amount)}`}" href="${m.paid ? m.paid.link : m.url}" title="${`${m.title}: ${usdc(m.amount)} USDC${m.paid ? ", paid" : ""}`}">
+          <span>${m.title.split(":")[0]} ${usdc(m.amount)}</span>
+        </a>`)}
+      <span class="seg margin" style="${`width:${part(e.totals.margin)}`}"><span>${e.stage === "complete" ? "Margin" : "Unallocated"} ${usdc(e.totals.margin)}</span></span>
+    </div>`;
+}
+
+function duration(ms) {
+  const minutes = Math.round(ms / 60_000);
+  return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
 // Engagement: stages, the money trail from deposit to payouts, and totals.
 async function renderEngagement(owner, number) {
-  const e = await get(`/api/engagements/${number}`);
+  // The swimlane is an extra: without it the page still renders in full.
+  const [e, relay] = await Promise.all([
+    get(`/api/engagements/${number}`),
+    get(`/api/engagements/${number}/timeline`).catch(() => null),
+  ]);
   const stages = ["assembling", "working", "accepting", "paying", "complete"];
   const current = stages.indexOf(e.stage);
   const deposit = e.engagement.deposit;
@@ -254,6 +341,7 @@ async function renderEngagement(owner, number) {
       <ol class="stages">${stages.map((s, i) => html`
         <li class="${i < current || e.stage === "complete" ? "done" : ""}" ${i === current ? html`aria-current="step"` : ""}>${stageName(s)}</li>`)}</ol>
       <p class="brief">${e.brief}</p>
+      ${relay ? relaySection(relay, e) : ""}
       <ol class="trail">
         <li class="stop">
           <div class="stop-head"><h3>Deposit from ${e.engagement.org}</h3><span class="flow">+${usdc(deposit.amount)} USDC</span></div>
