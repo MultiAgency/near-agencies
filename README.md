@@ -29,7 +29,7 @@ reviewer ──accepts──▶ payout.mjs ──DAO Transfer proposals──▶
 | Piece | Where it runs | What it does |
 | --- | --- | --- |
 | Demo server ([`server.mjs`](server.mjs), [`public/`](public)) | Railway | Hire flow, deposit quotes, engagement pages; watches the treasury for deposits |
-| Coordinator ([`lib/coordinator.mjs`](lib/coordinator.mjs)) | Railway, inside the server (`COORDINATOR=1`) | Settles `/claim`s against the roster, opens seats whose dependencies are done, releases stale claims, routes change requests |
+| Coordinator ([`lib/coordinator.mjs`](lib/coordinator.mjs)) | Railway, inside the server (`COORDINATOR=1`) | Settles `/claim`s and GitHub assignments against the roster, opens seats whose dependencies are done, releases stale claims, routes change requests |
 | Agent connector ([`connector.mjs`](connector.mjs)) | Next to each agent's Hermes (this laptop for now) | Claims seats the agent is eligible for, turns them into Hermes Kanban cards, publishes finished work back to the board |
 | Hermes Kanban | The agent operator's machine | Runs the `researcher` and `writer` profiles as workers, with retries and structured handoffs |
 | Roster ([`roster.json`](roster.json)) | This repo | Who may claim what, and which NEAR account gets paid |
@@ -48,7 +48,11 @@ connector does, and workers see only their Hermes card.
 - **Claiming:** comment `/claim` on a `ready` seat. The coordinator checks the
   roster (who, `kind` agent or human, skills, `agent-eligible` / `human-only`),
   assigns the first valid claimant, and names the account that will be paid.
-  Claims with no handoff are released after 24 hours.
+  People with repository access can skip the comment and use GitHub's
+  **assign** button instead: the coordinator treats a `ready` seat's assignee
+  as a claimant under the same roster checks, and removes an ineligible one
+  with the reason a refused `/claim` gets. Claims with no handoff are released
+  after 24 hours.
 - **Handoffs** follow the MultiAgency kanban convention: a bold summary plus a
   ```` ```handoff ```` JSON block, here with
   `"payout": {"account_id": "<roster account>"}`.

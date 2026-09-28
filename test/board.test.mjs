@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { isChangeRequest } from "../lib/coordinator.mjs";
+import { assignmentClaims, isChangeRequest } from "../lib/coordinator.mjs";
 import { fence, fenced } from "../lib/github.mjs";
 import { byGithub, covers } from "../lib/roster.mjs";
 import { eligibility, isClaim, seat } from "../lib/seats.mjs";
@@ -62,6 +62,50 @@ describe("seats", () => {
     const notAgentEligible = seat(issue({ labels: [{ name: "ready" }, { name: "skill:writing" }] }));
     assert.match(eligibility(notAgentEligible, agent), /not agent-eligible/);
     assert.match(eligibility(seat(issue()), { kind: "agent", skills: ["research"] }), /do not cover skill:writing/);
+  });
+});
+
+describe("native assignment claims", () => {
+  const assigned = (...logins) =>
+    seat(issue({ assignees: logins.map(login => ({ login })) }));
+  const humanOnly = assignees =>
+    seat(issue({ labels: [{ name: "ready" }, { name: "skill:review" }, { name: "human-only" }], assignees }));
+
+  test("an eligible assignee is accepted, naming the payout account", () => {
+    const { accepted, refused } = assignmentClaims(assigned("multi-agency"));
+    assert.ok(accepted);
+    assert.equal(accepted.login, "multi-agency");
+    assert.equal(accepted.builder.nearAccount, "agent.agency.testnet");
+    assert.deepEqual(refused, []);
+  });
+
+  test("a human assignee may take a human-only seat", () => {
+    const { accepted } = assignmentClaims(humanOnly([{ login: "jlwaugh" }]));
+    assert.ok(accepted);
+    assert.equal(accepted.builder.nearAccount, "reviewer.agency.testnet");
+  });
+
+  test("ineligible assignees are refused with the /claim reasons", () => {
+    const offRoster = assignmentClaims(assigned("stranger"));
+    assert.equal(offRoster.accepted, null);
+    assert.match(offRoster.refused[0].refusal, /not on the MultiAgency roster/);
+    assert.match(assignmentClaims(humanOnly([{ login: "multi-agency" }])).refused[0].refusal, /human-only/);
+    const notAgentEligible = seat(issue({ labels: [{ name: "ready" }, { name: "skill:writing" }], assignees: [{ login: "multi-agency" }] }));
+    assert.match(assignmentClaims(notAgentEligible).refused[0].refusal, /not agent-eligible/);
+    const unskilled = seat(issue({ labels: [{ name: "ready" }, { name: "skill:review" }, { name: "agent-eligible" }], assignees: [{ login: "multi-agency" }] }));
+    assert.match(assignmentClaims(unskilled).refused[0].refusal, /do not cover skill:review/);
+  });
+
+  test("the first eligible assignee wins and ineligible ones are refused", () => {
+    const { accepted, refused } = assignmentClaims(assigned("stranger", "multi-agency", "nobody"));
+    assert.equal(accepted.login, "multi-agency");
+    assert.deepEqual(refused.map(claim => claim.login), ["stranger", "nobody"]);
+  });
+
+  test("a seat nobody assigned has nothing to settle", () => {
+    const { accepted, refused } = assignmentClaims(seat(issue()));
+    assert.equal(accepted, null);
+    assert.deepEqual(refused, []);
   });
 });
 
