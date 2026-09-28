@@ -26,7 +26,7 @@ import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 
-import { comment, fence, fenced, github, issue, me, repoId } from "./lib/github.mjs";
+import { comment, digest, fence, fenced, github, issue, me, repoId } from "./lib/github.mjs";
 import { byGithub } from "./lib/roster.mjs";
 import { comments, eligibility, isClaim, openSeats, swapLabel } from "./lib/seats.mjs";
 
@@ -141,6 +141,7 @@ async function publish(seat, cardId, profile, request, revision) {
       "",
       fence("handoff", {
         links: pullRequest ? [pullRequest, delivered.html_url] : [delivered.html_url],
+        deliverable: { url: delivered.html_url, sha256: digest(delivered.body) },
         verification: pullRequest
           ? ["Review the pull request; its required checks passed before this handoff", "Merge it to accept the work"]
           : ["Read the deliverable comment against the seat and engagement brief"],

@@ -5,6 +5,8 @@
 //   GET  /api/quotes/:code        deposit status for a quote
 //   GET  /api/quotes/:code/payer/:account  whether an account can pay the deposit
 //   GET  /api/engagements[/:n]    engagements, teams, handoffs and payouts
+//   POST /api/join/message        the roster join message for a wallet to sign
+//   POST /api/join/request        check a signed join request; returns the issue to open
 //
 // With FACILITATOR_URL set, the x402-paid routes are mounted too
 // (lib/x402-intake.mjs): POST /engagements and GET /brief. With COORDINATOR=1
@@ -16,6 +18,7 @@ import { listEngagements, loadEngagement } from "./lib/engagement-state.mjs";
 import { mountEngagements } from "./lib/engagements.mjs";
 import { repoUrl } from "./lib/github.mjs";
 import { network } from "./lib/network.mjs";
+import { KINDS, SKILLS, mountOnboarding } from "./lib/onboarding.mjs";
 
 const deposit = process.env.ENGAGEMENT_DEPOSIT ?? "3000000";
 const host = process.env.HOST ?? "127.0.0.1";
@@ -37,6 +40,7 @@ if (process.env.FACILITATOR_URL) {
   });
 }
 mountEngagements(app, { deposit });
+mountOnboarding(app);
 if (process.env.COORDINATOR === "1") {
   const { startCoordinator } = await import("./lib/coordinator.mjs");
   startCoordinator();
@@ -52,6 +56,7 @@ app.get("/api/config", (request, response) => {
     trezu: network.trezu && `${network.trezu}/${network.treasury}`,
     board: repoUrl,
     x402: Boolean(process.env.FACILITATOR_URL),
+    roster: { kinds: KINDS, skills: SKILLS },
   });
 });
 

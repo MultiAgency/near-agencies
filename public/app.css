@@ -65,6 +65,9 @@ input, textarea {
 }
 textarea { min-height: 9rem; resize: vertical; }
 .hint { color: var(--muted); font-size: 0.85rem; font-weight: 400; }
+fieldset { border: 0; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; }
+legend { font-weight: 500; font-size: 0.95rem; margin-bottom: 0.35rem; width: 100%; }
+label.choice { display: flex; align-items: center; gap: 0.4rem; font-weight: 400; }
 button {
   font: inherit; font-weight: 700; cursor: pointer; border: 0; border-radius: var(--radius-field);
   padding: 0.75rem 1.2rem; background: var(--ink); color: var(--paper); justify-self: start;

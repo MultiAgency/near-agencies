@@ -8,10 +8,11 @@
 //
 // Proposals are filed only after every team issue is closed with a handoff
 // whose `payout.account_id` matches the seat's payee, and every pull request a
-// handoff links (code seats) is merged. Each proposal and
+// handoff links (code seats) is merged, and every deliverable a handoff pins
+// by sha256 is unedited. Each proposal and
 // executed payout is recorded on its issue; the epic closes once every payout
 // has executed. NEAR_NETWORK selects testnet (default) or mainnet.
-import { comment, fence, github, pullRequest } from "./lib/github.mjs";
+import { comment, commentAt, digest, fence, github, pullRequest } from "./lib/github.mjs";
 import { findApproval, txBlockHeight } from "./lib/history.mjs";
 import { loadEngagement, recordPaid } from "./lib/engagement-state.mjs";
 import { USDC, call, explorer, ftBalance, view } from "./lib/near.mjs";
@@ -57,6 +58,7 @@ if (command === "status") {
       if (!pr.merged) throw new Error(`#${m.issue}: ${url} is not merged yet`);
     }
   }
+  await assertDeliverablesUnchanged(members);
   for (const m of members.filter(m => !m.payout)) {
     const kind = { Transfer: { token_id: USDC, receiver_id: m.payee, amount: m.amount, msg: null } };
     // Trezu parses JSON descriptions and displays `title` (else `notes`) with a `url` link.
@@ -81,6 +83,7 @@ if (command === "status") {
   if (own.length > 0) {
     throw new Error(`${signer} filed the proposals for ${own.map(m => `#${m.issue}`).join(", ")}; another approver must vote`);
   }
+  await assertDeliverablesUnchanged(pending);
   for (const m of pending) {
     const before = await ftBalance(m.payee);
     // Sputnik v2.3.1 requires the proposal kind echoed back (ERR_WRONG_KIND guard).
@@ -114,6 +117,15 @@ if (command === "status") {
     console.log(`#${m.issue}: proposal ${m.payout.proposal_id} is ${m.payout.status}; file a new proposal`);
   }
   await closeIfPaid();
+}
+
+// A deliverable is a comment its author can still edit; the handoff pins the
+// accepted text, so an edit after acceptance stops the payout.
+async function assertDeliverablesUnchanged(members) {
+  for (const m of members.filter(m => m.handoff.deliverable)) {
+    const { url, sha256 } = m.handoff.deliverable;
+    if (digest((await commentAt(url)).body) !== sha256) throw new Error(`#${m.issue}: ${url} was edited after its handoff`);
+  }
 }
 
 async function closeIfPaid() {
