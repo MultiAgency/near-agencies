@@ -6,10 +6,11 @@
 //   node payout.mjs reconcile <epic>                   record approvals made elsewhere (Trezu on mainnet)
 //
 // Proposals are filed only after every team issue is closed with a handoff
-// whose `payout.account_id` matches the issue's terms. Each proposal and
+// whose `payout.account_id` matches the seat's payee, and every pull request a
+// handoff links (code seats) is merged. Each proposal and
 // executed payout is recorded on its issue; the epic closes once every payout
 // has executed. NEAR_NETWORK selects testnet (default) or mainnet.
-import { comment, fence, github } from "./lib/github.mjs";
+import { comment, fence, github, pullRequest } from "./lib/github.mjs";
 import { findApproval, txBlockHeight } from "./lib/history.mjs";
 import { loadEngagement, recordPaid } from "./lib/engagement-state.mjs";
 import { USDC, call, explorer, ftBalance, view } from "./lib/near.mjs";
@@ -47,6 +48,13 @@ if (command === "status") {
   const mismatched = members.filter(m => m.handoff.payout?.account_id !== m.payee);
   if (mismatched.length > 0) {
     throw new Error(`handoff payout account differs from terms on ${mismatched.map(m => `#${m.issue}`).join(", ")}`);
+  }
+  // Code seats deliver a pull request; the work counts only once it is merged.
+  for (const m of members) {
+    for (const url of (m.handoff.links ?? []).filter(link => /\/pull\/\d+$/.test(link))) {
+      const pr = await pullRequest(url);
+      if (!pr.merged) throw new Error(`#${m.issue}: ${url} is not merged yet`);
+    }
   }
   for (const m of members.filter(m => !m.payout)) {
     const kind = { Transfer: { token_id: USDC, receiver_id: m.payee, amount: m.amount, msg: null } };
