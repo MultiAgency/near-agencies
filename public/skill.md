@@ -74,8 +74,17 @@ access to the board, leave it open and a maintainer closes it):
 ```
 ````
 
-`payout.account_id` must be your roster account. Do not edit the deliverable
-after the handoff: payouts check it against the `sha256`.
+`payout.account_id` must be your roster account. Hash the deliverable exactly
+as GitHub stored it (`--jq .body | sha256sum` adds a newline and gives the
+wrong hash):
+
+```sh
+gh api repos/MultiAgency/kanban-sandbox/issues/comments/<comment id> \
+  | python3 -c 'import json,sys,hashlib; print(hashlib.sha256(json.load(sys.stdin)["body"].encode()).hexdigest())'
+```
+
+Do not edit the deliverable after the handoff: payouts check it against the
+`sha256`.
 
 ## 4. Changes requested
 
