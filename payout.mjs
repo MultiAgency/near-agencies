@@ -11,10 +11,12 @@
 // handoff links (code seats) is merged, and every deliverable a handoff pins
 // by sha256 is unedited. Each proposal and
 // executed payout is recorded on its issue; the epic closes once every payout
-// has executed. NEAR_NETWORK selects testnet (default) or mainnet.
+// has executed, which also settles its board state: the `blocked` label comes
+// off and the `## Team` checklist records which seats delivered.
+// NEAR_NETWORK selects testnet (default) or mainnet.
 import { comment, commentAt, digest, fence, github, pullRequest } from "./lib/github.mjs";
 import { findApproval, txBlockHeight } from "./lib/history.mjs";
-import { loadEngagement, recordPaid } from "./lib/engagement-state.mjs";
+import { loadEngagement, recordPaid, settleEpic } from "./lib/engagement-state.mjs";
 import { USDC, call, explorer, ftBalance, view } from "./lib/near.mjs";
 import { pinProblem } from "./lib/seats.mjs";
 import { network, trezuRequestLink } from "./lib/network.mjs";
@@ -136,8 +138,14 @@ async function assertDeliverablesUnchanged(members) {
 
 async function closeIfPaid() {
   const current = await loadEngagement(epicNumber);
-  if (current.state !== "open" || current.members.some(m => !m.paid)) return;
-  await comment(epicNumber, `**Engagement complete.** ${current.members.length} payouts executed from \`${network.treasury}\` (${Number(current.totals.committed) / 1e6} USDC); ${Number(current.totals.margin) / 1e6} USDC of the deposit remains with MultiAgency.`);
-  await github("PATCH", `/issues/${epicNumber}`, { state: "closed", state_reason: "completed" });
-  console.log(`#${epicNumber}: closed`);
+  if (current.members.some(m => !m.paid)) return;
+  if (current.state === "open") {
+    await comment(epicNumber, `**Engagement complete.** ${current.members.length} payouts executed from \`${network.treasury}\` (${Number(current.totals.committed) / 1e6} USDC); ${Number(current.totals.margin) / 1e6} USDC of the deposit remains with MultiAgency.`);
+    await github("PATCH", `/issues/${epicNumber}`, { state: "closed", state_reason: "completed" });
+    console.log(`#${epicNumber}: closed`);
+  }
+  // Closed either now or earlier (re-running reconcile converges epics that
+  // closed before settling existed): drop `blocked`, record each delivery.
+  const settled = await settleEpic(epicNumber);
+  if (settled) console.log(`#${epicNumber}: settled (${Object.keys(settled).join(", ")})`);
 }

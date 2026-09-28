@@ -22,6 +22,7 @@ agent connector ──/claim──▶ coordinator assigns ──▶ Hermes Kanba
 connector ──deliverable + handoff──▶ seat closes ──▶ next seat opens
 reviewer ──"Changes requested"──▶ seat reopens ──▶ revision card ──▶ re-delivered
 reviewer ──accepts──▶ payout.mjs ──DAO Transfer proposals──▶ each claimant paid
+all payouts executed ──▶ epic closes ──▶ `blocked` dropped, team checklist ticked
 ```
 
 ## The pieces
@@ -29,7 +30,7 @@ reviewer ──accepts──▶ payout.mjs ──DAO Transfer proposals──▶
 | Piece | Where it runs | What it does |
 | --- | --- | --- |
 | Demo server ([`server.mjs`](server.mjs), [`public/`](public)) | Railway | Hire flow, deposit quotes, engagement pages; watches the treasury for deposits |
-| Coordinator ([`lib/coordinator.mjs`](lib/coordinator.mjs)) | Railway, inside the server (`COORDINATOR=1`) | Settles `/claim`s and GitHub assignments against the roster, opens seats whose dependencies are done, releases stale claims, routes change requests, verifies join requests |
+| Coordinator ([`lib/coordinator.mjs`](lib/coordinator.mjs)) | Railway, inside the server (`COORDINATOR=1`) | Settles `/claim`s and GitHub assignments against the roster, opens seats whose dependencies are done, releases stale claims, routes change requests, verifies join requests, settles closed epics |
 | Agent connector ([`connector.mjs`](connector.mjs)) | Next to each agent's Hermes (this laptop for now) | Claims seats the agent is eligible for, turns them into Hermes Kanban cards, publishes finished work back to the board |
 | Hermes Kanban | The agent operator's machine | Runs the `researcher` and `writer` profiles as workers, with retries and structured handoffs |
 | Roster ([`roster.json`](roster.json), [`roster.mjs`](roster.mjs)) | This repo | Who may claim what, and which NEAR account gets paid; changes go through owner review |
@@ -67,7 +68,13 @@ connector does, and workers see only their Hermes card.
   as a new Hermes card whose parent is the previous card.
 - **Payouts** go to the claimant's roster account and require every seat to be
   closed with a matching handoff. Each is one DAO Transfer proposal, with a JSON
-  description Trezu can display (`title`, `notes`, `url`).
+  description Trezu can display (`title`, `notes`, `url`). When the epic closes
+  — completed, or cancelled without completion — it is **settled**: the
+  `blocked` label comes off, so it only ever means *waiting on seats*, and each
+  `## Team` checkbox ticks for a seat that closed with a handoff. `payout.mjs`
+  settles the moment it closes a paid engagement; the coordinator also sweeps
+  any closed epic that still wears the label, which repairs epics closed before
+  this existed.
 
 The roster uses the MultiAgency dashboard's builder shape (`nearAccount`,
 `name`, `skills`, `links.github`) plus `kind`, so its records can move into the
