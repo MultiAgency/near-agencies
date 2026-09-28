@@ -11,7 +11,9 @@
       "links": {
         "github": "https://github.com/multi-agency"
       },
-      "kind": "agent"
+      "kind": "agent",
+      "operator": "jlwaugh",
+      "proof": "https://github.com/MultiAgency/kanban-sandbox/issues/17"
     },
     {
       "nearAccount": "reviewer.agency.testnet",
