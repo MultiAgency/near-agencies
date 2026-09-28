@@ -127,6 +127,35 @@ button:disabled { opacity: 0.5; cursor: progress; }
 .facts .ok { color: var(--paid); font-weight: 500; }
 .brief { white-space: pre-wrap; max-width: var(--measure); margin: 0 0 3rem; }
 
+/* Relay: who did what, and where the deposit goes */
+.relay { margin: 0 0 3rem; }
+.relay h2 { font-size: 1.05rem; margin: 0 0 0.75rem; }
+.relay-scroll { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius-field); padding: 0.75rem 0.75rem 0.25rem; }
+.swimlane { display: block; width: 100%; min-width: 720px; height: auto; font-family: inherit; }
+.swimlane .lane line { stroke: var(--rule); stroke-width: 1; }
+.swimlane .lane-name { font-size: 13px; font-weight: 700; fill: var(--ink); }
+.swimlane .lane-role { font-size: 11px; fill: var(--muted); }
+.swimlane .gap line { stroke: var(--muted); stroke-dasharray: 2 4; opacity: 0.6; }
+.swimlane .gap text { font-size: 11px; fill: var(--muted); text-anchor: middle; font-variant-numeric: tabular-nums; }
+.swimlane .handoff-line { stroke: var(--muted); stroke-width: 1; opacity: 0.35; }
+.swimlane .ev { stroke: var(--surface); stroke-width: 2; fill: var(--usdc); }
+.swimlane .ev.human { fill: var(--human); }
+.swimlane .ev.paid { fill: var(--paid); }
+.swimlane .ev.system { fill: var(--muted); }
+.swimlane .ev.client { fill: var(--ink); }
+.swimlane .ev.changes-requested, .swimlane .ev.reopened { fill: var(--warn); }
+.swimlane .ev.claim, .swimlane .ev.team-draft { fill: var(--surface); stroke: currentColor; }
+.swimlane .ev.claim.agent { stroke: var(--usdc); }
+.swimlane .ev.claim.human { stroke: var(--human); }
+.swimlane .ev.team-draft { stroke: var(--muted); }
+.swimlane .ev.latest { stroke: var(--usdc); }
+.swimlane a:focus-visible .ev { stroke: var(--usdc); stroke-width: 4; }
+.money { display: flex; margin-top: 1rem; border-radius: var(--radius-field); overflow: hidden; border: 1px solid var(--rule); min-height: 2.4rem; }
+.money .seg { display: flex; align-items: center; padding: 0 0.6rem; font-size: 0.8rem; white-space: nowrap; overflow: hidden; color: var(--ink); text-decoration: none; background: var(--surface); border-right: 1px solid var(--rule); background-image: repeating-linear-gradient(135deg, transparent 0 6px, var(--rule) 6px 7px); }
+.money .seg.paid { background: var(--paid); color: var(--surface); }
+.money .seg.margin { background: var(--paper); color: var(--muted); border-right: 0; }
+.money .seg span { overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+
 .totals { margin-top: 1rem; border-top: 1px solid var(--rule); padding-top: 1.25rem; display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 1rem; }
 .totals div { display: grid; }
 .totals span { color: var(--muted); font-size: 0.85rem; }
@@ -135,4 +164,6 @@ button:disabled { opacity: 0.5; cursor: progress; }
 @media (prefers-reduced-motion: no-preference) {
   .trail::before { transform-origin: top; animation: draw 700ms ease-out both; }
   @keyframes draw { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+  .swimlane .ev.latest { animation: pulse 1.6s ease-out infinite; transform-box: fill-box; transform-origin: center; }
+  @keyframes pulse { 0% { stroke-width: 2; stroke-opacity: 1; } 100% { stroke-width: 14; stroke-opacity: 0; } }
 }

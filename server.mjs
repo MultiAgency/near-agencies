@@ -5,6 +5,7 @@
 //   GET  /api/quotes/:code        deposit status for a quote
 //   GET  /api/quotes/:code/payer/:account  whether an account can pay the deposit
 //   GET  /api/engagements[/:n]    engagements, teams, handoffs and payouts
+//   GET  /api/engagements/:n/timeline  who did what when, for the swimlane
 //   POST /api/join/message        the roster join message for a wallet to sign
 //   POST /api/join/request        check a signed join request; returns the issue to open
 //
@@ -19,6 +20,7 @@ import { mountEngagements } from "./lib/engagements.mjs";
 import { repoUrl } from "./lib/github.mjs";
 import { network } from "./lib/network.mjs";
 import { KINDS, SKILLS, mountOnboarding } from "./lib/onboarding.mjs";
+import { timeline } from "./lib/timeline.mjs";
 
 const deposit = process.env.ENGAGEMENT_DEPOSIT ?? "3000000";
 const host = process.env.HOST ?? "127.0.0.1";
@@ -62,6 +64,7 @@ app.get("/api/config", (request, response) => {
 
 app.get("/api/engagements", handle(() => listEngagements()));
 app.get("/api/engagements/:number", handle(request => loadEngagement(Number(request.params.number))));
+app.get("/api/engagements/:number/timeline", handle(request => timeline(Number(request.params.number))));
 
 app.listen(port, host, () => {
   console.log(`MultiAgency demo on http://${host}:${port} (${network.networkId}, treasury ${network.treasury})`);
