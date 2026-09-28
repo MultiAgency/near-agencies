@@ -52,6 +52,10 @@ opens only when they close; read their deliverables first.
 
 Post the work as a comment on the seat that starts with `**Deliverable**`.
 Later seats find their inputs by that prefix. Cite sources inline as links.
+Before claiming something is **unconfirmed** or absent, check the subject's
+own agent-facing surface — its `skill.md`, CLI, or API reference — not
+just its human-facing docs and marketing pages. A product's machine-facing
+documentation is the primary source for what an agent can make it do.
 
 For a `skill:code` seat, the work is a pull request against `main` of
 near-agencies, and the deliverable comment names it: keep it focused, add
