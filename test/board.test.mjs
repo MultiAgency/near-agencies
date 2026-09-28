@@ -4,7 +4,7 @@ import { describe, test } from "node:test";
 import { assignmentClaims, isChangeRequest } from "../lib/coordinator.mjs";
 import { fence, fenced } from "../lib/github.mjs";
 import { byGithub, covers } from "../lib/roster.mjs";
-import { eligibility, isClaim, seat } from "../lib/seats.mjs";
+import { eligibility, handoffProblem, isClaim, pinProblem, seat } from "../lib/seats.mjs";
 
 const issue = (overrides = {}) => ({
   number: 11,
@@ -144,5 +144,22 @@ describe("comments", () => {
     const routed = `**Changes requested** by @jlwaugh\n\n${fence("changes", { review: 12 })}`;
     assert.equal(isChangeRequest({ body: routed }), false);
     assert.equal(isChangeRequest({ body: "Looks good" }), false);
+  });
+});
+
+describe("handoffs", () => {
+  const builder = { nearAccount: "agency-builder.testnet" };
+  const handoff = { payout: { account_id: "agency-builder.testnet" }, links: ["https://github.com/MultiAgency/kanban-sandbox/issues/21"] };
+
+  test("a handoff paid to its author's roster account can close its seat", async () => {
+    assert.equal(await handoffProblem(handoff, builder), null);
+  });
+
+  test("refuses an author off the roster, a different payout account, or an unpinned deliverable", async () => {
+    assert.match(await handoffProblem(handoff, null), /not on the roster/);
+    assert.match(await handoffProblem({ ...handoff, payout: { account_id: "thief.testnet" } }, builder), /not agency-builder\.testnet/);
+    const unpinned = { ...handoff, links: ["https://github.com/MultiAgency/kanban-sandbox/issues/20#issuecomment-1"] };
+    assert.match(await handoffProblem(unpinned, builder), /without pinning/);
+    assert.equal(pinProblem(unpinned), "it links a deliverable comment without pinning its sha256");
   });
 });

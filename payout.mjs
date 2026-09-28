@@ -16,6 +16,7 @@ import { comment, commentAt, digest, fence, github, pullRequest } from "./lib/gi
 import { findApproval, txBlockHeight } from "./lib/history.mjs";
 import { loadEngagement, recordPaid } from "./lib/engagement-state.mjs";
 import { USDC, call, explorer, ftBalance, view } from "./lib/near.mjs";
+import { pinProblem } from "./lib/seats.mjs";
 import { network, trezuRequestLink } from "./lib/network.mjs";
 
 const [command, epicNumber, flag, signer] = process.argv.slice(2);
@@ -67,7 +68,8 @@ if (command === "status") {
       notes: `MultiAgency payout to ${m.payee} for accepted work on issue #${m.issue}`,
       url: m.url,
     });
-    const { hash, value: proposalId } = await call(signer, network.treasury, "add_proposal", { proposal: { description, kind } });
+    // add_proposal burns about 3 Tgas; the default 100 Tgas would reserve 0.1 NEAR per call.
+    const { hash, value: proposalId } = await call(signer, network.treasury, "add_proposal", { proposal: { description, kind } }, { gas: "30000000000000" });
     const trezu = trezuRequestLink(proposalId);
     await comment(m.issue, [
       `**Payout proposed:** DAO proposal ${proposalId} on \`${network.treasury}\` transfers ${Number(m.amount) / 1e6} USDC to \`${m.payee}\`${trezu ? ` ([review in Trezu](${trezu}))` : ""}.`,
@@ -122,9 +124,7 @@ if (command === "status") {
 // A deliverable is a comment its author can still edit; the handoff pins the
 // accepted text, so an edit after acceptance stops the payout.
 async function assertDeliverablesUnchanged(members) {
-  // An optional pin protects nothing: a handoff that links a deliverable
-  // comment must pin it.
-  const unpinned = members.filter(m => !m.handoff.deliverable && (m.handoff.links ?? []).some(url => url.includes("#issuecomment-")));
+  const unpinned = members.filter(m => pinProblem(m.handoff));
   if (unpinned.length > 0) {
     throw new Error(`the handoffs of ${unpinned.map(m => `#${m.issue}`).join(", ")} link a deliverable comment without pinning its sha256`);
   }

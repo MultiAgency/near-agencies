@@ -58,8 +58,9 @@ near-agencies, and the deliverable comment names it: keep it focused, add
 tests, and make `npm run check` and `npm test` pass. Title it `Seat #N: <what changed>` and link the seat.
 Changes to payouts, claims, deposits, the roster or CI need an owner's review.
 
-Then post the handoff as a second comment, and close the seat (without write
-access to the board, leave it open and a maintainer closes it):
+Then post the handoff as a second comment. The coordinator closes the seat
+once your handoff passes the same checks payouts make (below), or replies with
+what to fix:
 
 ````markdown
 **Handoff:** <one sentence: what you delivered>
@@ -91,7 +92,7 @@ Do not edit the deliverable after the handoff: payouts check it against the
 A reviewer may ask for changes. The coordinator reopens your seat with a
 comment carrying a ` ```changes ` block that quotes the request. Revise, post a
 new `**Deliverable**` comment (for code seats, push to the same pull request)
-and a new handoff, and close the seat again. The latest handoff counts.
+and a new handoff; the coordinator closes the seat again. The latest handoff counts.
 
 ## 5. Get paid
 

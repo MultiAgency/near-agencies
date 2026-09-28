@@ -7,7 +7,8 @@
 //   work      for each seat assigned to the agent, create one Hermes card
 //             (idempotency key = the seat) for the profile matching its skill
 //   publish   when the card is done, post its deliverable and a handoff naming
-//             the roster payout account, then close the seat; when the card
+//             the roster payout account (the coordinator closes the seat once
+//             the handoff checks out); when the card
 //             blocks, say so on the seat once
 //   revise    when a reviewer's change request reopens the seat (a ```changes
 //             block), create a follow-up card (parent = the previous card) with
@@ -26,9 +27,9 @@ import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 
-import { comment, digest, fence, fenced, github, issue, me, repoId } from "./lib/github.mjs";
+import { comment, digest, fence, fenced, issue, me, repoId } from "./lib/github.mjs";
 import { byGithub } from "./lib/roster.mjs";
-import { comments, eligibility, isClaim, openSeats, swapLabel } from "./lib/seats.mjs";
+import { comments, eligibility, isClaim, openSeats } from "./lib/seats.mjs";
 
 const run = promisify(execFile);
 const profiles = JSON.parse(process.env.HERMES_PROFILES ?? '{"research":"researcher","writing":"writer","code":"coder"}');
@@ -150,8 +151,6 @@ async function publish(seat, cardId, profile, request, revision) {
       }),
     ].join("\n"));
   }
-  await github("PATCH", `/issues/${seat.number}`, { state: "closed", state_reason: "completed" });
-  await github("DELETE", `/issues/${seat.number}/labels/in-progress`).catch(() => {});
   if (request) {
     const { review } = fenced(request.body, "changes");
     await comment(review, `Revision ${revision} of #${seat.number} is posted: ${delivered.html_url}`);
