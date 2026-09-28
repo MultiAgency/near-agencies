@@ -62,6 +62,11 @@ async function renderHome(owner) {
       <section>
         <h1 class="lede">Hire a team of people and agents for one brief.</h1>
         <p class="sub">Describe the work and pay a ${usdc(config.deposit)} USDC deposit into the MultiAgency treasury. We assemble the team on a public kanban board, and each contributor is paid from the treasury when you accept their work.</p>
+        <ol class="how">
+          <li><strong>Pay a deposit.</strong> Describe the work; your USDC goes to the MultiAgency DAO treasury.</li>
+          <li><strong>A team does it.</strong> People and AI agents each take on a piece, in the open.</li>
+          <li><strong>Paid on acceptance.</strong> Each contributor is paid by the DAO only once their work is accepted.</li>
+        </ol>
         <form id="hire">
           <label>What do you need?<input name="title" required minlength="4" maxlength="120" placeholder="One-page brief on agent payments"></label>
           <label>Brief<span class="hint">Scope, deliverables, and how you will judge the result.</span>
@@ -243,11 +248,11 @@ async function renderJoin(owner) {
 // The relay: one lane per participant, every event where it happened, joined
 // in time order; and the deposit split into what each seat is paid.
 const EVENT_NAMES = {
-  "deposit": "Deposit", "team-draft": "Team drafted", "team-approved": "Team approved",
-  "claim": "Claimed", "assigned": "Assigned", "seat-opened": "Seat opened",
-  "deliverable": "Delivered", "handoff": "Handed off", "changes-requested": "Changes requested",
+  "deposit": "Deposit", "team-draft": "Team proposed", "team-approved": "Team approved",
+  "claim": "Took it on", "assigned": "Confirmed", "seat-opened": "Next piece opened",
+  "deliverable": "Delivered", "handoff": "Handed over", "changes-requested": "Changes requested",
   "reopened": "Reopened for revision", "payout-proposed": "Payout proposed", "paid": "Paid",
-  "complete": "Engagement complete", "retrospective": "Retrospective", "note": "Note",
+  "complete": "Done", "retrospective": "Retrospective", "note": "Note",
 };
 const GAP_CAP_MS = 12 * 60_000;
 // Events seconds apart (a deliverable and its handoff) still get their own place.
@@ -258,7 +263,11 @@ function relaySection(relay, e) {
     <section class="relay" aria-labelledby="relay-h">
       <h2 id="relay-h">Who did what</h2>
       <div class="relay-scroll">${swimlane(relay)}</div>
-      <p class="hint">Each dot is a real event on the board or the chain; select one to open it. Long waits are shortened and labelled with their real length.</p>
+      <ul class="legend">
+        <li><i class="dot-agent"></i>AI agent</li><li><i class="dot-person"></i>Person</li><li><i class="dot-system"></i>MultiAgency</li>
+        <li><i class="dot-money"></i>Money</li><li><i class="dot-warn"></i>Changes requested</li><li><i class="dot-took"></i>Took the work on</li>
+      </ul>
+      <p class="hint">Each dot is a real event on the board or on NEAR; select one to open it. Long waits are shortened and labelled with their real length.</p>
       ${moneyStrip(e)}
     </section>`;
 }
@@ -278,8 +287,7 @@ function swimlane({ lanes, events, open }) {
   }
   const span = pos.at(-1) || 1;
   const x = p => LEFT + (p / span) * (W - LEFT - RIGHT);
-  const tone = key => key === "treasury" ? "paid" : key === "client" ? "client"
-    : lanes.find(l => l.key === key)?.role === "Person" ? "human" : ["coordinator", "maintainer"].includes(key) ? "system" : "agent";
+  const tone = key => ({ money: "paid", client: "client", person: "human", system: "system" })[lanes.find(l => l.key === key)?.kind] ?? "agent";
   const latest = events.length && Date.now() - times.at(-1) < 3 * 60_000 && open ? events.length - 1 : -1;
   return html`
     <svg class="swimlane" viewBox="0 0 ${W} ${H}" role="img" aria-label="${`${events.length} events across ${lanes.length} participants`}">
@@ -302,7 +310,51 @@ function swimlane({ lanes, events, open }) {
             <title>${`${EVENT_NAMES[ev.kind] ?? ev.kind}${ev.seat ? ` on #${ev.seat}` : ""}, ${new Date(ev.t).toLocaleString()}`}</title>
           </circle>
         </a>`)}
+      ${labels(events, pos, x, row)}
     </svg>`;
+}
+
+// Words on the milestones, so the chart reads without hovering: the first of
+// each kind, lifted clear of a neighbouring label on the same lane.
+const LABELLED = ["deposit", "team-draft", "team-approved", "deliverable", "changes-requested", "paid", "complete"];
+function labels(events, pos, x, row) {
+  const placed = [];
+  const seen = new Set();
+  return events.map((ev, i) => {
+    if (!LABELLED.includes(ev.kind) || (ev.kind === "paid" && seen.has("paid"))) return "";
+    seen.add(ev.kind);
+    let y = row.get(ev.lane) - 13;
+    while (placed.some(p => p.y === y && Math.abs(p.x - x(pos[i])) < 84)) y -= 12;
+    placed.push({ x: x(pos[i]), y });
+    return html`<text class="ev-label" x="${x(pos[i])}" y="${y}">${EVENT_NAMES[ev.kind]}</text>`;
+  });
+}
+
+// The engagement's state in one sentence: what has happened and who is next.
+function nowLine(e, relay) {
+  const who = m => m.claimedBy.map(login => `@${login}`).join(", ");
+  switch (e.stage) {
+    case "cancelled": return "This engagement was closed without being completed.";
+    case "complete": return `Done. The work was accepted and the DAO paid ${usdc(e.totals.paid)} USDC to the people and agents who did it; ${usdc(e.totals.margin)} USDC stays with MultiAgency.`;
+    case "assembling": return relay?.events.some(ev => ev.kind === "team-draft")
+      ? "The deposit arrived and the maintainer has proposed a team. Waiting for MultiAgency to approve it."
+      : "The deposit arrived. MultiAgency is putting the team together.";
+    case "accepting": return "All the work is accepted. Next, the DAO is asked to pay each contributor.";
+    case "paying": return "The payouts are with the DAO, waiting for a second member to approve them.";
+  }
+  const open = e.members.find(m => m.state === "open");
+  if (!open.claimedBy.length) return `Waiting for someone to take on “${open.title}”.`;
+  if (open.skills.includes("skill:review")) return `The work is done and waiting for ${who(open)} to review it. Nobody is paid until it is accepted.`;
+  return `${who(open)} is working on “${open.title}”. Nobody is paid until the work is accepted.`;
+}
+
+function resultSection(result, e) {
+  return html`
+    <details class="result" open>
+      <summary>${e.stage === "complete" ? "The result" : "The work so far"}, by @${result.author}</summary>
+      <div class="result-body">${new Safe(result.html)}</div>
+      <p class="hint"><a href="${result.url}">Open it on the board</a></p>
+    </details>`;
 }
 
 function moneyStrip(e) {
@@ -340,7 +392,9 @@ async function renderEngagement(owner, number) {
       ${e.stage === "cancelled" ? html`<p class="status error">This engagement was closed without being completed.</p>` : ""}
       <ol class="stages">${stages.map((s, i) => html`
         <li class="${i < current || e.stage === "complete" ? "done" : ""}" ${i === current ? html`aria-current="step"` : ""}>${stageName(s)}</li>`)}</ol>
+      <p class="now" role="status">${nowLine(e, relay)}</p>
       <p class="brief">${e.brief}</p>
+      ${relay?.result ? resultSection(relay.result, e) : ""}
       ${relay ? relaySection(relay, e) : ""}
       <ol class="trail">
         <li class="stop">
@@ -358,10 +412,10 @@ async function renderEngagement(owner, number) {
             <h3><a href="${m.url}">${m.title}</a></h3>
             <span class="flow">−${usdc(m.amount)} USDC</span>
           </div>
-          <span class="seat">${m.human ? "Human seat" : "Agent seat"}, paid to ${m.payee}</span>
+          <span class="seat">${m.human ? "For a person" : "For an AI agent"}${m.payee ? `, paid to ${m.payee}` : ""}</span>
           <ul class="facts">
-            <li>${m.claimedBy.length ? `Claimed by ${m.claimedBy.join(", ")}` : "Waiting to be claimed"}</li>
-            <li class="${m.state === "closed" ? "ok" : ""}">${m.state === "closed" ? (m.handoff ? `Handed off by ${m.handoffBy}` : "Closed without a handoff") : m.claimedBy.length ? "In progress" : "Open"}</li>
+            <li>${m.claimedBy.length ? `Taken on by ${m.claimedBy.join(", ")}` : "Waiting for someone to take it on"}</li>
+            <li class="${m.state === "closed" ? "ok" : ""}">${m.state === "closed" ? (m.handoff ? `Delivered by ${m.handoffBy}` : "Closed without being delivered") : m.claimedBy.length ? "In progress" : "Open"}</li>
             ${m.handoffSummary ? html`<li>${m.handoffSummary.replace(/`/g, "")}</li>` : ""}
             ${m.worker ? html`<li>Worked by Hermes profile ${m.worker.profile} (card ${m.worker.card})</li>` : ""}
             ${m.deliverables.map(d => html`<li>Deliverable: <a href="${d.url}">${d.path}</a></li>`)}

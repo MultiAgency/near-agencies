@@ -80,9 +80,9 @@ button:disabled { opacity: 0.5; cursor: progress; }
 .engagements li { border-bottom: 1px solid var(--rule); }
 .engagements a { display: grid; grid-template-columns: 1fr auto; gap: 0.2rem 1rem; padding: 0.9rem 0; color: var(--ink); text-decoration: none; }
 .engagements a:hover .t { text-decoration: underline; }
-.engagements .t { font-weight: 700; }
+.engagements .t { font-weight: 700; grid-column: 1; }
 .engagements .m { color: var(--muted); font-size: 0.85rem; grid-column: 1; }
-.engagements .s { grid-row: 1 / span 2; align-self: center; font-size: 0.85rem; }
+.engagements .s { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-size: 0.85rem; }
 .empty { color: var(--muted); }
 
 /* Quote */
@@ -126,6 +126,24 @@ button:disabled { opacity: 0.5; cursor: progress; }
 .facts li { margin: 0.2rem 0; }
 .facts .ok { color: var(--paid); font-weight: 500; }
 .brief { white-space: pre-wrap; max-width: var(--measure); margin: 0 0 3rem; }
+
+/* Now, and the result */
+.now { font-size: 1.15rem; font-weight: 500; max-width: var(--measure); margin: -1.5rem 0 1.5rem; padding: 0.8rem 1rem; background: var(--surface); border-left: 4px solid var(--usdc); border-radius: 0 var(--radius-field) var(--radius-field) 0; }
+.result { margin: 0 0 3rem; background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius-field); padding: 0.75rem 1.25rem; }
+.result summary { cursor: pointer; font-weight: 700; font-size: 1.05rem; }
+.result-body { max-height: 28rem; overflow: auto; margin-top: 0.75rem; }
+.result-body h1 { font-size: 1.3rem; } .result-body h2 { font-size: 1.1rem; }
+.result-body table { border-collapse: collapse; font-size: 0.85rem; display: block; overflow-x: auto; }
+.result-body th, .result-body td { border: 1px solid var(--rule); padding: 0.35rem 0.5rem; vertical-align: top; text-align: left; }
+.how { list-style: none; counter-reset: how; padding: 0; margin: 0 0 2rem; display: grid; gap: 0.6rem; max-width: 52ch; }
+.how li { counter-increment: how; padding-left: 2rem; position: relative; color: var(--muted); }
+.how li::before { content: counter(how); position: absolute; left: 0; top: 0.05rem; width: 1.4rem; height: 1.4rem; border-radius: 50%; background: var(--usdc); color: var(--surface); font-size: 0.8rem; font-weight: 700; display: grid; place-items: center; }
+.how strong { color: var(--ink); }
+.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 0.3rem 1.1rem; padding: 0; margin: 0.6rem 0 0; font-size: 0.8rem; color: var(--muted); }
+.legend i { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 50%; margin-right: 0.35rem; vertical-align: -0.05rem; }
+.legend .dot-agent { background: var(--usdc); } .legend .dot-person { background: var(--human); } .legend .dot-system { background: var(--muted); }
+.legend .dot-money { background: var(--paid); } .legend .dot-warn { background: var(--warn); } .legend .dot-took { border: 2px solid var(--usdc); }
+.swimlane .ev-label { font-size: 11px; fill: var(--ink); text-anchor: middle; paint-order: stroke; stroke: var(--surface); stroke-width: 3px; }
 
 /* Relay: who did what, and where the deposit goes */
 .relay { margin: 0 0 3rem; }
