@@ -20,7 +20,8 @@
     "@x402/extensions": "2.25.0",
     "@x402/fetch": "2.25.0",
     "@x402/near": "2.25.0",
-    "express": "5.2.1"
+    "express": "5.2.1",
+    "express-rate-limit": "8.7.0"
   },
   "overrides": {
     "@x402/core": "2.25.0",
