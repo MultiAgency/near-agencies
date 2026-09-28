@@ -122,6 +122,12 @@ if (command === "status") {
 // A deliverable is a comment its author can still edit; the handoff pins the
 // accepted text, so an edit after acceptance stops the payout.
 async function assertDeliverablesUnchanged(members) {
+  // An optional pin protects nothing: a handoff that links a deliverable
+  // comment must pin it.
+  const unpinned = members.filter(m => !m.handoff.deliverable && (m.handoff.links ?? []).some(url => url.includes("#issuecomment-")));
+  if (unpinned.length > 0) {
+    throw new Error(`the handoffs of ${unpinned.map(m => `#${m.issue}`).join(", ")} link a deliverable comment without pinning its sha256`);
+  }
   for (const m of members.filter(m => m.handoff.deliverable)) {
     const { url, sha256 } = m.handoff.deliverable;
     if (digest((await commentAt(url)).body) !== sha256) throw new Error(`#${m.issue}: ${url} was edited after its handoff`);
