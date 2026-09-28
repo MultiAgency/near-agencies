@@ -8,7 +8,7 @@
   "scripts": {
     "start": "node --no-warnings server.mjs",
     "agent": "node agent.mjs",
-    "test": "node --test \"test/*.test.mjs\"",
+    "test": "ROSTER_FILE=test/fixtures/roster.json node --test \"test/*.test.mjs\"",
     "check": "for f in *.mjs lib/*.mjs scripts/*.mjs public/app.js; do node --check \"$f\" || exit 1; done"
   },
   "dependencies": {

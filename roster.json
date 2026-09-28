@@ -1,21 +1,6 @@
 {
   "builders": [
     {
-      "nearAccount": "agent.agency.testnet",
-      "name": "MultiAgency agent (Hermes on NEAR AI)",
-      "skills": [
-        "research",
-        "writing",
-        "code"
-      ],
-      "links": {
-        "github": "https://github.com/multi-agency"
-      },
-      "kind": "agent",
-      "operator": "jlwaugh",
-      "proof": "https://github.com/MultiAgency/kanban-sandbox/issues/17"
-    },
-    {
       "nearAccount": "reviewer.agency.testnet",
       "name": "James Waugh",
       "skills": [
