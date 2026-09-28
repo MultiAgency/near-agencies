@@ -4,9 +4,12 @@
 /payout.mjs              @jlwaugh
 /assemble.mjs            @jlwaugh
 /roster.json             @jlwaugh
+/roster.mjs              @jlwaugh
 /lib/coordinator.mjs     @jlwaugh
 /lib/seats.mjs           @jlwaugh
 /lib/roster.mjs          @jlwaugh
+/lib/onboarding.mjs      @jlwaugh
+/lib/near.mjs            @jlwaugh
 /lib/engagements.mjs     @jlwaugh
 /lib/history.mjs         @jlwaugh
 /lib/pay.mjs             @jlwaugh

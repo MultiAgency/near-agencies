@@ -33,6 +33,7 @@ document.getElementById("net").dataset.network = config.network;
 document.getElementById("bar-links").innerHTML = html`
   <a href="${config.board}">Kanban board</a>
   <a href="${`${config.explorer}/address/${config.treasury}`}">Treasury</a>
+  <a href="#/join">Join the roster</a>
   ${config.trezu ? html`<a href="${config.trezu}">Trezu</a>` : ""}`;
 
 window.addEventListener("hashchange", route);
@@ -46,6 +47,7 @@ async function route() {
   try {
     if (page === "q") await renderQuote(owner, id);
     else if (page === "e") await renderEngagement(owner, Number(id));
+    else if (page === "join") await renderJoin(owner);
     else await renderHome(owner);
   } catch (error) {
     paint(owner, html`<p class="status error">${error.message}</p><p><a href="#/">Back to engagements</a></p>`);
@@ -153,9 +155,7 @@ function statusText(quote) {
 async function payWithWallet(payment) {
   const status = document.getElementById("deposit-status");
   try {
-    const connector = new window.HOTConnect.NearConnector({ network: payment.network });
-    const wallet = await connector.connect();
-    const [{ accountId }] = await wallet.getAccounts();
+    const { wallet, accountId } = await connectWallet();
     const { problems } = await get(`/api/quotes/${payment.memo}/payer/${encodeURIComponent(accountId)}`);
     if (problems.length > 0) {
       status.textContent = `${accountId} can't pay this deposit yet: ${problems.join("; ")}. Top it up and try again, or pay from another account.`;
@@ -178,6 +178,66 @@ async function payWithWallet(payment) {
   } catch (error) {
     status.textContent = `Wallet payment did not complete: ${error.message ?? error}. You can retry or pay with NEAR CLI.`;
   }
+}
+
+async function connectWallet() {
+  const wallet = await new window.HOTConnect.NearConnector({ network: config.network }).connect();
+  const [{ accountId }] = await wallet.getAccounts();
+  return { wallet, accountId };
+}
+
+// Join: a contributor signs who they are with their NEAR wallet, then posts
+// the signed request on the board from their GitHub account.
+async function renderJoin(owner) {
+  if (!paint(owner, html`
+    <section class="quote">
+      <h1>Join the roster</h1>
+      <p class="sub">Contributors on the roster can claim seats and are paid in USDC to their NEAR account. Your wallet signs a message linking that account to your GitHub login; posting it on the board from GitHub proves the login. Nothing is sent on chain.</p>
+      <form id="join">
+        <label>GitHub login<input name="github" required maxlength="39" autocomplete="username" placeholder="octocat"></label>
+        <label>Name<span class="hint">Shown on the roster.</span><input name="name" required maxlength="80"></label>
+        <fieldset><legend>You are</legend>
+          ${config.roster.kinds.map((kind, i) => html`<label class="choice"><input type="radio" name="kind" value="${kind}" ${i === 1 ? html`checked` : ""}> ${kind === "agent" ? "An agent" : "A person"}</label>`)}
+        </fieldset>
+        <label>Operator<span class="hint">Agents only: the GitHub login of the person responsible for this agent.</span><input name="operator" maxlength="39"></label>
+        <fieldset><legend>Skills</legend>
+          ${config.roster.skills.map(skill => html`<label class="choice"><input type="checkbox" name="skills" value="${skill}"> ${skill}</label>`)}
+        </fieldset>
+        <button type="submit">Sign with wallet</button>
+        <p class="hint">The account your wallet signs with is the one you are paid to. Agents without a browser wallet can use <code>node roster.mjs join</code>.</p>
+      </form>
+      <p class="status" id="join-status" role="status" hidden></p>
+    </section>`)) return;
+  const form = document.getElementById("join");
+  const status = document.getElementById("join-status");
+  const say = (markup, error = false) => {
+    status.innerHTML = markup;
+    status.classList.toggle("error", error);
+    status.hidden = false;
+  };
+  form.addEventListener("submit", async event => {
+    event.preventDefault();
+    const button = event.submitter;
+    const data = new FormData(form);
+    const skills = data.getAll("skills");
+    if (skills.length === 0) return say(html`Choose at least one skill.`, true);
+    button.disabled = true;
+    try {
+      const { wallet, accountId } = await connectWallet();
+      const { message, nonce, recipient } = await post("/api/join/message", {
+        github: data.get("github").trim(), near: accountId, name: data.get("name"), kind: data.get("kind"), skills,
+        operator: data.get("operator").trim() || undefined,
+      });
+      say(html`Sign the message in your wallet…`);
+      const signed = await wallet.signMessage({ message, recipient, nonce: Uint8Array.from(atob(nonce), c => c.charCodeAt(0)) });
+      const { issue_url } = await post("/api/join/request", { message, nonce, recipient, ...signed });
+      say(html`Signed by <strong>${accountId}</strong>. <a href="${issue_url}" target="_blank" rel="noopener">Open the join request on GitHub</a> while signed in as @${data.get("github").trim()}, and submit it. The coordinator verifies it there, and an owner adds you to the roster.`);
+    } catch (error) {
+      say(html`The join request was not signed: ${error.message ?? error}`, true);
+    } finally {
+      button.disabled = false;
+    }
+  });
 }
 
 // Engagement: stages, the money trail from deposit to payouts, and totals.
