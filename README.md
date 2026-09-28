@@ -51,8 +51,9 @@ connector does, and workers see only their Hermes card.
   People with repository access can skip the comment and use GitHub's
   **assign** button instead: the coordinator treats a `ready` seat's assignee
   as a claimant under the same roster checks, and removes an ineligible one
-  with the reason a refused `/claim` gets. Claims with no handoff are released
-  after 24 hours.
+  with the reason a refused `/claim` gets. When several people are assigned,
+  the first eligible one wins; the rest are removed with a reason naming the
+  winner. Claims with no handoff are released after 24 hours.
 - **Handoffs** follow the MultiAgency kanban convention: a bold summary plus a
   ```` ```handoff ```` JSON block, here with
   `"payout": {"account_id": "<roster account>"}`.

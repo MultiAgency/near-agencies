@@ -102,6 +102,17 @@ describe("native assignment claims", () => {
     assert.deepEqual(refused.map(claim => claim.login), ["stranger", "nobody"]);
   });
 
+  test("two eligible assignees: the first wins and the second is refused naming the winner", () => {
+    const contested = seat(issue({
+      labels: [{ name: "ready" }, { name: "agent-eligible" }],
+      assignees: [{ login: "multi-agency" }, { login: "jlwaugh" }],
+    }));
+    const { accepted, refused } = assignmentClaims(contested);
+    assert.equal(accepted.login, "multi-agency");
+    assert.deepEqual(refused.map(claim => claim.login), ["jlwaugh"]);
+    assert.match(refused[0].refusal, /@multi-agency claimed it first/);
+  });
+
   test("a seat nobody assigned has nothing to settle", () => {
     const { accepted, refused } = assignmentClaims(seat(issue()));
     assert.equal(accepted, null);
