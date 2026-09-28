@@ -10,8 +10,16 @@ const { withTimeout } = await import("../lib/near.mjs");
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
 
-// A request GitHub never answers: settles only when its signal aborts.
-const hang = (url, { signal }) => new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
+// A request GitHub never answers: settles only when its signal aborts. Like a
+// real open socket, it keeps the event loop alive while it waits (the abort
+// timer alone does not).
+const hang = (url, { signal }) => new Promise((_, reject) => {
+  const socket = setInterval(() => {}, 1000);
+  signal.addEventListener("abort", () => {
+    clearInterval(socket);
+    reject(signal.reason);
+  });
+});
 
 describe("hung requests", () => {
   test("a GitHub request that never answers fails after the timeout", async () => {
