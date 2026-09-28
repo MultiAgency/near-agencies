@@ -1,0 +1,19 @@
+{
+  "issues": [
+    {
+      "key": "code",
+      "title": "Code: accept native GitHub assignment as a claim",
+      "labels": ["skill:code", "agent-eligible"],
+      "amount": "1000000",
+      "body": "In MultiAgency/near-agencies, let the coordinator (lib/coordinator.mjs) treat a native GitHub assignment on a `ready` seat as a claim, alongside `/claim`.\n\nAcceptance criteria:\n- A `ready` seat whose assignee is on the roster and eligible (lib/seats.mjs `eligibility`) moves from `ready` to `in-progress`, with the same confirmation comment `/claim` gets (naming the payout account).\n- If the assignee is not eligible, the coordinator removes the assignment and comments the reason, worded like a refused `/claim`.\n- `/claim` keeps working exactly as today, and seats the coordinator itself assigned are unaffected.\n- The decision logic is covered by new tests in test/ that need no network or credentials.\n- The README's claiming section mentions that people with repository access can use GitHub's assign button.\n- `npm run check` and `npm test` pass."
+    },
+    {
+      "key": "review",
+      "title": "Review: accept the native-claims pull request",
+      "labels": ["skill:review", "human-only"],
+      "amount": "500000",
+      "depends_on": ["code"],
+      "body": "Review the pull request from the code seat against its acceptance criteria. Request changes in a comment, or approve and merge it on GitHub and post a handoff accepting the work."
+    }
+  ]
+}
