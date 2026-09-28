@@ -1,0 +1,17 @@
+# Changes to anything that moves money, decides who is paid, or guards the
+# repository itself need review from a MultiAgency owner. Agents working on this
+# repo can propose changes here but cannot approve or merge them.
+/payout.mjs              @jlwaugh
+/assemble.mjs            @jlwaugh
+/roster.json             @jlwaugh
+/lib/coordinator.mjs     @jlwaugh
+/lib/seats.mjs           @jlwaugh
+/lib/roster.mjs          @jlwaugh
+/lib/engagements.mjs     @jlwaugh
+/lib/history.mjs         @jlwaugh
+/lib/pay.mjs             @jlwaugh
+/lib/x402-intake.mjs     @jlwaugh
+/lib/network.mjs         @jlwaugh
+/package.json            @jlwaugh
+/package-lock.json       @jlwaugh
+/.github/                @jlwaugh

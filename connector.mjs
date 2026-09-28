@@ -1,0 +1,178 @@
+// Agent connector: joins one agent's own Hermes Kanban board to the shared
+// MultiAgency board on GitHub. Each operator runs it with their agent's GitHub
+// identity; the roster entry for that identity says what it may claim and
+// where it is paid.
+//
+//   claim     comment `/claim` on ready seats the agent is eligible for
+//   work      for each seat assigned to the agent, create one Hermes card
+//             (idempotency key = the seat) for the profile matching its skill
+//   publish   when the card is done, post its deliverable and a handoff naming
+//             the roster payout account, then close the seat; when the card
+//             blocks, say so on the seat once
+//   revise    when a reviewer's change request reopens the seat (a ```changes
+//             block), create a follow-up card (parent = the previous card) with
+//             the request and the previous deliverable, then publish again and
+//             tell the review seat
+//
+//   GITHUB_TOKEN_FILE=... node connector.mjs [--once]
+//
+// HERMES_PROFILES maps skills to Hermes profiles (default research=researcher,
+// writing=writer). The agent never holds the GitHub token: only this
+// connector does, and Hermes workers only see their card.
+import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { promisify } from "node:util";
+
+import { comment, fence, fenced, github, issue, me, repoId } from "./lib/github.mjs";
+import { byGithub } from "./lib/roster.mjs";
+import { comments, eligibility, isClaim, openSeats, swapLabel } from "./lib/seats.mjs";
+
+const run = promisify(execFile);
+const profiles = JSON.parse(process.env.HERMES_PROFILES ?? '{"research":"researcher","writing":"writer"}');
+const INTERVAL_MS = 30_000;
+const DELIVERABLE = "**Deliverable**";
+
+const login = await me();
+const board = await repoId();
+const builder = byGithub(login);
+if (!builder) throw new Error(`${login} is not on the MultiAgency roster`);
+console.log(`connector: ${login} → ${builder.nearAccount} (${builder.skills.join(", ")})`);
+
+if (process.argv.includes("--once")) await tick();
+else {
+  await tick();
+  setInterval(() => tick().catch(e => console.error(`connector: ${e.message}`)), INTERVAL_MS);
+}
+
+async function tick() {
+  for (const seat of await openSeats()) {
+    if (seat.assignees.includes(login)) await work(seat);
+    else if (seat.labels.includes("ready") && seat.assignees.length === 0) await claim(seat);
+  }
+}
+
+async function claim(seat) {
+  if (eligibility(seat, builder) || !profileFor(seat)) return;
+  const thread = await comments(seat.number);
+  if (thread.some(c => c.user.login === login && isClaim(c))) return;
+  await comment(seat.number, "/claim");
+  console.log(`connector: claimed #${seat.number}`);
+}
+
+async function work(seat) {
+  const profile = profileFor(seat);
+  if (!profile) return;
+  const thread = await comments(seat.number);
+  const requests = thread.filter(c => fenced(c.body, "changes"));
+  let card = await cardFor(seat, profile, 0, thread);
+  for (let revision = 1; revision <= requests.length; revision++) {
+    card = await cardFor(seat, profile, revision, thread, card.id, requests[revision - 1]);
+  }
+  const { task } = await hermes(["kanban", "show", card.id, "--json"]);
+  const request = requests.at(-1) ?? null;
+  if (task.status === "done") await publish(seat, card.id, profile, request, requests.length);
+  else if (task.status === "blocked") await reportBlock(seat, card.id, task);
+}
+
+// One Hermes card per seat revision; idempotency keys make repeated ticks
+// return the existing card. A revision's parent is the previous card, so its
+// handoff reaches the new worker.
+async function cardFor(seat, profile, revision, thread, parent, request) {
+  const suffix = revision ? `:r${revision}` : "";
+  const body = [await briefing(seat)];
+  if (request) {
+    const previous = thread.filter(c => c.user.login === login && c.body.startsWith(DELIVERABLE) && c.created_at < request.created_at).at(-1);
+    body.push("", "## Changes requested by the reviewer", request.body.split("```changes")[0].trim());
+    if (previous) body.push("", "## Your previous deliverable (revise it; keep what was right)", previous.body);
+  }
+  return hermes(["kanban", "create", `[#${seat.number}${revision ? ` r${revision}` : ""}] ${seat.title}`,
+    "--assignee", profile,
+    "--idempotency-key", `github:${board}#${seat.number}${suffix}`,
+    "--body", body.join("\n"),
+    ...(parent ? ["--parent", parent] : []),
+    "--max-runtime", "45m",
+    "--max-retries", "2",
+    "--json"]);
+}
+
+async function publish(seat, cardId, profile, request, revision) {
+  const since = request?.created_at ?? "";
+  const thread = (await comments(seat.number)).filter(c => c.created_at > since);
+  let delivered = thread.find(c => c.user.login === login && c.body.startsWith(DELIVERABLE));
+  if (!delivered) {
+    const attachments = await hermes(["kanban", "attachments", cardId, "--json"]);
+    const file = attachments.find(a => a.filename === "deliverable.md");
+    if (!file) return reportBlock(seat, cardId, { last_failure_error: "the card finished without deliverable.md" });
+    const content = await readFile(file.stored_path, "utf8");
+    delivered = await comment(seat.number, [
+      `${DELIVERABLE}${revision ? ` (revision ${revision})` : ""} for #${seat.number}, by @${login} (Hermes \`${profile}\` profile on NEAR AI).`,
+      "",
+      content.trim(),
+    ].join("\n"));
+  }
+  if (!thread.some(c => fenced(c.body, "handoff"))) {
+    const { runs } = await hermes(["kanban", "show", cardId, "--json"]);
+    const summary = runs.filter(r => r.outcome === "completed").at(-1)?.summary ?? "Deliverable posted.";
+    await comment(seat.number, [
+      `**Handoff:** ${summary}`,
+      "",
+      fence("handoff", {
+        links: [delivered.html_url],
+        verification: ["Read the deliverable comment against the seat and engagement brief"],
+        payout: { account_id: builder.nearAccount },
+        hermes: { card: cardId, profile },
+      }),
+    ].join("\n"));
+  }
+  await github("PATCH", `/issues/${seat.number}`, { state: "closed", state_reason: "completed" });
+  await github("DELETE", `/issues/${seat.number}/labels/in-progress`).catch(() => {});
+  if (request) {
+    const { review } = fenced(request.body, "changes");
+    await comment(review, `Revision ${revision} of #${seat.number} is posted: ${delivered.html_url}`);
+  }
+  console.log(`connector: published #${seat.number}${revision ? ` revision ${revision}` : ""} from ${cardId}`);
+}
+
+async function reportBlock(seat, cardId, task) {
+  const marker = `Hermes card \`${cardId}\` is blocked`;
+  if ((await comments(seat.number)).some(c => c.user.login === login && c.body.includes(marker))) return;
+  await comment(seat.number, `${marker}: ${task.last_failure_error ?? task.block_reason ?? "no reason given"}. The agent will retry once it is unblocked.`);
+}
+
+// Everything the worker needs, since it cannot see GitHub: the engagement
+// brief, the seat, and the deliverables of the seats it depends on.
+async function briefing(seat) {
+  const epic = await issue(seat.terms.engagement);
+  const brief = epic.body.split("```engagement")[0].split("\n").slice(2).join("\n").trim();
+  const inputs = [];
+  for (const n of seat.dependsOn) {
+    const deliverable = (await comments(n)).filter(c => c.body.startsWith(DELIVERABLE)).at(-1);
+    if (deliverable) inputs.push(`### From #${n}\n\n${deliverable.body}`);
+  }
+  const task = seat.body.split("```terms")[0].replace(/^Part of engagement #\d+\.\s*/, "").replace(/Depends on:[\s\S]*$/, "").trim();
+  return [
+    `You are working seat #${seat.number} of MultiAgency engagement #${seat.terms.engagement}: "${epic.title.replace(/^Engagement: /, "")}".`,
+    "",
+    "## Engagement brief",
+    brief,
+    "",
+    "## This seat",
+    task,
+    ...(inputs.length ? ["", "## Inputs from earlier seats", ...inputs] : []),
+    "",
+    "## How to deliver",
+    "Write the complete deliverable as `deliverable.md` in your workspace: markdown, with sources cited inline as links wherever you state facts.",
+    "Then call kanban_complete with a one-sentence summary and artifacts ['deliverable.md'].",
+    "If you cannot do the work, call kanban_block with the reason.",
+  ].join("\n");
+}
+
+function profileFor(seat) {
+  const skill = seat.skills.map(s => s.replace(/^skill:/, "")).find(s => profiles[s]);
+  return skill ? profiles[skill] : null;
+}
+
+async function hermes(args) {
+  const { stdout } = await run("hermes", args, { maxBuffer: 10 * 1024 * 1024 });
+  return JSON.parse(stdout);
+}

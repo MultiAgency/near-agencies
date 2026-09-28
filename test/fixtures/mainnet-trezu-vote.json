@@ -1,0 +1,183 @@
+{
+  "transaction": {
+    "hash": "A4c7nNm27k9bqfbueAXMvnwpr2CMrAicgckUPPptcBqY",
+    "signer_id": "sponsor.trezu.near",
+    "receiver_id": "agenticweb.near",
+    "actions": [
+      {
+        "Delegate": {
+          "delegate_action": {
+            "sender_id": "agenticweb.near",
+            "receiver_id": "multiagency.sputnik-dao.near",
+            "actions": [
+              {
+                "FunctionCall": {
+                  "method_name": "act_proposal",
+                  "args": "eyJpZCI6NDcsImFjdGlvbiI6IlZvdGVBcHByb3ZlIiwicHJvcG9zYWwiOnsiVHJhbnNmZXIiOnsiYW1vdW50IjoiMzYwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAiLCJtc2ciOm51bGwsInJlY2VpdmVyX2lkIjoiY3VybWVsbG8ubmVhciIsInRva2VuX2lkIjoiIn19fQ==",
+                  "gas": 100000000000000,
+                  "deposit": "0"
+                }
+              }
+            ],
+            "nonce": 144747926000103,
+            "max_block_height": 216662597,
+            "public_key": "ed25519:3p8cD6rVn4z1CAUP2cbTiofrhvPmC9pxgGeB9tjEQuTy"
+          },
+          "signature": "ed25519:3BRUCJDfpxZnF8MzB5uRCeQu7rVJ1ca9QWXvLRyQzDwdg85uA3eKThpVnViEc8jbAisg5GSNwFkn6fGdAzw2pJN2"
+        }
+      }
+    ]
+  },
+  "receipts": [
+    {
+      "receipt": {
+        "receipt_id": "3bCAVdxBAqFMJU2KQ8fwK8BGHBGPNdYudjhPsJZBZJaC",
+        "receiver_id": "agenticweb.near",
+        "predecessor_id": "sponsor.trezu.near"
+      },
+      "execution_outcome": {
+        "outcome": {
+          "logs": [],
+          "status": {
+            "SuccessValue": ""
+          }
+        }
+      }
+    },
+    {
+      "receipt": {
+        "receipt_id": "ddqGeo662dSJj5Wtzovq1V99cQcz4fjUg6DNNsVRGsw",
+        "receiver_id": "multiagency.sputnik-dao.near",
+        "predecessor_id": "agenticweb.near"
+      },
+      "execution_outcome": {
+        "outcome": {
+          "logs": [],
+          "status": {
+            "SuccessValue": ""
+          }
+        }
+      }
+    },
+    {
+      "receipt": {
+        "receipt_id": "9SEDP2tegkZGEZ9Ea7WgURFZVpTGKQnrZYbrVCTAubvZ",
+        "receiver_id": "sponsor.trezu.near",
+        "predecessor_id": "system"
+      },
+      "execution_outcome": {
+        "outcome": {
+          "logs": [],
+          "status": {
+            "SuccessValue": ""
+          }
+        }
+      }
+    },
+    {
+      "receipt": {
+        "receipt_id": "2ky7vmn7993vR9XXFNuRZ37qGydwf7NqcjZfvDZ9Pyzt",
+        "receiver_id": "curmello.near",
+        "predecessor_id": "multiagency.sputnik-dao.near"
+      },
+      "execution_outcome": {
+        "outcome": {
+          "logs": [],
+          "status": {
+            "SuccessValue": ""
+          }
+        }
+      }
+    },
+    {
+      "receipt": {
+        "receipt_id": "8AaL76brAa3UFjmRPdJG7E3opkDKMktgYQ6Y2qcJo2zi",
+        "receiver_id": "sponsor.trezu.near",
+        "predecessor_id": "system"
+      },
+      "execution_outcome": {
+        "outcome": {
+          "logs": [],
+          "status": {
+            "SuccessValue": ""
+          }
+        }
+      }
+    },
+    {
+      "receipt": {
+        "receipt_id": "BjzQUs63DPfmfwsR6G9hRzDerR3HevPo4vJzZMhoQg8e",
+        "receiver_id": "sponsor.trezu.near",
+        "predecessor_id": "system"
+      },
+      "execution_outcome": {
+        "outcome": {
+          "logs": [],
+          "status": {
+            "SuccessValue": ""
+          }
+        }
+      }
+    },
+    {
+      "receipt": {
+        "receipt_id": "4oPKEqDDJ1o3aytcLNbEQmJpg4ng4D99ACnddcRH5M1h",
+        "receiver_id": "multiagency.sputnik-dao.near",
+        "predecessor_id": "multiagency.sputnik-dao.near"
+      },
+      "execution_outcome": {
+        "outcome": {
+          "logs": [],
+          "status": {
+            "SuccessReceiptId": "92pFFgSywfQ5Zok9dUDjFXDc2DJNN9bsnPT3yRjAmGja"
+          }
+        }
+      }
+    },
+    {
+      "receipt": {
+        "receipt_id": "92pFFgSywfQ5Zok9dUDjFXDc2DJNN9bsnPT3yRjAmGja",
+        "receiver_id": "skyto.near",
+        "predecessor_id": "multiagency.sputnik-dao.near"
+      },
+      "execution_outcome": {
+        "outcome": {
+          "logs": [],
+          "status": {
+            "SuccessValue": ""
+          }
+        }
+      }
+    },
+    {
+      "receipt": {
+        "receipt_id": "AvZJviykyPDsiAMXxLbjGjFGiAEC4gWftWENAQDpS9Cz",
+        "receiver_id": "sponsor.trezu.near",
+        "predecessor_id": "system"
+      },
+      "execution_outcome": {
+        "outcome": {
+          "logs": [],
+          "status": {
+            "SuccessValue": ""
+          }
+        }
+      }
+    },
+    {
+      "receipt": {
+        "receipt_id": "9wKVr7aopGMuBNvuPn4rp5eczZX62CRnL5oCk2sBYP3D",
+        "receiver_id": "sponsor.trezu.near",
+        "predecessor_id": "system"
+      },
+      "execution_outcome": {
+        "outcome": {
+          "logs": [],
+          "status": {
+            "SuccessValue": ""
+          }
+        }
+      }
+    }
+  ]
+}

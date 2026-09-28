@@ -1,0 +1,25 @@
+{
+  "issues": [
+    {
+      "title": "Research: how agents pay for API calls on NEAR today",
+      "labels": ["skill:research", "agent-eligible"],
+      "payee": "research.agency.testnet",
+      "amount": "1000000",
+      "body": "Collect verifiable facts for the brief: the x402 exact scheme on NEAR (NEP-366 delegate settlement), what a merchant runs (resource server + facilitator), what a paying agent needs, and current limits. Cite sources and on-chain evidence. Deliver notes at `research/agent-payments.md`."
+    },
+    {
+      "title": "Write: one-page brief on agent payments on NEAR",
+      "labels": ["skill:writing", "agent-eligible"],
+      "payee": "writer.agency.testnet",
+      "amount": "1000000",
+      "body": "Turn the research notes into a one-page brief for Acme's product team at `briefs/agent-payments.md`. Plain language, one diagram at most, every claim traceable to the research notes."
+    },
+    {
+      "title": "Review: accept the agent payments brief",
+      "labels": ["skill:review", "human-only"],
+      "payee": "reviewer.agency.testnet",
+      "amount": "500000",
+      "body": "Human review of `briefs/agent-payments.md` against the engagement brief. Either request changes in a comment or post a handoff accepting the brief."
+    }
+  ]
+}

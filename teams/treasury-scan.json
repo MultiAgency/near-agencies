@@ -1,0 +1,27 @@
+{
+  "issues": [
+    {
+      "key": "research",
+      "title": "Research: multisig treasury tools teams use on NEAR today",
+      "labels": ["skill:research", "agent-eligible"],
+      "amount": "1000000",
+      "body": "Compare Trezu (trezu.app, built on Sputnik DAO) with the other multisig and treasury tools NEAR teams use today. For each tool: how roles and approvals work, supported assets and chains, privacy options, and what an agent-run organization would need from it (programmatic proposals, approval by agents, auditability). Cite a source link for every claim."
+    },
+    {
+      "key": "write",
+      "title": "Write: two-page comparison of NEAR treasury tools",
+      "labels": ["skill:writing", "agent-eligible"],
+      "amount": "1000000",
+      "depends_on": ["research"],
+      "body": "Turn the research into a two-page comparison for the client: a short summary, one comparison table (roles and approvals, assets, privacy, agent readiness), and a recommendation for an agent-run organization. Keep every claim traceable to the research sources."
+    },
+    {
+      "key": "review",
+      "title": "Review: accept the treasury tools comparison",
+      "labels": ["skill:review", "human-only"],
+      "amount": "500000",
+      "depends_on": ["write"],
+      "body": "Human review of the comparison against the engagement brief. Request changes in a comment, or post a handoff accepting it."
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "name": "x402-poc",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "start": "node --no-warnings server.mjs",
+    "agent": "node agent.mjs",
+    "test": "node --test \"test/*.test.mjs\"",
+    "check": "for f in *.mjs lib/*.mjs scripts/*.mjs public/app.js; do node --check \"$f\" || exit 1; done"
+  },
+  "dependencies": {
+    "@fastnear/api": "2.5.0",
+    "@fastnear/utils": "2.5.0",
+    "@fastnear/x402": "2.5.0",
+    "@x402/core": "2.25.0",
+    "@x402/express": "2.25.0",
+    "@x402/extensions": "2.25.0",
+    "@x402/fetch": "2.25.0",
+    "@x402/near": "2.25.0",
+    "express": "5.2.1"
+  },
+  "overrides": {
+    "@x402/core": "2.25.0",
+    "@x402/fetch": "2.25.0",
+    "@x402/near": "2.25.0"
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "transaction": {
+    "hash": "SqUzmRMmX6PU9JfefC7fp9b2VzgSRJS8GATbMdWC8E6",
+    "signer_id": "agency.testnet",
+    "receiver_id": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+    "actions": [
+      {
+        "FunctionCall": {
+          "method_name": "ft_transfer",
+          "args": "eyJyZWNlaXZlcl9pZCI6Im11bHRpYWdlbmN5LnNwdXRuaWt2Mi50ZXN0bmV0IiwiYW1vdW50IjoiMzAwMDAwMCIsIm1lbW8iOiJtYS0zZDFkOGI4MTA3In0=",
+          "gas": 30000000000000,
+          "deposit": "1"
+        }
+      }
+    ]
+  },
+  "receipts": [
+    {
+      "receipt": {
+        "receipt_id": "23QsyzqeR1YoC2hLVXYr3bmMsCei931XAQKTyaR8heu2",
+        "receiver_id": "3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af",
+        "predecessor_id": "agency.testnet"
+      },
+      "execution_outcome": {
+        "outcome": {
+          "logs": [
+            "EVENT_JSON:{\"standard\":\"nep141\",\"version\":\"1.0.0\",\"event\":\"ft_transfer\",\"data\":[{\"old_owner_id\":\"agency.testnet\",\"new_owner_id\":\"multiagency.sputnikv2.testnet\",\"amount\":\"3000000\",\"memo\":\"ma-3d1d8b8107\"}]}"
+          ],
+          "status": {
+            "SuccessValue": ""
+          }
+        }
+      }
+    },
+    {
+      "receipt": {
+        "receipt_id": "3xawwqcFv96jtCtFUtzKJp2TWQPohJjr1yXEBhcF3xrq",
+        "receiver_id": "agency.testnet",
+        "predecessor_id": "system"
+      },
+      "execution_outcome": {
+        "outcome": {
+          "logs": [],
+          "status": {
+            "SuccessValue": ""
+          }
+        }
+      }
+    }
+  ]
+}
