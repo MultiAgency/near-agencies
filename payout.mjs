@@ -2,7 +2,8 @@
 //
 //   node payout.mjs status    <epic>                   each member's work and payout state
 //   node payout.mjs propose   <epic> --as <requestor>  file one Transfer proposal per member
-//   node payout.mjs approve   <epic> --as <approver>   vote directly (testnet, or a local approver key)
+//   node payout.mjs approve   <epic> --as <approver>   vote directly (testnet, or a local approver key);
+//                                                     the approver must not be the proposer
 //   node payout.mjs reconcile <epic>                   record approvals made elsewhere (Trezu on mainnet)
 //
 // Proposals are filed only after every team issue is closed with a handoff
@@ -74,7 +75,13 @@ if (command === "status") {
     console.log(`#${m.issue}: proposal ${proposalId} (${explorer(hash)})${trezu ? ` ${trezu}` : ""}`);
   }
 } else if (command === "approve") {
-  for (const m of members.filter(m => m.payout?.status === "InProgress")) {
+  const pending = members.filter(m => m.payout?.status === "InProgress");
+  // Sputnik lets a member approve their own proposal; separation of duties is ours to keep.
+  const own = pending.filter(m => m.proposal.proposer === signer);
+  if (own.length > 0) {
+    throw new Error(`${signer} filed the proposals for ${own.map(m => `#${m.issue}`).join(", ")}; another approver must vote`);
+  }
+  for (const m of pending) {
     const before = await ftBalance(m.payee);
     // Sputnik v2.3.1 requires the proposal kind echoed back (ERR_WRONG_KIND guard).
     const { hash } = await call(signer, network.treasury, "act_proposal", {

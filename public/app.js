@@ -155,6 +155,12 @@ async function payWithWallet(payment) {
   try {
     const connector = new window.HOTConnect.NearConnector({ network: payment.network });
     const wallet = await connector.connect();
+    const [{ accountId }] = await wallet.getAccounts();
+    const { problems } = await get(`/api/quotes/${payment.memo}/payer/${encodeURIComponent(accountId)}`);
+    if (problems.length > 0) {
+      status.textContent = `${accountId} can't pay this deposit yet: ${problems.join("; ")}. Top it up and try again, or pay from another account.`;
+      return;
+    }
     status.textContent = "Confirm the transfer in your wallet…";
     await wallet.signAndSendTransaction({
       receiverId: payment.token,

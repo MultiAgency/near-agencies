@@ -3,6 +3,7 @@
 //   GET  /                        the demo app (public/)
 //   POST /api/quotes              start an engagement paid from the org's own wallet
 //   GET  /api/quotes/:code        deposit status for a quote
+//   GET  /api/quotes/:code/payer/:account  whether an account can pay the deposit
 //   GET  /api/engagements[/:n]    engagements, teams, handoffs and payouts
 //
 // With FACILITATOR_URL set, the x402-paid routes are mounted too

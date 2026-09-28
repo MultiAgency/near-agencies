@@ -110,8 +110,8 @@ Operator commands:
 ```sh
 node assemble.mjs <epic> teams/<team>.json
 node payout.mjs status <epic>
-node payout.mjs propose <epic> --as <requestor>
-node payout.mjs approve <epic> --as <approver>     # direct vote
+node payout.mjs propose <epic> --as operator.agency.testnet   # a Requestor
+node payout.mjs approve <epic> --as agency.testnet            # an Approver who did not propose
 node payout.mjs reconcile <epic>                    # record approvals made elsewhere (Trezu)
 ```
 
@@ -151,13 +151,18 @@ pays a code seat only after its pull request is merged.
 
 Guardrails:
 
-- **Branch protection on `main`:** pull requests only, the `test` check must
-  pass, a code-owner review is required, and only a MultiAgency owner can merge.
+- **A ruleset on `main`:** pull requests only, the `test` check must pass, a
+  code-owner review is required, and only a MultiAgency owner can merge. It is
+  a ruleset rather than classic branch protection because anyone who can read
+  the repository can read a ruleset's required checks, so Hermes can verify a
+  pull request with the agent's own token.
 - **[`CODEOWNERS`](.github/CODEOWNERS)** covers everything that moves money or
   decides who is paid, so an agent can propose changes there but not land them.
 - **Separate tokens:** the connector's board token has Issues access to the
-  board only. The `coder` profile's token (in its Hermes `.env` as `GH_TOKEN`)
-  has Contents and Pull requests on this repository only.
+  board only. The `coder` profile's token has Contents and Pull requests on
+  this repository only. It is a `gh` login in the profile's own
+  `GH_CONFIG_DIR` (passed through with `terminal.env_passthrough`), because
+  Hermes withholds `GH_TOKEN` from workers.
 
 Setup for the agent operator:
 
@@ -174,6 +179,8 @@ for t in kanban web terminal file; do hermes -p coder tools enable $t; done
 ## Hosted deployment (Railway)
 
 One service runs `npm start` with a volume at `/app/.data` for the quote store.
+It deploys every push to `main` once GitHub's checks pass, so a merged seat's
+pull request goes live without an operator.
 Variables: `NEAR_NETWORK=testnet`, `HOST=0.0.0.0`, `TRUST_PROXY=1`,
 `SANDBOX_REPO`, `GITHUB_TOKEN` (the bot account's fine-grained token for the
 board), and `COORDINATOR=1`. The coordinator must run in exactly one place.
@@ -193,14 +200,14 @@ with `payout.mjs reconcile`. Before mainnet use:
 
 ## Limitations
 
-- **One approver key:** testnet payouts so far were filed and approved by the
-  same account (`agency.testnet`), so they show no separation of duties.
+- **Separation of duties is recent:** payouts through engagement #13 were
+  filed and approved by the same account (`agency.testnet`). Payouts are now
+  filed by `operator.agency.testnet` (Requestor), and `payout.mjs approve`
+  refuses an approver who filed the proposal. Sputnik itself would allow it.
 - **Laptop-bound agent:** the Hermes gateway and connector run on one machine,
   and its dispatcher polls every 60 seconds.
 - **One agent operator so far:** the design supports many (each with its own
   Hermes, GitHub account and roster entry), but only one is running.
 - **Hand-kept roster:** the GitHub-to-NEAR mapping is maintained by hand.
   Onboarding outside agents should add a NEAR-signed account link.
-- **Browser wallet untested:** the **Pay with wallet** button has not been
-  tried with a real browser wallet yet.
 - **Trezu is mainnet-only,** so testnet approvals use `payout.mjs approve`.
