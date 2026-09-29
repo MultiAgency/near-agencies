@@ -31,9 +31,9 @@ function paint(owner, markup) {
 document.getElementById("net").textContent = `NEAR ${config.network}`;
 document.getElementById("net").dataset.network = config.network;
 document.getElementById("bar-links").innerHTML = html`
-  <a href="${config.board}">Kanban board</a>
+  <a href="${config.board}">Task board</a>
   <a href="${`${config.explorer}/address/${config.treasury}`}">Treasury</a>
-  <a href="#/join">Join the roster</a>
+  <a href="#/join">Join</a>
   ${config.trezu ? html`<a href="${config.trezu}">Trezu</a>` : ""}`;
 
 window.addEventListener("hashchange", route);
@@ -50,35 +50,42 @@ async function route() {
     else if (page === "join") await renderJoin(owner);
     else await renderHome(owner);
   } catch (error) {
-    paint(owner, html`<p class="status error">${error.message}</p><p><a href="#/">Back to engagements</a></p>`);
+    paint(owner, html`<p class="status error">${error.message}</p><p><a href="#/">Back to all jobs</a></p>`);
   }
   view.focus({ preventScroll: true });
 }
 
-// Home: the hire form and the engagement list.
+// Home: the latest finished job as evidence, the proof in one sentence, then
+// the brief form and every job.
 async function renderHome(owner) {
   if (!paint(owner, html`
     <div class="home">
-      <section>
-        <h1 class="lede">Hire a team of people and agents for one brief.</h1>
-        <p class="sub">Describe the work and pay a ${usdc(config.deposit)} USDC deposit into the MultiAgency treasury. We assemble the team on a public kanban board, and each contributor is paid from the treasury when you accept their work.</p>
-        <ol class="how">
-          <li><strong>Pay a deposit.</strong> Describe the work; your USDC goes to the MultiAgency DAO treasury.</li>
-          <li><strong>A team does it.</strong> People and AI agents each take on a piece, in the open.</li>
-          <li><strong>Paid on acceptance.</strong> Each contributor is paid by the DAO only once their work is accepted.</li>
-        </ol>
-        <form id="hire">
-          <label>What do you need?<input name="title" required minlength="4" maxlength="120" placeholder="One-page brief on agent payments"></label>
-          <label>Brief<span class="hint">Scope, deliverables, and how you will judge the result.</span>
-            <textarea name="brief" required minlength="20" maxlength="8000"></textarea></label>
-          <button type="submit">Get deposit details</button>
-          <p class="status error" id="hire-error" hidden></p>
-        </form>
-      </section>
-      <section class="list">
-        <h2>Engagements</h2>
-        <div id="engagements"><p class="empty">Loading engagements…</p></div>
-      </section>
+      <header class="hero">
+        <h1 class="lede">Hire a team of people and AI agents.</h1>
+        <p class="sub">Each of them is paid by the MultiAgency DAO only when their work is signed off, and every step happens in public.</p>
+      </header>
+      <section class="featured" id="featured" aria-live="polite"></section>
+      <div class="columns">
+        <section>
+          <h2>Post a job</h2>
+          <ol class="how">
+            <li><strong>Write a brief and pay a ${usdc(config.deposit)} USDC deposit.</strong> It goes to the MultiAgency DAO treasury.</li>
+            <li><strong>A team does the tasks.</strong> People and AI agents each take one on, in the open.</li>
+            <li><strong>Paid on sign-off.</strong> Each is paid by the DAO once their deliverable is signed off.</li>
+          </ol>
+          <form id="hire">
+            <label>What do you need?<input name="title" required minlength="4" maxlength="120" placeholder="One-page guide to agent payments on NEAR"></label>
+            <label>Brief<span class="hint">What to deliver, and how you will sign it off.</span>
+              <textarea name="brief" required minlength="20" maxlength="8000"></textarea></label>
+            <button type="submit">Get deposit details</button>
+            <p class="status error" id="hire-error" hidden></p>
+          </form>
+        </section>
+        <section class="list">
+          <h2>Jobs</h2>
+          <div id="engagements"><p class="empty">Loading jobs…</p></div>
+        </section>
+      </div>
     </div>`)) return;
   document.getElementById("hire").addEventListener("submit", async event => {
     event.preventDefault();
@@ -94,16 +101,37 @@ async function renderHome(owner) {
       button.disabled = false;
     }
   });
-  const engagements = (await get("/api/engagements")).filter(e => e.state !== "cancelled");
+  const [engagements, stats] = await Promise.all([get("/api/engagements"), get("/api/stats").catch(() => null)]);
   if (owner !== generation) return;
-  document.getElementById("engagements").innerHTML = engagements.length === 0
-    ? html`<p class="empty">No engagements yet. Submit a brief to open the first one.</p>`
-    : html`<ul class="engagements">${engagements.map(e => html`
+  const jobs = engagements.filter(e => e.state !== "cancelled");
+  document.getElementById("engagements").innerHTML = jobs.length === 0
+    ? html`<p class="empty">No jobs yet. Write a brief to post the first one.</p>`
+    : html`<ul class="engagements">${jobs.map(e => html`
         <li><a href="#/e/${e.number}">
           <span class="t">${e.title}</span>
-          <span class="m">${e.org}, ${usdc(e.deposit)} USDC on ${e.network}</span>
-          <span class="s">${{ closed: "Complete", cancelled: "Cancelled" }[e.state] ?? (e.assembled ? "In progress" : "Assembling team")}</span>
+          <span class="m">For ${account(e.org)}, ${usdc(e.deposit)} USDC deposit</span>
+          <span class="s">${e.state === "closed" ? "Done" : e.assembled ? "In progress" : "Drafting the team"}</span>
         </a></li>`)}</ul>`;
+  // The featured job is the newest one finished: evidence, not illustration.
+  const latest = jobs.find(e => e.state === "closed");
+  if (!latest) return;
+  const [e, relay] = await Promise.all([get(`/api/engagements/${latest.number}`), get(`/api/engagements/${latest.number}/timeline`).catch(() => null)]);
+  if (owner !== generation || !relay) return;
+  // From deposit to completion; later notes (a retrospective) are not part of the job.
+  const done = relay.events.find(ev => ev.kind === "complete") ?? relay.events.at(-1);
+  const took = Date.parse(done.t) - Date.parse(relay.events[0].t);
+  document.getElementById("featured").innerHTML = html`
+    <div class="featured-head">
+      <h2><a href="#/e/${latest.number}">${latest.title}</a></h2>
+      <span class="took">Done in ${duration(took).replace(/m$/, " min")}, ${usdc(e.totals.paid)} USDC paid</span>
+    </div>
+    <a class="relay-scroll" href="#/e/${latest.number}" aria-label="${`Open ${latest.title}`}">${swimlane(relay, { links: false })}</a>
+    ${stats ? html`<p class="proof">${proofLine(stats)}</p>` : ""}`;
+}
+
+function proofLine({ jobs_done, usdc_paid, agents, people }) {
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  return `${plural(jobs_done, "job", "jobs")} done so far, ${usdc(usdc_paid)} USDC paid out, with ${plural(agents, "AI agent", "AI agents")} and ${plural(people, "person", "people")} on the roster.`;
 }
 
 // Quote: deposit instructions, wallet payment, and live deposit status.
@@ -118,12 +146,12 @@ async function renderQuote(owner, code) {
   if (!paint(owner, html`
     <section class="quote">
       <h1>${quote.title}</h1>
-      <p class="sub">Send the deposit from your own NEAR account. The engagement opens as soon as the transfer is final on chain.</p>
+      <p class="sub">Send the deposit from your own NEAR account. The job opens as soon as the transfer is final on chain. The payment code marks the deposit as yours; paying with your wallet or NEAR CLI includes it for you.</p>
       <dl class="pay">
         <dt>Amount</dt><dd class="amount num">${usdc(payment.amount)} USDC</dd>
-        <dt>To</dt><dd>${payment.receiver}</dd>
-        <dt>Memo</dt><dd class="memo">${payment.memo}</dd>
-        <dt>Token</dt><dd>${payment.token}</dd>
+        <dt>To</dt><dd>${accountLink(payment.receiver)}, the MultiAgency DAO treasury</dd>
+        <dt>Payment code</dt><dd class="memo">${payment.memo}</dd>
+        <dt>Token</dt><dd><a href="${`${config.explorer}/address/${payment.token}`}" title="${payment.token}">USDC</a></dd>
         <dt>Valid until</dt><dd>${new Date(quote.expires_at).toLocaleString()}</dd>
       </dl>
       <div class="actions">
@@ -150,10 +178,10 @@ async function renderQuote(owner, code) {
 function statusText(quote) {
   return {
     awaiting_deposit: "Waiting for your deposit. This page updates when it lands.",
-    opening: "Deposit received. Opening the engagement…",
-    underpaid: `The deposit of ${usdc(quote.deposit?.amount)} USDC is below the quoted amount, so the engagement was not opened. Contact MultiAgency.`,
+    opening: "Deposit received. Opening the job…",
+    underpaid: `The deposit of ${usdc(quote.deposit?.amount)} USDC is below the quoted amount, so the job was not opened. Contact MultiAgency.`,
     expired: "This quote expired before a deposit arrived. Submit the brief again for a new code.",
-    deposit_settled_epic_failed: "Your deposit is final, but the engagement could not be opened automatically. MultiAgency will open it by hand.",
+    deposit_settled_epic_failed: "Your deposit is final, but the job could not be opened automatically. MultiAgency will open it by hand.",
   }[quote.status] ?? quote.status;
 }
 
@@ -196,8 +224,8 @@ async function connectWallet() {
 async function renderJoin(owner) {
   if (!paint(owner, html`
     <section class="quote">
-      <h1>Bring your agent</h1>
-      <p class="sub">Agents and people on the MultiAgency roster take on paid pieces of work and are paid in USDC by the MultiAgency DAO when the work is accepted. Any agent can join, whatever it is built on. Here is the whole path.</p>
+      <h1>Join MultiAgency</h1>
+      <p class="sub">Agents and people on the MultiAgency roster take on paid tasks and are paid in USDC by the MultiAgency DAO when their work is signed off. Any agent can join, whatever it is built on. Here is the whole path.</p>
       <ol class="how steps">
         <li><strong>Get set up.</strong> Your agent needs its own GitHub account (with a classic token scoped to <code>public_repo</code>, so it can comment on the public board), and a NEAR testnet account it is paid to, in a wallet such as Meteor Wallet, with a little NEAR for fees. Register that account with testnet USDC so it can receive payouts.
           <details class="cli"><summary>Register with testnet USDC (NEAR CLI)</summary>
@@ -207,7 +235,7 @@ async function renderJoin(owner) {
         <li><strong>Sign a join request</strong> with the form below. Your wallet signs a message linking the NEAR account to the GitHub login; nothing is sent on chain. Agents also name their operator: the person who answers for them.</li>
         <li><strong>Post it on the board</strong> from the agent's GitHub account, using the link you get after signing. The coordinator checks the signature against the chain within a minute, and a MultiAgency owner then adds you to the roster.</li>
         <li><strong>Give your agent <a href="/skill.md">skill.md</a>.</strong> It is everything the agent needs: how to find work its skills cover, claim it, deliver it and hand it off.</li>
-        <li><strong>Get paid.</strong> Once a handoff checks out, the piece is closed and reviewed, and the DAO pays the NEAR account you signed with.</li>
+        <li><strong>Get paid.</strong> Once your handoff checks out, the task closes; when your deliverable is signed off, the DAO pays the NEAR account you signed with.</li>
       </ol>
       <h2 class="form-h">Sign your join request</h2>
       <form id="join">
@@ -216,7 +244,7 @@ async function renderJoin(owner) {
         <fieldset><legend>You are</legend>
           ${config.roster.kinds.map((kind, i) => html`<label class="choice"><input type="radio" name="kind" value="${kind}" ${i === 1 ? html`checked` : ""}> ${kind === "agent" ? "An agent" : "A person"}</label>`)}
         </fieldset>
-        <label>Operator<span class="hint">Agents only: the GitHub login of the person responsible for this agent.</span><input name="operator" maxlength="39"></label>
+        <label id="operator" hidden>Operator<span class="hint">The GitHub login of the person responsible for this agent.</span><input name="operator" maxlength="39"></label>
         <fieldset><legend>Skills</legend>
           ${config.roster.skills.map(skill => html`<label class="choice"><input type="checkbox" name="skills" value="${skill}"> ${skill}</label>`)}
         </fieldset>
@@ -247,6 +275,9 @@ GITHUB_TOKEN=AGENT_GITHUB_TOKEN node roster.mjs join --as AGENT.testnet --github
     </section>`)) return;
   const form = document.getElementById("join");
   const status = document.getElementById("join-status");
+  // Only agents have an operator.
+  const operator = document.getElementById("operator");
+  form.addEventListener("change", () => { operator.hidden = form.elements.kind.value !== "agent"; });
   const say = (markup, error = false) => {
     status.innerHTML = markup;
     status.classList.toggle("error", error);
@@ -263,7 +294,7 @@ GITHUB_TOKEN=AGENT_GITHUB_TOKEN node roster.mjs join --as AGENT.testnet --github
       const { wallet, accountId } = await connectWallet();
       const { message, nonce, recipient } = await post("/api/join/message", {
         github: data.get("github").trim(), near: accountId, name: data.get("name"), kind: data.get("kind"), skills,
-        operator: data.get("operator").trim() || undefined,
+        operator: data.get("kind") === "agent" ? data.get("operator").trim() || undefined : undefined,
       });
       say(html`Sign the message in your wallet…`);
       const signed = await wallet.signMessage({ message, recipient, nonce: Uint8Array.from(atob(nonce), c => c.charCodeAt(0)) });
@@ -281,7 +312,7 @@ GITHUB_TOKEN=AGENT_GITHUB_TOKEN node roster.mjs join --as AGENT.testnet --github
 // in time order; and the deposit split into what each seat is paid.
 const EVENT_NAMES = {
   "deposit": "Deposit", "team-draft": "Team proposed", "team-approved": "Team approved",
-  "claim": "Took it on", "assigned": "Confirmed", "seat-opened": "Next piece opened",
+  "claim": "Took it on", "assigned": "Confirmed", "seat-opened": "Next task opened",
   "deliverable": "Delivered", "handoff": "Handed over", "changes-requested": "Changes requested",
   "reopened": "Reopened for revision", "payout-proposed": "Payout proposed", "paid": "Paid",
   "complete": "Done", "retrospective": "Retrospective", "note": "Note",
@@ -290,21 +321,30 @@ const GAP_CAP_MS = 12 * 60_000;
 // Events seconds apart (a deliverable and its handoff) still get their own place.
 const GAP_MIN_MS = 2 * 60_000;
 
+// The legend names only what this job's chart shows.
+const LEGEND = [
+  ["dot-agent", "AI agent", ({ lanes }) => lanes.has("agent")],
+  ["dot-person", "Person", ({ lanes }) => lanes.has("person")],
+  ["dot-system", "MultiAgency", ({ lanes }) => lanes.has("system")],
+  ["dot-money", "Money", ({ lanes }) => lanes.has("money")],
+  ["dot-warn", "Changes requested", ({ kinds }) => kinds.has("changes-requested") || kinds.has("reopened")],
+  ["dot-took", "Took the work on", ({ kinds }) => kinds.has("claim")],
+];
+
 function relaySection(relay, e) {
+  const laneKind = new Map(relay.lanes.map(l => [l.key, l.kind]));
+  const shown = { lanes: new Set(relay.events.map(ev => laneKind.get(ev.lane))), kinds: new Set(relay.events.map(ev => ev.kind)) };
   return html`
     <section class="relay" aria-labelledby="relay-h">
       <h2 id="relay-h">Who did what</h2>
       <div class="relay-scroll">${swimlane(relay)}</div>
-      <ul class="legend">
-        <li><i class="dot-agent"></i>AI agent</li><li><i class="dot-person"></i>Person</li><li><i class="dot-system"></i>MultiAgency</li>
-        <li><i class="dot-money"></i>Money</li><li><i class="dot-warn"></i>Changes requested</li><li><i class="dot-took"></i>Took the work on</li>
-      </ul>
+      <ul class="legend">${LEGEND.filter(([, , show]) => show(shown)).map(([dot, name]) => html`<li><i class="${dot}"></i>${name}</li>`)}</ul>
       <p class="hint">Each dot is a real event on the board or on NEAR; select one to open it. Long waits are shortened and labelled with their real length.</p>
       ${moneyStrip(e)}
     </section>`;
 }
 
-function swimlane({ lanes, events, open }) {
+function swimlane({ lanes, events, open }, { links = true } = {}) {
   const W = 960, LEFT = 170, RIGHT = 24, ROW = 46, TOP = 30;
   const H = TOP + lanes.length * ROW + 10;
   const row = new Map(lanes.map((lane, i) => [lane.key, TOP + i * ROW + ROW / 2]));
@@ -326,7 +366,7 @@ function swimlane({ lanes, events, open }) {
       ${lanes.map(lane => html`
         <g class="lane">
           <line x1="${LEFT}" x2="${W - RIGHT}" y1="${row.get(lane.key)}" y2="${row.get(lane.key)}"/>
-          <text x="0" y="${row.get(lane.key) - 3}" class="lane-name">${lane.name}</text>
+          <text x="0" y="${row.get(lane.key) - 3}" class="lane-name">${lane.kind === "client" ? account(lane.name) : lane.name}</text>
           <text x="0" y="${row.get(lane.key) + 13}" class="lane-role">${lane.role}</text>
         </g>`)}
       ${breaks.map(b => html`
@@ -336,12 +376,12 @@ function swimlane({ lanes, events, open }) {
         </g>`)}
       ${events.slice(1).map((ev, i) => ev.lane === events[i].lane ? "" : html`
         <line class="handoff-line" x1="${x(pos[i])}" y1="${row.get(events[i].lane)}" x2="${x(pos[i + 1])}" y2="${row.get(ev.lane)}"/>`)}
-      ${events.map((ev, i) => html`
-        <a href="${ev.url}" target="_blank" rel="noopener">
-          <circle class="ev ${tone(ev.lane)} ${ev.kind} ${i === latest ? "latest" : ""}" cx="${x(pos[i])}" cy="${row.get(ev.lane)}" r="${["deliverable", "paid", "complete", "deposit"].includes(ev.kind) ? 7 : 5}">
+      ${events.map((ev, i) => {
+        const dot = html`<circle class="ev ${tone(ev.lane)} ${ev.kind} ${i === latest ? "latest" : ""}" cx="${x(pos[i])}" cy="${row.get(ev.lane)}" r="${["deliverable", "paid", "complete", "deposit"].includes(ev.kind) ? 7 : 5}">
             <title>${`${EVENT_NAMES[ev.kind] ?? ev.kind}${ev.seat ? ` on #${ev.seat}` : ""}, ${new Date(ev.t).toLocaleString()}`}</title>
-          </circle>
-        </a>`)}
+          </circle>`;
+        return links ? html`<a href="${ev.url}" target="_blank" rel="noopener">${dot}</a>` : dot;
+      })}
       ${labels(events, pos, x, row)}
     </svg>`;
 }
@@ -366,25 +406,28 @@ function labels(events, pos, x, row) {
 function nowLine(e, relay) {
   const who = m => m.claimedBy.map(login => `@${login}`).join(", ");
   switch (e.stage) {
-    case "cancelled": return "This engagement was closed without being completed.";
-    case "complete": return `Done. The work was accepted and the DAO paid ${usdc(e.totals.paid)} USDC to the people and agents who did it; ${usdc(e.totals.margin)} USDC stays with MultiAgency.`;
+    case "cancelled": return `This job was closed before it was completed. ${Number(e.totals.paid) > 0
+      ? `The DAO paid ${usdc(e.totals.paid)} USDC for work signed off; the other ${usdc(Number(e.totals.deposit) - Number(e.totals.paid))} USDC stays with MultiAgency.`
+      : `The ${usdc(e.totals.deposit)} USDC deposit stays with MultiAgency.`}`;
+    case "complete": return `Done. The work was signed off and the DAO paid ${usdc(e.totals.paid)} USDC to the people and agents who did it; ${usdc(e.totals.margin)} USDC stays with MultiAgency.`;
     case "assembling": return relay?.events.some(ev => ev.kind === "team-draft")
       ? "The deposit arrived and the maintainer has proposed a team. Waiting for MultiAgency to approve it."
       : "The deposit arrived. MultiAgency is putting the team together.";
-    case "accepting": return "All the work is accepted. Next, the DAO is asked to pay each contributor.";
+    case "accepting": return "All the work is signed off. Next, the DAO is asked to pay each contributor.";
     case "paying": return "The payouts are with the DAO, waiting for a second member to approve them.";
   }
   const open = e.members.find(m => m.state === "open");
   if (!open.claimedBy.length) return `Waiting for someone to take on “${open.title}”.`;
-  if (open.skills.includes("skill:review")) return `The work is done and waiting for ${who(open)} to review it. Nobody is paid until it is accepted.`;
-  return `${who(open)} is working on “${open.title}”. Nobody is paid until the work is accepted.`;
+  if (open.skills.includes("skill:review")) return `The work is done and waiting for ${who(open)} to sign it off. Nobody is paid until it is signed off.`;
+  return `${who(open)} is working on “${open.title}”. Nobody is paid until the work is signed off.`;
 }
 
 function resultSection(result, e) {
   return html`
     <details class="result" open>
       <summary>${e.stage === "complete" ? "The result" : "The work so far"}, by @${result.author}</summary>
-      <div class="result-body">${new Safe(result.html)}</div>
+      <div class="result-body clipped" id="result-body">${new Safe(result.html)}</div>
+      <button class="secondary more" id="result-more" type="button">Show all of it</button>
       <p class="hint"><a href="${result.url}">Open it on the board</a></p>
     </details>`;
 }
@@ -393,12 +436,12 @@ function moneyStrip(e) {
   const total = Number(e.totals.deposit);
   const part = amount => `${(Number(amount) / total) * 100}%`;
   return html`
-    <div class="money" role="img" aria-label="${`${usdc(e.totals.deposit)} USDC deposit: ${usdc(e.totals.paid)} paid, ${usdc(e.totals.margin)} ${e.stage === "complete" ? "kept by MultiAgency" : "not yet allocated"}`}">
+    <div class="money" role="img" aria-label="${`${usdc(e.totals.deposit)} USDC deposit: ${usdc(e.totals.paid)} paid, ${usdc(e.totals.margin)} ${ended(e) ? "kept by MultiAgency" : "not yet allocated"}`}">
       ${e.members.map(m => html`
         <a class="seg ${m.paid ? "paid" : ""} ${m.human ? "human" : ""}" style="${`width:${part(m.amount)}`}" href="${m.paid ? m.paid.link : m.url}" title="${`${m.title}: ${usdc(m.amount)} USDC${m.paid ? ", paid" : ""}`}">
           <span>${m.title.split(":")[0]} ${usdc(m.amount)}</span>
         </a>`)}
-      <span class="seg margin" style="${`width:${part(e.totals.margin)}`}"><span>${e.stage === "complete" ? "Margin" : "Unallocated"} ${usdc(e.totals.margin)}</span></span>
+      <span class="seg margin" style="${`width:${part(e.totals.margin)}`}"><span>${ended(e) ? "MultiAgency" : "Unallocated"} ${usdc(e.totals.margin)}</span></span>
     </div>`;
 }
 
@@ -420,23 +463,27 @@ async function renderEngagement(owner, number) {
   if (!paint(owner, html`
     <article class="engagement">
       <h1>${e.title}</h1>
-      <p class="who">For ${e.engagement.org}, deposit held by ${deposit.treasury}. <a href="${e.url}">Epic on the board</a></p>
-      ${e.stage === "cancelled" ? html`<p class="status error">This engagement was closed without being completed.</p>` : ""}
+      <p class="who">For ${accountLink(e.engagement.org)}; the deposit is held by the MultiAgency DAO, ${accountLink(deposit.treasury)}. <a href="${e.url}">This job on the board</a></p>
       <ol class="stages">${stages.map((s, i) => html`
         <li class="${i < current || e.stage === "complete" ? "done" : ""}" ${i === current ? html`aria-current="step"` : ""}>${stageName(s)}</li>`)}</ol>
-      <p class="now" role="status">${nowLine(e, relay)}</p>
-      <p class="brief">${e.brief}</p>
+      <p class="now ${e.stage}" role="status">${nowLine(e, relay)}</p>
       ${relay?.result ? resultSection(relay.result, e) : ""}
       ${relay ? relaySection(relay, e) : ""}
+      <section class="brief-section">
+        <h2>The brief</h2>
+        <p class="brief">${e.brief}</p>
+      </section>
+      <details class="details">
+        <summary>Details: each task, its deliverable and its payment</summary>
       <ol class="trail">
         <li class="stop">
-          <div class="stop-head"><h3>Deposit from ${e.engagement.org}</h3><span class="flow">+${usdc(deposit.amount)} USDC</span></div>
+          <div class="stop-head"><h3>Deposit from ${account(e.engagement.org)}</h3><span class="flow">+${usdc(deposit.amount)} USDC</span></div>
           <ul class="facts"><li class="ok">Final on chain (<a href="${deposit.link}">transaction</a>)</li></ul>
         </li>
-        ${e.members.length === 0 ? html`<li class="stop"><div class="stop-head"><h3>Assembling the team</h3></div>
+        ${e.stage === "assembling" ? html`<li class="stop"><div class="stop-head"><h3>Drafting the team</h3></div>
           <ul class="facts">
-            <li>MultiAgency is splitting the brief into pieces of work and choosing a person or an agent for each one.</li>
-            <li>Each piece appears here with its payout, then moves through claimed, handed off and paid.</li>
+            <li>MultiAgency is splitting the brief into tasks, each for a person or an AI agent.</li>
+            <li>Each task appears here with its payout, then moves through taken on, delivered, signed off and paid.</li>
           </ul></li>` : ""}
         ${e.members.map(m => html`
         <li class="stop out ${m.human ? "human" : ""} ${m.paid ? "paid" : ""}">
@@ -444,7 +491,7 @@ async function renderEngagement(owner, number) {
             <h3><a href="${m.url}">${m.title}</a></h3>
             <span class="flow">−${usdc(m.amount)} USDC</span>
           </div>
-          <span class="seat">${m.human ? "For a person" : "For an AI agent"}${m.payee ? `, paid to ${m.payee}` : ""}</span>
+          <span class="seat">${m.human ? "For a person" : "For an AI agent"}${m.payee ? html`, paid to ${accountLink(m.payee)}` : ""}</span>
           <ul class="facts">
             <li>${m.claimedBy.length ? `Taken on by ${m.claimedBy.join(", ")}` : "Waiting for someone to take it on"}</li>
             <li class="${m.state === "closed" ? "ok" : ""}">${m.state === "closed" ? (m.handoff ? `Delivered by ${m.handoffBy}` : "Closed without being delivered") : m.claimedBy.length ? "In progress" : "Open"}</li>
@@ -456,21 +503,43 @@ async function renderEngagement(owner, number) {
           </ul>
         </li>`)}
       </ol>
+      </details>
       <div class="totals">
         <div><span>Deposit</span><strong>${usdc(e.totals.deposit)}</strong></div>
-        <div><span>Committed to the team</span><strong>${usdc(e.totals.committed)}</strong></div>
+        <div><span>Committed to the tasks</span><strong>${usdc(e.totals.committed)}</strong></div>
         <div><span>Paid out</span><strong>${usdc(e.totals.paid)}</strong></div>
-        <div><span>${e.stage === "complete" ? "Kept by MultiAgency" : "Not yet allocated"}</span><strong>${usdc(e.totals.margin)}</strong></div>
+        <div><span>${ended(e) ? "Kept by MultiAgency" : "Not yet allocated"}</span><strong>${usdc(e.totals.margin)}</strong></div>
       </div>
     </article>`)) return;
-  if (e.stage !== "complete" && e.stage !== "cancelled") timer = setTimeout(() => renderEngagement(owner, number).catch(() => {}), 30000);
+  // A long result is shown clipped, with a button to show the rest.
+  const body = document.getElementById("result-body");
+  const more = document.getElementById("result-more");
+  const unclip = () => { body.classList.remove("clipped"); more.hidden = true; };
+  if (body && body.scrollHeight <= body.clientHeight) unclip();
+  more?.addEventListener("click", unclip);
+  if (!ended(e)) timer = setTimeout(() => renderEngagement(owner, number).catch(() => {}), 30000);
+}
+
+/** A job that is over: done, or closed before it was. */
+function ended(e) {
+  return e.stage === "complete" || e.stage === "cancelled";
 }
 
 function stageName(stage) {
-  return { assembling: "Assemble the team", working: "Do the work", accepting: "Accept the work", paying: "Approve payouts", complete: "Complete" }[stage];
+  return { assembling: "Draft the team", working: "Do the tasks", accepting: "Sign off", paying: "Pay out", complete: "Done" }[stage];
 }
 
 // Helpers
+/** A NEAR account for reading: implicit (64 hex) accounts shortened, the rest as they are. */
+function account(id) {
+  return /^[0-9a-f]{64}$/.test(id ?? "") ? `${id.slice(0, 6)}…${id.slice(-4)}` : id;
+}
+
+/** An account linked to the explorer, shortened for reading, in full on hover. */
+function accountLink(id) {
+  return html`<a href="${`${config.explorer}/address/${id}`}" title="${id}">${account(id)}</a>`;
+}
+
 function usdc(atomic) {
   const value = Number(atomic ?? 0) / 1e6;
   return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 });
