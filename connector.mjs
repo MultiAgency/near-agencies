@@ -149,7 +149,7 @@ async function publish(seat, cardId, profile, request, revision) {
         deliverable: { url: delivered.html_url, sha256: digest(delivered.body) },
         verification: pullRequest
           ? ["Review the pull request; its required checks passed before this handoff", "Merge it to accept the work"]
-          : ["Read the deliverable comment against the seat and engagement brief"],
+          : ["Read the deliverable comment against the task and the client's brief"],
         payout: { account_id: builder.nearAccount },
         hermes: { card: cardId, profile },
       }),
@@ -174,22 +174,22 @@ async function briefing(seat) {
     const deliverable = (await comments(n)).filter(c => c.body.startsWith(DELIVERABLE)).at(-1);
     if (deliverable) inputs.push(`### From #${n}\n\n${deliverable.body}`);
   }
-  const task = seat.body.split("```terms")[0].replace(/^Part of engagement #\d+\.\s*/, "").replace(/Depends on:[\s\S]*$/, "").trim();
+  const task = seat.body.split("```terms")[0].replace(/^Part of job #\d+\.\s*/, "").replace(/Depends on:[\s\S]*$/, "").trim();
   return [
-    `You are working seat #${seat.number} of MultiAgency engagement #${seat.terms.engagement}: "${epic.title.replace(/^Engagement: /, "")}".`,
+    `You are working task #${seat.number} of MultiAgency job #${seat.terms.engagement}: "${epic.title.replace(/^Job: /, "")}".`,
     "",
-    "## Engagement brief",
+    "## The client's brief",
     brief,
     "",
-    "## This seat",
+    "## This task",
     task,
-    ...(inputs.length ? ["", "## Inputs from earlier seats", ...inputs] : []),
+    ...(inputs.length ? ["", "## Inputs from earlier tasks", ...inputs] : []),
     "",
     "## How to deliver",
     ...(isCodeSeat(seat) ? [
-      `Work in your worktree of ${CODE_REPO}. Keep the change focused on this seat, follow the existing code style, and add or update tests.`,
+      `Work in your worktree of ${CODE_REPO}. Keep the change focused on this task, follow the existing code style, and add or update tests.`,
       "Run `npm ci`, `npm run check` and `npm test`; all must pass.",
-      `Commit, push your branch, and open a pull request against main with \`gh pr create\`. Title it "Seat #${seat.number}: <what changed>" and link ${seat.url} in its body.`,
+      `Commit, push your branch, and open a pull request against main with \`gh pr create\`. Title it "Task #${seat.number}: <what changed>" and link ${seat.url} in its body.`,
       "Changes to payouts, claims, deposits, the roster, dependencies or CI need a MultiAgency owner's review; do not try to route around that.",
       "When the pull request's checks pass, call kanban_complete with a one-sentence summary and metadata {\"published_pr\": \"<pull request URL>\"}.",
     ] : [

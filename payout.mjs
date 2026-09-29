@@ -66,8 +66,8 @@ if (command === "status") {
     const kind = { Transfer: { token_id: USDC, receiver_id: m.payee, amount: m.amount, msg: null } };
     // Trezu parses JSON descriptions and displays `title` (else `notes`) with a `url` link.
     const description = JSON.stringify({
-      title: `Engagement #${epicNumber}: ${m.title}`,
-      notes: `MultiAgency payout to ${m.payee} for accepted work on issue #${m.issue}`,
+      title: `Job #${epicNumber}: ${m.title}`,
+      notes: `MultiAgency payout to ${m.payee} for signed-off work on issue #${m.issue}`,
       url: m.url,
     });
     // add_proposal burns about 3 Tgas; the default 100 Tgas would reserve 0.1 NEAR per call.
@@ -140,7 +140,7 @@ async function closeIfPaid() {
   const current = await loadEngagement(epicNumber);
   if (current.members.some(m => !m.paid)) return;
   if (current.state === "open") {
-    await comment(epicNumber, `**Engagement complete.** ${current.members.length} payouts executed from \`${network.treasury}\` (${Number(current.totals.committed) / 1e6} USDC); ${Number(current.totals.margin) / 1e6} USDC of the deposit remains with MultiAgency.`);
+    await comment(epicNumber, `**Job complete.** ${current.members.length} payouts executed from \`${network.treasury}\` (${Number(current.totals.committed) / 1e6} USDC); ${Number(current.totals.margin) / 1e6} USDC of the deposit remains with MultiAgency.`);
     await github("PATCH", `/issues/${epicNumber}`, { state: "closed", state_reason: "completed" });
     console.log(`#${epicNumber}: closed`);
   }
