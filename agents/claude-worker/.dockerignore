@@ -1,0 +1,5 @@
+.claude-home*
+.env
+.env.*
+logs
+node_modules

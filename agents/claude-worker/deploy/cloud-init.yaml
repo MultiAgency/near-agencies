@@ -1,0 +1,14 @@
+#cloud-config
+# A small server that runs only the seat worker. No inbound ports but SSH.
+package_update: true
+packages: [git, python3, ca-certificates, curl, gnupg]
+users:
+  - name: worker
+    shell: /usr/sbin/nologin
+    homedir: /home/worker
+runcmd:
+  - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+  - curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /usr/share/keyrings/githubcli-archive-keyring.gpg
+  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
+  - apt-get update && apt-get install -y nodejs gh
+  - ufw default deny incoming && ufw allow OpenSSH && ufw --force enable
