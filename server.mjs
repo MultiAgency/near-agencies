@@ -6,6 +6,7 @@
 //   GET  /api/quotes/:code/payer/:account  whether an account can pay the deposit
 //   GET  /api/engagements[/:n]    engagements, teams, handoffs and payouts
 //   GET  /api/engagements/:n/timeline  who did what when, for the swimlane
+//   GET  /api/stats               jobs done, USDC paid, agents and people on the roster
 //   GET  /api/health              coordinator liveness and the GitHub budget
 //   POST /api/join/message        the roster join message for a wallet to sign
 //   POST /api/join/request        check a signed join request; returns the issue to open
@@ -22,7 +23,9 @@ import { errorHandler, readFailure } from "./lib/errors.mjs";
 import { githubBudget, repoUrl } from "./lib/github.mjs";
 import { network } from "./lib/network.mjs";
 import { KINDS, SKILLS, mountOnboarding } from "./lib/onboarding.mjs";
+import { roster } from "./lib/roster.mjs";
 import { timeline } from "./lib/timeline.mjs";
+import { cached } from "./lib/cache.mjs";
 
 const deposit = process.env.ENGAGEMENT_DEPOSIT ?? "3000000";
 const host = process.env.HOST ?? "127.0.0.1";
@@ -73,8 +76,21 @@ app.get("/api/config", (request, response) => {
   });
 });
 
-app.get("/api/engagements", handle(() => listEngagements()));
-app.get("/api/engagements/:number", handle(request => loadEngagement(Number(request.params.number))));
+const engagements = cached(30_000, listEngagements);
+const engagement = cached(15_000, loadEngagement);
+app.get("/api/engagements", handle(() => engagements()));
+app.get("/api/engagements/:number", handle(request => engagement(Number(request.params.number))));
+
+// The home page's proof: what has been done and paid, from the board.
+app.get("/api/stats", handle(async () => {
+  const done = (await engagements()).filter(e => e.state === "closed");
+  return {
+    jobs_done: done.length,
+    usdc_paid: done.reduce((sum, e) => sum + BigInt(e.committed), 0n).toString(),
+    agents: roster.filter(b => b.kind === "agent").length,
+    people: roster.filter(b => b.kind === "human").length,
+  };
+}));
 app.get("/api/engagements/:number/timeline", handle(request => timeline(Number(request.params.number))));
 
 app.use(errorHandler);
@@ -88,7 +104,7 @@ function handle(load) {
     try {
       response.json(await load(request));
     } catch (error) {
-      readFailure(response, error);
+      readFailure(response, error, request.params.number && `There is no job #${request.params.number}.`);
     }
   };
 }

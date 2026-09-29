@@ -56,16 +56,22 @@ describe("readFailure", () => {
   before(() => { console.error = () => {}; });
   after(() => { console.error = realError; });
 
-  test("an unknown engagement is a 404 with its own message", () => {
+  test("an unknown engagement is a 404 with the caller's message", () => {
     const { response, sent } = capture();
-    readFailure(response, new Error("#9 is not an engagement"));
-    assert.deepEqual(sent, { status: 404, body: { error: "#9 is not an engagement" } });
+    readFailure(response, new Error("#9 is not an engagement"), "There is no job #9.");
+    assert.deepEqual(sent, { status: 404, body: { error: "There is no job #9." } });
   });
 
   test("a GitHub 404 is a 404 without GitHub's response text", () => {
     const { response, sent } = capture();
     readFailure(response, new Error(`GitHub GET /repos/x/issues/9: 404 ${SECRET}`));
     assert.deepEqual(sent, { status: 404, body: { error: "not found" } });
+  });
+
+  test("a 404 only inside the upstream's text is not a not-found", () => {
+    const { response, sent } = capture();
+    readFailure(response, new Error("GitHub GET /repos/x/issues: 403 {\"message\":\"see 404 docs\"}"));
+    assert.deepEqual(sent, { status: 502, body: { error: "upstream request failed" } });
   });
 
   test("any other failure is a 502 without the upstream's message", () => {

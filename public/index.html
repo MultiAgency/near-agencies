@@ -6,14 +6,21 @@
   <title>MultiAgency</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
   <header class="bar">
-    <a class="mark" href="#/">MultiAgency</a>
-    <span class="net" id="net"></span>
-    <nav class="bar-links" id="bar-links"></nav>
+    <div class="bar-inner">
+      <a class="mark" href="#/" aria-label="MultiAgency home">
+        <!-- The MultiAgency mark, as the dashboard draws it -->
+        <svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M1 1L79 1L79 109L63 109L63 17L16 17L16 61L54 61L54 77L1 77ZM119 1L195 1L195 109L180 109L180 17L134 17L134 50L135 50L135 51L119 51ZM86 61L171 61L171 77L86 77ZM203 61L255 61L255 135L142 135L142 118L240 118L240 77L203 77ZM119 86L134 86L134 169L119 169ZM1 118L109 118L109 135L16 135L16 176L53 176L53 192L1 192ZM63 143L79 143L79 238L119 238L119 201L134 201L134 254L63 254ZM180 143L195 143L195 238L240 238L240 192L204 192L204 176L255 176L255 254L180 254ZM86 176L172 176L172 177L171 177L171 191L172 191L172 192L86 192Z"/></svg>
+        <span>MultiAgency</span>
+      </a>
+      <span class="net" id="net"></span>
+      <nav class="bar-links" id="bar-links"></nav>
+    </div>
   </header>
   <main id="view" tabindex="-1"></main>
   <script src="https://cdn.jsdelivr.net/npm/@fastnear/near-connect@0.14.1/cdn/hot-connect.iife.js"></script>
