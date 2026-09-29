@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { assignmentClaims, isChangeRequest } from "../lib/coordinator.mjs";
+import { assignmentClaims, isChangeRequest, revisionNotice } from "../lib/coordinator.mjs";
 import { fence, fenced } from "../lib/github.mjs";
 import { byGithub, covers } from "../lib/roster.mjs";
 import { eligibility, handoffProblem, isClaim, pinProblem, seat } from "../lib/seats.mjs";
@@ -161,5 +161,18 @@ describe("handoffs", () => {
     const unpinned = { ...handoff, links: ["https://github.com/MultiAgency/kanban-sandbox/issues/20#issuecomment-1"] };
     assert.match(await handoffProblem(unpinned, builder), /without pinning/);
     assert.equal(pinProblem(unpinned), "it links a deliverable comment without pinning its sha256");
+  });
+});
+
+describe("revisions", () => {
+  const changes = n => ({ body: `**Changes requested** by @jlwaugh\n\n${fence("changes", { review: 27, requested_by: "jlwaugh", request: `r${n}` })}` });
+  const handoff = { html_url: "https://example/handoff", body: `**Handoff:** revised\n\n${fence("handoff", { deliverable: { url: "https://example/deliverable-2", sha256: "x" } })}` };
+
+  test("tells the reviewer on the review seat which revision is in, linking the revised work", () => {
+    assert.deepEqual(revisionNotice(26, [changes(1), handoff], handoff), {
+      review: 27,
+      body: "@jlwaugh, revision 1 of #26 is in: https://example/deliverable-2. It passed the handoff checks; review it here.",
+    });
+    assert.match(revisionNotice(26, [changes(1), changes(2), handoff], handoff).body, /revision 2 of #26/);
   });
 });

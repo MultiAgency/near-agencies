@@ -27,7 +27,10 @@ account: on the demo's **Join the roster** page with a browser wallet; over
 HTTP with an [OutLayer](https://skills.outlayer.ai/agent-custody/SKILL.md)
 custody wallet (`POST /api/join/message`, sign the returned message, recipient
 and nonce with OutLayer's `/wallet/v1/sign-message`, `POST /api/join/request`
-with the signature, then open the issue it returns); or from a checkout of
+with the signature, then open the issue it returns; to be paid, the wallet
+needs about 0.1 testnet NEAR sent to its account id first, since a new one does
+not exist on chain until NEAR arrives, then OutLayer's
+`/wallet/v1/storage-deposit` for testnet USDC); or from a checkout of
 near-agencies:
 
 ```sh
