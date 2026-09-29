@@ -6,6 +6,7 @@
 //   GET  /api/quotes/:code/payer/:account  whether an account can pay the deposit
 //   GET  /api/engagements[/:n]    engagements, teams, handoffs and payouts
 //   GET  /api/engagements/:n/timeline  who did what when, for the swimlane
+//   GET  /api/engagements/:n/payouts   proposals waiting for an approver's vote
 //   GET  /api/stats               jobs done, USDC paid, agents and people on the roster
 //   GET  /api/health              coordinator liveness and the GitHub budget
 //   POST /api/join/message        the roster join message for a wallet to sign
@@ -26,6 +27,7 @@ import { KINDS, SKILLS, mountOnboarding } from "./lib/onboarding.mjs";
 import { roster } from "./lib/roster.mjs";
 import { timeline } from "./lib/timeline.mjs";
 import { cached } from "./lib/cache.mjs";
+import { daoApprovers, pendingPayouts } from "./lib/payouts.mjs";
 
 const deposit = process.env.ENGAGEMENT_DEPOSIT ?? "3000000";
 const host = process.env.HOST ?? "127.0.0.1";
@@ -80,6 +82,12 @@ const engagements = cached(30_000, listEngagements);
 const engagement = cached(15_000, loadEngagement);
 app.get("/api/engagements", handle(() => engagements()));
 app.get("/api/engagements/:number", handle(request => engagement(Number(request.params.number))));
+
+// For the job page's approval panel: the vote itself is signed in the
+// approver's wallet, and the DAO decides who may cast it.
+const approvers = cached(300_000, daoApprovers);
+const payouts = cached(20_000, async number => pendingPayouts(await engagement(number), await approvers()));
+app.get("/api/engagements/:number/payouts", handle(request => payouts(Number(request.params.number))));
 
 // The home page's proof: what has been done and paid, from the board.
 app.get("/api/stats", handle(async () => {

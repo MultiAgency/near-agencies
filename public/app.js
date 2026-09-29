@@ -20,6 +20,8 @@ const view = document.getElementById("view");
 const config = await get("/api/config");
 let timer;
 let generation = 0;
+// A vote in progress holds the job page's refresh, which would repaint the panel under the wallet.
+let voting = false;
 
 // Write a view only if no newer route has started since it began loading.
 function paint(owner, markup) {
@@ -442,8 +444,8 @@ function nowLine(e, relay) {
     case "assembling": return relay?.events.some(ev => ev.kind === "team-draft")
       ? "The deposit arrived and the maintainer has proposed a team. Waiting for MultiAgency to approve it."
       : "The deposit arrived. MultiAgency is putting the team together.";
-    case "accepting": return "All the work is signed off. Next, the DAO is asked to pay each contributor.";
-    case "paying": return "The payouts are with the DAO, waiting for a second member to approve them.";
+    case "accepting": return "All the work is signed off. MultiAgency is proposing each payout to the DAO.";
+    case "paying": return "Each payout is waiting for a DAO approver to vote for it.";
   }
   const open = e.members.find(m => m.state === "open");
   if (!open.claimedBy.length) return `Waiting for someone to take on “${open.title}”.`;
@@ -454,7 +456,7 @@ function nowLine(e, relay) {
 function resultSection(result, e) {
   return html`
     <details class="result" open>
-      <summary>${e.stage === "complete" ? "The result" : "The work so far"}, by @${result.author}</summary>
+      <summary>${["accepting", "paying", "complete"].includes(e.stage) ? "The result" : "The work so far"}, by @${result.author}</summary>
       <div class="result-body clipped" id="result-body">${new Safe(result.html)}</div>
       <button class="secondary more" id="result-more" type="button">Show all of it</button>
       <p class="hint"><a href="${result.url}">Open it on the board</a></p>
@@ -496,6 +498,7 @@ async function renderEngagement(owner, number) {
       <ol class="stages">${stages.map((s, i) => html`
         <li class="${i < current || e.stage === "complete" ? "done" : ""}" ${i === current ? html`aria-current="step"` : ""}>${stageName(s)}</li>`)}</ol>
       <p class="now ${e.stage}" role="status">${nowLine(e, relay)}</p>
+      ${e.stage === "paying" ? html`<section class="approvals" id="approvals" aria-labelledby="approvals-h"></section>` : ""}
       ${relay?.result ? resultSection(relay.result, e) : ""}
       ${relay ? relaySection(relay, e) : ""}
       <section class="brief-section">
@@ -546,7 +549,73 @@ async function renderEngagement(owner, number) {
   const unclip = () => { body.classList.remove("clipped"); more.hidden = true; };
   if (body && body.scrollHeight <= body.clientHeight) unclip();
   more?.addEventListener("click", unclip);
-  if (!ended(e)) timer = setTimeout(() => renderEngagement(owner, number).catch(() => {}), 30000);
+  if (e.stage === "paying") renderApprovals(owner, e).catch(() => {});
+  if (!ended(e)) timer = setTimeout(function refresh() {
+    if (voting) timer = setTimeout(refresh, 5000);
+    else renderEngagement(owner, number).catch(() => {});
+  }, 30000);
+}
+
+// Approvers vote on a job's payouts here, each in their own wallet; the DAO
+// contract decides who may. Once a vote lands, the coordinator records the
+// payment on its task.
+async function renderApprovals(owner, e) {
+  const { approvers, pending, problem } = await get(`/api/engagements/${e.number}/payouts`);
+  const section = document.getElementById("approvals");
+  if (owner !== generation || !section || pending.length === 0) return;
+  const task = issue => e.members.find(m => m.issue === issue);
+  section.innerHTML = html`
+    <h2 id="approvals-h">Approve the payouts</h2>
+    <p class="hint">Each payout is sent once one DAO approver votes for it, from their own wallet. Approvers: ${approvers.map((a, i) => html`${i ? ", " : ""}${accountLink(a)}`)}.</p>
+    ${problem ? html`<p class="status error">Don't approve yet: ${problem}.</p>` : html`
+      <ul class="approvals-list">${pending.map(p => {
+        const m = task(p.issue);
+        return html`<li>
+          <span><a href="${m.url}">${m.title}</a>: ${usdc(m.amount)} USDC to ${accountLink(m.payee)}${m.deliverables[0] ? html`, <a href="${m.deliverables[0].url}">deliverable</a>` : ""}</span>
+          <button class="secondary" type="button" data-proposal="${p.proposal_id}">Approve</button>
+        </li>`;
+      })}</ul>
+      ${pending.length > 1 ? html`<button type="button" id="approve-all">Approve all ${pending.length}</button>` : ""}`}
+    <p class="status" id="approve-status" role="status" hidden></p>`;
+  const status = document.getElementById("approve-status");
+  const say = (text, error = false) => {
+    status.textContent = text;
+    status.classList.toggle("error", error);
+    status.hidden = false;
+  };
+  const buttons = () => section.querySelectorAll("button");
+  const vote = async ids => {
+    voting = true;
+    buttons().forEach(b => { b.disabled = true; });
+    try {
+      const { wallet, accountId } = await connectWallet();
+      if (!approvers.includes(accountId)) return say(`${accountId} can't approve these payouts: the DAO's approvers are ${approvers.join(", ")}.`, true);
+      for (const id of ids) {
+        const p = pending.find(p => p.proposal_id === id);
+        // Separation of duties: whoever filed a proposal does not approve it.
+        if (p.proposer === accountId) return say(`${accountId} filed proposal ${id}, so another approver must vote on it.`, true);
+        say(`Confirm the vote on proposal ${id} in your wallet…`);
+        await wallet.signAndSendTransaction({
+          receiverId: config.treasury,
+          actions: [{
+            type: "FunctionCall",
+            // Sputnik requires the proposal's kind echoed back with the vote.
+            params: { methodName: "act_proposal", args: { id, action: "VoteApprove", proposal: p.kind }, gas: "200000000000000", deposit: "0" },
+          }],
+        });
+        section.querySelector(`[data-proposal="${id}"]`)?.replaceWith(Object.assign(document.createElement("span"), { className: "voted", textContent: "Approved" }));
+      }
+      section.querySelector("#approve-all")?.remove();
+      say("Voted. Each payment is recorded on its task within about two minutes.");
+    } catch (error) {
+      say(`The vote did not complete: ${error.message ?? error}. You can try again.`, true);
+    } finally {
+      voting = false;
+      buttons().forEach(b => { b.disabled = false; });
+    }
+  };
+  section.querySelectorAll("[data-proposal]").forEach(b => b.addEventListener("click", () => vote([Number(b.dataset.proposal)])));
+  section.querySelector("#approve-all")?.addEventListener("click", () => vote(pending.map(p => p.proposal_id)));
 }
 
 /** A job that is over: done, or closed before it was. */
