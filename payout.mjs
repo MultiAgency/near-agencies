@@ -1,40 +1,39 @@
-// Acceptance and payouts from the MultiAgency DAO treasury.
+// Payouts from the MultiAgency DAO treasury, from a terminal. The coordinator
+// proposes and records them on its own (lib/payouts.mjs has the rules); these
+// commands are the manual path, and the only way to vote from a local key.
 //
-//   node payout.mjs status    <epic>                   each member's work and payout state
-//   node payout.mjs propose   <epic> --as <requestor>  file one Transfer proposal per member
-//   node payout.mjs approve   <epic> --as <approver>   vote directly (testnet, or a local approver key);
-//                                                     the approver must not be the proposer
-//   node payout.mjs reconcile <epic>                   record approvals made elsewhere (Trezu on mainnet)
+//   node payout.mjs status    <job>                   each task's work and payout state
+//   node payout.mjs propose   <job> --as <requestor>  file one Transfer proposal per task
+//   node payout.mjs approve   <job> --as <approver>   vote directly (testnet, or a local approver key);
+//                                                    the approver must not be the proposer
+//   node payout.mjs reconcile <job>                   record approvals made elsewhere (a wallet, Trezu)
 //
-// Proposals are filed only after every team issue is closed with a handoff
-// whose `payout.account_id` matches the seat's payee, and every pull request a
-// handoff links (code seats) is merged, and every deliverable a handoff pins
-// by sha256 is unedited. Each proposal and
-// executed payout is recorded on its issue; the epic closes once every payout
-// has executed, which also settles its board state: the `blocked` label comes
-// off and the `## Team` checklist records which seats delivered.
-// NEAR_NETWORK selects testnet (default) or mainnet.
-import { comment, commentAt, digest, fence, github, pullRequest } from "./lib/github.mjs";
-import { findApproval, txBlockHeight } from "./lib/history.mjs";
-import { loadEngagement, recordPaid, settleEpic } from "./lib/engagement-state.mjs";
-import { USDC, call, explorer, ftBalance, view } from "./lib/near.mjs";
-import { pinProblem } from "./lib/seats.mjs";
-import { network, trezuRequestLink } from "./lib/network.mjs";
+// Proposals are filed only after every task is closed with a handoff whose
+// `payout.account_id` matches the task's payee, every pull request a handoff
+// links (code tasks) is merged, and every deliverable a handoff pins by sha256
+// is unedited. Each proposal and executed payout is recorded on its task; the
+// job closes once every payout has executed, which also settles its board
+// state: the `blocked` label comes off and the `## Team` checklist records
+// which tasks delivered. NEAR_NETWORK selects testnet (default) or mainnet.
+import { loadEngagement, recordPaid } from "./lib/engagement-state.mjs";
+import { call, explorer, ftBalance, view } from "./lib/near.mjs";
+import { network } from "./lib/network.mjs";
+import { DEAD, closeIfPaid, deliverablesProblem, payoutProblem, proposePayouts, recordApprovals } from "./lib/payouts.mjs";
 
-const [command, epicNumber, flag, signer] = process.argv.slice(2);
+const [command, jobNumber, flag, signer] = process.argv.slice(2);
 const needsSigner = command === "propose" || command === "approve";
-if (!["status", "propose", "approve", "reconcile"].includes(command) || !epicNumber || (needsSigner && (flag !== "--as" || !signer))) {
-  console.error("usage: node payout.mjs status|reconcile <epic> | propose|approve <epic> --as <account>");
+if (!["status", "propose", "approve", "reconcile"].includes(command) || !jobNumber || (needsSigner && (flag !== "--as" || !signer))) {
+  console.error("usage: node payout.mjs status|reconcile <job> | propose|approve <job> --as <account>");
   process.exit(64);
 }
 
-const engagement = await loadEngagement(epicNumber);
-const paidOn = engagement.engagement.deposit.network ?? "testnet";
+const job = await loadEngagement(jobNumber);
+const paidOn = job.engagement.deposit.network ?? "testnet";
 if (paidOn !== network.networkId) {
-  throw new Error(`#${epicNumber} was paid on ${paidOn}; set NEAR_NETWORK=${paidOn}`);
+  throw new Error(`#${jobNumber} was paid on ${paidOn}; set NEAR_NETWORK=${paidOn}`);
 }
-const { members } = engagement;
-if (members.length === 0) throw new Error(`#${epicNumber} has no assembled team`);
+const { members } = job;
+if (members.length === 0) throw new Error(`#${jobNumber} has no assembled team`);
 
 if (command === "status") {
   for (const m of members) {
@@ -42,44 +41,11 @@ if (command === "status") {
     console.log(`#${m.issue} ${m.state} handoff=${m.handoff ? "yes" : "no"} → ${m.payee} ${m.amount}: ${payout}`);
   }
 } else if (command === "propose") {
-  const unfinished = members.filter(m => m.state !== "closed" || !m.handoff);
-  if (unfinished.length > 0) {
-    throw new Error(`not accepted yet: ${unfinished.map(m => `#${m.issue}`).join(", ")} lack a closed issue with a handoff`);
-  }
-  const unpaid = members.filter(m => !m.payee);
-  if (unpaid.length > 0) {
-    throw new Error(`no roster payout account for the claimant of ${unpaid.map(m => `#${m.issue}`).join(", ")}`);
-  }
-  const mismatched = members.filter(m => m.handoff.payout?.account_id !== m.payee);
-  if (mismatched.length > 0) {
-    throw new Error(`handoff payout account differs from terms on ${mismatched.map(m => `#${m.issue}`).join(", ")}`);
-  }
-  // Code seats deliver a pull request; the work counts only once it is merged.
-  for (const m of members) {
-    for (const url of (m.handoff.links ?? []).filter(link => /\/pull\/\d+$/.test(link))) {
-      const pr = await pullRequest(url);
-      if (!pr.merged) throw new Error(`#${m.issue}: ${url} is not merged yet`);
-    }
-  }
-  await assertDeliverablesUnchanged(members);
-  for (const m of members.filter(m => !m.payout)) {
-    const kind = { Transfer: { token_id: USDC, receiver_id: m.payee, amount: m.amount, msg: null } };
-    // Trezu parses JSON descriptions and displays `title` (else `notes`) with a `url` link.
-    const description = JSON.stringify({
-      title: `Job #${epicNumber}: ${m.title}`,
-      notes: `MultiAgency payout to ${m.payee} for signed-off work on issue #${m.issue}`,
-      url: m.url,
-    });
-    // add_proposal burns about 3 Tgas; the default 100 Tgas would reserve 0.1 NEAR per call.
-    const { hash, value: proposalId } = await call(signer, network.treasury, "add_proposal", { proposal: { description, kind } }, { gas: "30000000000000" });
-    const trezu = trezuRequestLink(proposalId);
-    await comment(m.issue, [
-      `**Payout proposed:** DAO proposal ${proposalId} on \`${network.treasury}\` transfers ${Number(m.amount) / 1e6} USDC to \`${m.payee}\`${trezu ? ` ([review in Trezu](${trezu}))` : ""}.`,
-      "",
-      fence("payout", { proposal_id: proposalId, treasury: network.treasury, payee: m.payee, amount: m.amount, proposed_tx: hash }),
-    ].join("\n"));
-    console.log(`#${m.issue}: proposal ${proposalId} (${explorer(hash)})${trezu ? ` ${trezu}` : ""}`);
-  }
+  const problem = await payoutProblem(job);
+  if (problem) throw new Error(problem);
+  await proposePayouts(job, signer);
+  reportDead();
+  await closeIfPaid(jobNumber);
 } else if (command === "approve") {
   const pending = members.filter(m => m.payout?.status === "InProgress");
   // Sputnik lets a member approve their own proposal; separation of duties is ours to keep.
@@ -87,7 +53,8 @@ if (command === "status") {
   if (own.length > 0) {
     throw new Error(`${signer} filed the proposals for ${own.map(m => `#${m.issue}`).join(", ")}; another approver must vote`);
   }
-  await assertDeliverablesUnchanged(pending);
+  const problem = await deliverablesProblem(pending);
+  if (problem) throw new Error(problem);
   for (const m of pending) {
     const before = await ftBalance(m.payee);
     // Sputnik v2.3.1 requires the proposal kind echoed back (ERR_WRONG_KIND guard).
@@ -106,46 +73,15 @@ if (command === "status") {
     await recordPaid(m, { transaction: hash, approver: signer });
     console.log(`#${m.issue}: paid ${m.amount} to ${m.payee} (${explorer(hash)})`);
   }
-  await closeIfPaid();
+  await closeIfPaid(jobNumber);
 } else {
-  for (const m of members.filter(m => m.payout?.status === "Approved" && !m.paid)) {
-    const approval = await findApproval(m.payout.proposal_id, await txBlockHeight(m.payout.proposed_tx));
-    if (!approval) {
-      console.log(`#${m.issue}: proposal ${m.payout.proposal_id} is Approved but its vote is not indexed yet`);
-      continue;
-    }
-    await recordPaid(m, approval);
-    console.log(`#${m.issue}: paid ${m.amount} to ${m.payee}, approved by ${approval.approver} (${explorer(approval.transaction)})`);
-  }
-  for (const m of members.filter(m => m.payout && ["Rejected", "Failed", "Expired", "Removed"].includes(m.payout.status))) {
+  await recordApprovals(job);
+  reportDead();
+  await closeIfPaid(jobNumber);
+}
+
+function reportDead() {
+  for (const m of members.filter(m => m.payout && DEAD.includes(m.payout.status))) {
     console.log(`#${m.issue}: proposal ${m.payout.proposal_id} is ${m.payout.status}; file a new proposal`);
   }
-  await closeIfPaid();
-}
-
-// A deliverable is a comment its author can still edit; the handoff pins the
-// accepted text, so an edit after acceptance stops the payout.
-async function assertDeliverablesUnchanged(members) {
-  const unpinned = members.filter(m => pinProblem(m.handoff));
-  if (unpinned.length > 0) {
-    throw new Error(`the handoffs of ${unpinned.map(m => `#${m.issue}`).join(", ")} link a deliverable comment without pinning its sha256`);
-  }
-  for (const m of members.filter(m => m.handoff.deliverable)) {
-    const { url, sha256 } = m.handoff.deliverable;
-    if (digest((await commentAt(url)).body) !== sha256) throw new Error(`#${m.issue}: ${url} was edited after its handoff`);
-  }
-}
-
-async function closeIfPaid() {
-  const current = await loadEngagement(epicNumber);
-  if (current.members.some(m => !m.paid)) return;
-  if (current.state === "open") {
-    await comment(epicNumber, `**Job complete.** ${current.members.length} payouts executed from \`${network.treasury}\` (${Number(current.totals.committed) / 1e6} USDC); ${Number(current.totals.margin) / 1e6} USDC of the deposit remains with MultiAgency.`);
-    await github("PATCH", `/issues/${epicNumber}`, { state: "closed", state_reason: "completed" });
-    console.log(`#${epicNumber}: closed`);
-  }
-  // Closed either now or earlier (re-running reconcile converges epics that
-  // closed before settling existed): drop `blocked`, record each delivery.
-  const settled = await settleEpic(epicNumber);
-  if (settled) console.log(`#${epicNumber}: settled (${Object.keys(settled).join(", ")})`);
 }
