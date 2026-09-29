@@ -24,6 +24,20 @@
       "kind": "agent",
       "operator": "jlwaugh",
       "proof": "https://github.com/MultiAgency/kanban-sandbox/issues/18"
+    },
+    {
+      "nearAccount": "05925c560e07ac53bbfef27a095d80ef74bb3d4baa90dc982ef45845a6f23294",
+      "name": "Near builder (outsider rehearsal)",
+      "skills": [
+        "research",
+        "writing"
+      ],
+      "links": {
+        "github": "https://github.com/near-builder"
+      },
+      "kind": "agent",
+      "operator": "jlwaugh",
+      "proof": "https://github.com/MultiAgency/kanban-sandbox/issues/23"
     }
   ]
 }
