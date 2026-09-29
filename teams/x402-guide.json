@@ -1,0 +1,40 @@
+{
+  "issues": [
+    {
+      "key": "research",
+      "title": "Research: how x402 works on NEAR and what it takes to get paid",
+      "labels": [
+        "skill:research",
+        "agent-eligible"
+      ],
+      "amount": "1000000",
+      "body": "Establish, from primary sources, the facts a developer needs to charge for an API with x402 on NEAR. Cover four things:\n\n1. **How x402 works.** The HTTP 402 handshake, the v2 wire headers (`PAYMENT-SIGNATURE` request, `PAYMENT-RESPONSE` response), and the client/server/facilitator roles. Primary sources: the x402 docs' own markdown pages \u2014 `https://x402.gitbook.io/x402/core-concepts/http-402.md`, `client-server.md`, `wallet.md`, and the canonical spec `https://github.com/x402-foundation/x402/blob/main/specs/x402-specification-v2.md`. Read the `.md` forms of the GitBook pages (append `.md` to the page URL); the HTML pages are client-rendered.\n2. **What a facilitator does.** Verify a signed payment payload, settle it on-chain, return the result; it does not custody funds. Primary source: `https://x402.gitbook.io/x402/core-concepts/facilitator.md`. Then the NEAR instance specifically: `https://test.x402.mikedotexe.com/llms.txt` and `https://test.x402.mikedotexe.com/openapi.yaml`, plus `https://github.com/fastnear/x402-facilitator/blob/main/docs/reference-access.md`. Record the concrete NEAR facts: `near:testnet` and `near:mainnet` both live, `exact` scheme, x402 v2 canonical, canonical Circle USDC asset per network, NEAR payments carrying a classic NEP-366 `SignedDelegateAction` with one NEP-141 `ft_transfer`, zero facilitator fee, the `/supported`, `/verify` and `/settle` routes, and that `/verify` and `/settle` are API-key gated with access granted by a reviewed request (link the access-request issue template).\n3. **The steps to accept a first payment.** The ordered path: get facilitator access, configure a resource server, declare `accepts` for the routes you charge for, handle the 402, verify, settle, return the resource. Ground the NEAR half in code that exists: `https://github.com/fastnear/x402-facilitator/blob/main/docs/typescript-recipes.md`, `https://github.com/fastnear/x402-facilitator/tree/main/examples/resource-server` (the `examples/resource-server/typescript` recipes), and \u2014 for a real NEAR server \u2014 `lib/x402-intake.mjs` in the near-agencies repo, which mounts x402-paid routes with `paymentMiddlewareFromHTTPServer`. Also report the older NEAR route honestly: `https://github.com/r-near/x402-near-demo` implements x402 on NEAR with NEP-366 meta-transactions and `near-kit`, and say how it differs from the facilitator path (who relays gas, what the client must hold).\n4. **The current limits.** What a developer will hit: NEAR instances accept no legacy v1; the `delegate` route is selected only when `extra.assetTransferMethod` is absent; expected payment rejections come back as HTTP 200 protocol responses rather than HTTP errors; the reference facilitator has no availability SLA and is gated by a manual access review; the reference instances' public `/discovery/resources` catalog is currently empty, so there is no live merchant list to point at; and the facility is testnet-first.\n\nDo not start from `https://docs.near.org` \u2014 its `llms.txt` index carries no x402 page (verified), so a search there will return nothing and could be misread as \"x402 is undocumented on NEAR\".\n\nMark anything you could not confirm from a primary source as **unconfirmed** rather than stating it, and do not call something absent on the strength of a page that simply does not mention it.\n\nAcceptance criteria:\n- All four sections covered, each factual claim carrying a primary-source link.\n- The NEAR-specific facts (networks, asset, scheme, v2, NEP-366/NEP-141, gating, fee) are stated from the facilitator's own documents, not inferred.\n- The steps section is an ordered, executable path with the code or document for each step linked.\n- The limits section names at least four concrete limits, each linked.\n- Unconfirmed items are explicitly labelled.\n- Output is a **Deliverable** comment on this seat (`skill.md` \u00a73), with the sources as inline links; a file in a repository is optional and not expected."
+    },
+    {
+      "key": "writing",
+      "title": "Write: one-page guide to charging for an API with x402 on NEAR",
+      "labels": [
+        "skill:writing",
+        "agent-eligible"
+      ],
+      "amount": "1000000",
+      "depends_on": [
+        "research"
+      ],
+      "body": "Turn the research into the one-page guide the client asked for, written for a developer who has an API and wants to charge for it with x402 on NEAR and who has never used x402 before.\n\nThe brief fixes the shape: **how x402 works**, **what a facilitator does**, **the steps to accept a first payment**, and **the current limits** \u2014 each step linked to its documentation or code.\n\nRequirements from the brief and the client's own judged criteria:\n- Every claim links a primary source; no unsourced assertion, and no link to a marketing page in place of the document that states the fact.\n- A developer new to x402 could follow it end to end: state what they need before step one (a NEAR account, a resource server, facilitator access, and the fact that `/verify` and `/settle` need an allowlisted API key), and never depend on knowledge the reader is not given.\n- Say plainly which limits are testnet-only and which apply on mainnet, and that the reference facilitator is shared, gated and has no SLA \u2014 a reader deciding whether to build on it needs that before they start, not in a footnote.\n- If the research marks something unconfirmed, it stays marked unconfirmed in the guide or is left out; do not upgrade it to an assertion for readability.\n\nAcceptance criteria:\n- One page, in the brief's four sections, in a followable order.\n- Every step links the document or code that implements it.\n- The prerequisites are stated before the first step.\n- No claim in the guide is stronger than its source in the research seat.\n- Delivered as a **Deliverable** comment on this seat (`skill.md` \u00a73)."
+    },
+    {
+      "key": "review",
+      "title": "Review: accept the x402-on-NEAR guide",
+      "labels": [
+        "skill:review",
+        "human-only"
+      ],
+      "amount": "500000",
+      "depends_on": [
+        "writing"
+      ],
+      "body": "Human review of the one-page guide against the engagement brief on #28. Either request changes in a comment, or post a handoff accepting it.\n\nAcceptance criteria:\n- Every claim links a primary source, and each link actually states the fact it is cited for (open them; a plausible URL is not a source).\n- The four brief sections are present: how x402 works, what a facilitator does, the steps to accept a first payment, and the current limits.\n- A developer new to x402 could follow the steps; the prerequisites are stated before step one.\n- The NEAR specifics are right against the facilitator's own documents: networks (`near:testnet`, `near:mainnet`), the `exact` scheme, x402 v2 canonical, the canonical USDC asset per network, NEP-366 `SignedDelegateAction` + NEP-141 `ft_transfer`, zero facilitator fee, and `/verify`+`/settle` being API-key gated.\n- The limits section is honest about the testnet-first, no-SLA, manually-gated nature of the reference facilitator.\n- Judged against the engagement brief on #28."
+    }
+  ]
+}

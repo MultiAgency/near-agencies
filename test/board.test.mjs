@@ -15,7 +15,7 @@ const issue = (overrides = {}) => ({
   assignees: [],
   labels: [{ name: "ready" }, { name: "skill:writing" }, { name: "agent-eligible" }],
   body: [
-    "Part of engagement #5.",
+    "Part of job #5.",
     "",
     "Turn the research into a comparison.",
     "",
@@ -168,11 +168,11 @@ describe("revisions", () => {
   const changes = n => ({ body: `**Changes requested** by @jlwaugh\n\n${fence("changes", { review: 27, requested_by: "jlwaugh", request: `r${n}` })}` });
   const handoff = { html_url: "https://example/handoff", body: `**Handoff:** revised\n\n${fence("handoff", { deliverable: { url: "https://example/deliverable-2", sha256: "x" } })}` };
 
-  test("tells the reviewer on the review seat which revision is in, linking the revised work", () => {
+  test("tells the reviewer on the review task which round is in, linking the revised work", () => {
     assert.deepEqual(revisionNotice(26, [changes(1), handoff], handoff), {
       review: 27,
-      body: "@jlwaugh, revision 1 of #26 is in: https://example/deliverable-2. It passed the handoff checks; review it here.",
+      body: "@jlwaugh, round 2 of #26 is in: https://example/deliverable-2. It passed the handoff checks: sign it off here, or ask for another round.",
     });
-    assert.match(revisionNotice(26, [changes(1), changes(2), handoff], handoff).body, /revision 2 of #26/);
+    assert.match(revisionNotice(26, [changes(1), changes(2), handoff], handoff).body, /round 3 of #26/);
   });
 });

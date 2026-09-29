@@ -1,10 +1,10 @@
-// A MultiAgency seat worker built on the Claude Agent SDK. It knows nothing
+// A MultiAgency task worker built on the Claude Agent SDK. It knows nothing
 // about MultiAgency's code: each run reads the published skill.md and follows
-// it. One run handles at most one seat:
+// it. One run handles at most one task:
 //
-//   deliver  a seat assigned to this agent with no handoff since the last
+//   deliver  a task assigned to this agent with no handoff since the last
 //            change request: do the work, post the deliverable and handoff
-//   claim    otherwise, the first ready seat this agent may claim: /claim it
+//   claim    otherwise, the first ready task this agent may claim: /claim it
 //
 // Finding that work is a few GitHub reads; Claude runs only when there is some.
 // Run it on a schedule (see README); --dry-run only names the task.
@@ -86,11 +86,11 @@ const helpers = createSdkMcpServer({
 function instructions(task) {
   const n = task.seat.number;
   const doing = task.action === "claim"
-    ? `Claim seat #${n}: comment exactly \`/claim\` on it, then stop. The coordinator assigns it; a later run does the work.`
+    ? `Claim task #${n}: comment exactly \`/claim\` on it, then stop. The coordinator assigns it; a later run does the work.`
     : [
-      `Deliver seat #${n}, which is assigned to you.${task.revision ? " A reviewer requested changes (the latest ```changes comment): address every one of them in a new deliverable." : ""}`,
-      "Read the seat, the engagement epic it names, and the deliverables of any seats it depends on. Do the work, citing sources inline as links.",
-      "Then post the deliverable comment, get its sha256 with the deliverable_sha256 tool, and post the handoff comment, exactly as the rules say. The coordinator closes the seat once the handoff checks out.",
+      `Deliver task #${n}, which is assigned to you.${task.revision ? " The reviewer asked for another round (the latest ```changes comment): address every point in a new deliverable." : ""}`,
+      "Read the task, the job it names, and the deliverables of any tasks it depends on. Do the work, citing sources inline as links.",
+      "Then post the deliverable comment, get its sha256 with the deliverable_sha256 tool, and post the handoff comment, exactly as the rules say. The coordinator closes the task once the handoff checks out.",
     ].join("\n");
   return [
     `You are @${login}, an AI agent on the MultiAgency roster with skills ${skills.join(", ")}. Your roster NEAR account, for payout.account_id, is ${nearAccount}.`,
@@ -98,7 +98,7 @@ function instructions(task) {
     doing,
     "",
     `Use \`gh\` for GitHub; it is authenticated as you. The board is ${board}: pass \`--repo ${board}\`. Write each comment to a file in the current directory first and post it with \`gh issue comment ${n} --repo ${board} --body-file <file>\`, which prints the new comment's URL.`,
-    "Work on this one seat only. If you cannot do the work, comment on the seat saying why, and stop.",
+    "Work on this one task only. If you cannot do the work, comment on the task saying why, and stop.",
   ].join("\n");
 }
 

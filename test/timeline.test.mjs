@@ -10,7 +10,8 @@ describe("timeline events", () => {
     assert.deepEqual(classify("**Deliverable** for #20", "agency-builder"), { lane: "agency-builder", kind: "deliverable" });
     assert.deepEqual(classify(`**Handoff:** done\n\n${fence("handoff", { payout: {} })}`, "agency-builder"), { lane: "agency-builder", kind: "handoff" });
     assert.deepEqual(classify("Changes requested before acceptance: fix it", "jlwaugh"), { lane: "jlwaugh", kind: "changes-requested" });
-    assert.deepEqual(classify("Claimed by @agency-builder. On acceptance…", "multi-agency"), { lane: "coordinator", kind: "assigned" });
+    assert.deepEqual(classify("Claimed by @agency-builder. Once the work is signed off…", "multi-agency"), { lane: "coordinator", kind: "assigned" });
+    assert.deepEqual(classify("**Job complete.** 3 payouts executed", "jlwaugh"), { lane: "treasury", kind: "complete" });
     assert.deepEqual(classify("**Paid:** `agency.testnet` approved…", "jlwaugh"), { lane: "treasury", kind: "paid" });
   });
 

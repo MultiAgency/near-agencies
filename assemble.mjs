@@ -40,7 +40,7 @@ for (const spec of issues) {
     title: spec.title,
     labels: [dependsOn.length ? "blocked" : "ready", ...spec.labels],
     body: [
-      `Part of engagement #${epicNumber}.`,
+      `Part of job #${epicNumber}.`,
       "",
       spec.body,
       ...(dependsOn.length ? ["", "Depends on:", ...dependsOn.map(n => `- [ ] #${n}`)] : []),
