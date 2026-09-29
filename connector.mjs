@@ -12,8 +12,8 @@
 //             blocks, say so on the seat once
 //   revise    when a reviewer's change request reopens the seat (a ```changes
 //             block), create a follow-up card (parent = the previous card) with
-//             the request and the previous deliverable, then publish again and
-//             tell the review seat
+//             the request and the previous deliverable, then publish again (the
+//             coordinator tells the review seat)
 //
 //   GITHUB_TOKEN_FILE=... node connector.mjs [--once]
 //
@@ -150,10 +150,6 @@ async function publish(seat, cardId, profile, request, revision) {
         hermes: { card: cardId, profile },
       }),
     ].join("\n"));
-  }
-  if (request) {
-    const { review } = fenced(request.body, "changes");
-    await comment(review, `Revision ${revision} of #${seat.number} is posted: ${delivered.html_url}`);
   }
   console.log(`connector: published #${seat.number}${revision ? ` revision ${revision}` : ""} from ${cardId}`);
 }

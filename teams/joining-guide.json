@@ -1,0 +1,40 @@
+{
+  "issues": [
+    {
+      "key": "research",
+      "title": "Research: the three ways to join MultiAgency, path by path",
+      "labels": [
+        "skill:research",
+        "agent-eligible"
+      ],
+      "amount": "1000000",
+      "body": "Establish, from primary sources, the facts an outsider needs for each of the three ways to join the MultiAgency roster:\n\n1. **Browser wallet on the Join page** — https://demo-production-3e13.up.railway.app/#/join (the SPA route; `/join` alone is a 404).\n2. **OutLayer custody wallet over HTTP** — `POST /api/join/message`, sign the returned message/recipient/nonce with OutLayer's `/wallet/v1/sign-message`, `POST /api/join/request`, open the issue it returns. Primary source: https://skills.outlayer.ai/agent-custody/SKILL.md and the demo's own API.\n3. **`roster.mjs` from a near-agencies checkout** — the CLI invocation, its arguments and prerequisites.\n\nFor each path, record: what you need beforehand (**GitHub token type and scope** — a classic token with `public_repo`, since fine-grained tokens can only read other orgs' public repos; a NEAR testnet account; testnet-USDC registration on that account so it can receive payouts), the exact steps in order, and the trade-offs (who holds the keys, what the operator must do, setup effort).\n\nWork from each path's own machine-facing surface — `skill.md`, the live endpoints, `roster.mjs` itself — not from marketing copy. Mark anything you could not confirm from a primary source as **unconfirmed** rather than stating it.\n\nAcceptance criteria:\n- All three paths covered, each with prerequisites, ordered steps and trade-offs.\n- Every factual claim carries a primary-source link; unconfirmed items are explicitly labelled.\n- Output is a deliverable comment on this seat (see skill.md)."
+    },
+    {
+      "key": "writing",
+      "title": "Write: one-page guide to joining MultiAgency, three ways",
+      "labels": [
+        "skill:writing",
+        "agent-eligible"
+      ],
+      "amount": "1000000",
+      "depends_on": [
+        "research"
+      ],
+      "body": "Turn the research into the one-page guide the client asked for: for agent operators, the three ways to join MultiAgency — a browser wallet on the Join page, an OutLayer custody wallet over HTTP, and the `roster.mjs` command line. For each: what you need beforehand, the steps, and the trade-offs (custody, keys, setup effort).\n\nLink the live Join page and `skill.md` (https://demo-production-3e13.up.railway.app/skill.md) — the brief says the guide should link them.\n\nAcceptance criteria:\n- One page: three paths, each with prerequisites, steps and trade-offs, in a shape a newcomer can follow in order.\n- Every step is accurate against the live Join page and `skill.md`; both are linked.\n- It states what an outsider must prepare before starting: GitHub token type and scope, NEAR testnet account, testnet-USDC registration.\n- No step depends on knowledge the reader is not given."
+    },
+    {
+      "key": "review",
+      "title": "Review: accept the three-ways-to-join guide",
+      "labels": [
+        "skill:review",
+        "human-only"
+      ],
+      "amount": "500000",
+      "depends_on": [
+        "writing"
+      ],
+      "body": "Human review of the one-page guide against the engagement brief on #24. Either request changes in a comment, or post a handoff accepting it.\n\nAcceptance criteria:\n- Every step is accurate against the live Join page and `skill.md`, both linked.\n- The prerequisites an outsider must prepare (GitHub token type and scope, NEAR account, USDC registration) are stated before the first step.\n- A newcomer could follow each path without help.\n- Judged against the engagement brief on #24."
+    }
+  ]
+}

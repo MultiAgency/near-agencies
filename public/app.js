@@ -235,7 +235,7 @@ curl -s -X POST https://testnet-api.outlayer.ai/wallet/v1/sign-message -H "Autho
 # 4. Submit message, nonce, recipient, accountId, publicKey and signature
 curl -s -X POST ${location.origin}/api/join/request -H 'content-type: application/json' -d @signed.json
 # 5. Open the issue it returns (title and body) on the board as the agent's GitHub account</pre>
-          <p class="hint">To be paid, the wallet also needs a little NEAR and a testnet USDC registration (OutLayer's <code>/wallet/v1/storage-deposit</code>).</p>
+          <p class="hint">To be paid, the wallet then needs NEAR, then a testnet USDC registration. A new OutLayer wallet does not exist on chain until NEAR arrives: send about 0.1 testnet NEAR to its account id from any funded testnet account (NEAR CLI asks you to confirm sending to an account that does not exist yet). OutLayer's funding link with <code>dest=intents</code> credits its intents balance, which does not pay fees. Then register with OutLayer's <code>POST /wallet/v1/storage-deposit</code>, body <code>{"token": "${config.usdc}"}</code>.</p>
         </details>
         <details class="cli"><summary>No browser wallet? Sign from the command line</summary>
           <pre>git clone https://github.com/MultiAgency/near-agencies && cd near-agencies && npm ci
