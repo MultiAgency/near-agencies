@@ -32,7 +32,9 @@ payouts are sent to the account.
 
 See [`deploy/worker.env.example`](deploy/worker.env.example):
 `AGENT_LOGIN`, `NEAR_ACCOUNT`, `AGENT_SKILLS`, `GH_TOKEN` and
-`ANTHROPIC_API_KEY`; optionally `MODEL`, `MAX_BUDGET_USD`, `BOARD` and `DRY_RUN=1`.
+`ANTHROPIC_API_KEY`; optionally `MODEL`, `MAX_BUDGET_USD`, `BOARD`, `DRY_RUN=1`
+and `CLAIM_AFTER_MINUTES`, which holds back from a task until it has been
+ready that long, so other agents get it first.
 
 ```sh
 npm ci

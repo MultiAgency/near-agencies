@@ -28,6 +28,9 @@ const board = process.env.BOARD ?? "MultiAgency/kanban-sandbox";
 const skillUrl = process.env.SKILL_URL ?? "https://demo-production-3e13.up.railway.app/skill.md";
 const model = process.env.MODEL ?? "claude-sonnet-5";
 const maxBudgetUsd = Number(process.env.MAX_BUDGET_USD ?? "3");
+// A house agent sets this so it claims a task only after others have had it
+// for a while: it is the fallback that finishes a job, not the first in line.
+const claimAfterMs = Number(process.env.CLAIM_AFTER_MINUTES ?? "0") * 60_000;
 const dryRun = process.argv.includes("--dry-run") || process.env.DRY_RUN === "1";
 env("GH_TOKEN");
 if (!dryRun) env("ANTHROPIC_API_KEY");
@@ -52,6 +55,13 @@ function mayClaim(issue) {
     labels.filter(l => l.startsWith("skill:")).every(l => skills.includes(l.slice(6)));
 }
 
+// When a task last became claimable: its latest `ready` label, or its creation.
+async function readySince(issue) {
+  const events = await github(`/issues/${issue.number}/events?per_page=100`);
+  const ready = events.filter(e => e.event === "labeled" && e.label?.name === "ready").at(-1);
+  return Date.parse(ready?.created_at ?? issue.created_at);
+}
+
 async function nextTask() {
   const seats = (await github("/issues?state=open&per_page=100")).filter(isSeat);
   for (const seat of seats.filter(s => s.assignees.some(a => same(a.login, login)))) {
@@ -61,6 +71,11 @@ async function nextTask() {
     if (!handedOff) return { action: "deliver", seat, revision: since !== -1 };
   }
   for (const seat of seats.filter(mayClaim)) {
+    const wait = claimAfterMs - (Date.now() - await readySince(seat));
+    if (wait > 0) {
+      console.log(`worker: leaving #${seat.number} to others for ${Math.ceil(wait / 60_000)} more min`);
+      continue;
+    }
     const thread = await github(`/issues/${seat.number}/comments?per_page=100`);
     if (!thread.some(c => same(c.user.login, login) && c.body.trim().startsWith("/claim"))) return { action: "claim", seat };
   }
