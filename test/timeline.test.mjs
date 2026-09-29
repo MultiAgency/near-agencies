@@ -7,6 +7,7 @@ import { classify } from "../lib/timeline.mjs";
 describe("timeline events", () => {
   test("places each board event in the lane of whoever acted", () => {
     assert.deepEqual(classify("/claim", "agency-builder"), { lane: "agency-builder", kind: "claim" });
+    assert.deepEqual(classify("**Team approved** by @jlwaugh, from [the team draft](https://example): #29 Research (1 USDC).", "multi-agency"), { lane: "jlwaugh", kind: "team-approved" });
     assert.deepEqual(classify("**Deliverable** for #20", "agency-builder"), { lane: "agency-builder", kind: "deliverable" });
     assert.deepEqual(classify(`**Handoff:** done\n\n${fence("handoff", { payout: {} })}`, "agency-builder"), { lane: "agency-builder", kind: "handoff" });
     assert.deepEqual(classify("Changes requested before acceptance: fix it", "jlwaugh"), { lane: "jlwaugh", kind: "changes-requested" });
