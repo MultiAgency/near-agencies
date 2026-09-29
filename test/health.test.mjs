@@ -51,3 +51,26 @@ describe("hung requests", () => {
     assert.equal(await first, true);
   });
 });
+
+describe("staleness", () => {
+  test("a coordinator is stale after six missed cycles, counted from its last completed one", async () => {
+    const { coordinatorStale } = await import("../lib/coordinator.mjs");
+    await cycle(async () => {});
+    const last = Date.parse(coordinatorHealth().last_completed_at);
+    const interval = coordinatorHealth().interval_ms;
+    assert.equal(coordinatorStale(last + 5 * interval), false);
+    assert.equal(coordinatorStale(last + 7 * interval), true);
+  });
+
+  test("only a cycle still running after ten minutes counts as stuck", async () => {
+    const { coordinatorStuck } = await import("../lib/coordinator.mjs");
+    let release;
+    const hung = cycle(() => new Promise(resolve => { release = resolve; }));
+    const started = Date.parse(coordinatorHealth().cycle_started_at);
+    assert.equal(coordinatorStuck(started + 9 * 60_000), false);
+    assert.equal(coordinatorStuck(started + 11 * 60_000), true);
+    release();
+    await hung;
+    assert.equal(coordinatorStuck(started + 11 * 60_000), false, "a finished cycle is never stuck");
+  });
+});

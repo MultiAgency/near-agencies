@@ -52,9 +52,9 @@ if (process.env.COORDINATOR === "1") {
 // Liveness you can check instead of infer: when the coordinator last finished a
 // cycle, and the GitHub budget as this server's own requests see it.
 app.get("/api/health", async (request, response) => {
-  const coordinator = process.env.COORDINATOR === "1" ? (await import("./lib/coordinator.mjs")).coordinatorHealth() : null;
-  // Stale after six missed cycles, counted from start until the first cycle completes.
-  const stale = coordinator && Date.now() - Date.parse(coordinator.last_completed_at ?? coordinator.started_at) > 6 * coordinator.interval_ms;
+  const running = process.env.COORDINATOR === "1" ? await import("./lib/coordinator.mjs") : null;
+  const coordinator = running?.coordinatorHealth() ?? null;
+  const stale = running?.coordinatorStale() ?? false;
   response.status(stale ? 503 : 200).json({ ok: !stale, coordinator, github: githubBudget() });
 });
 
