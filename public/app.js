@@ -64,7 +64,11 @@ async function renderHome(owner) {
         <h1 class="lede">Hire a team of people and AI agents.</h1>
         <p class="sub">Each of them is paid by the MultiAgency DAO only when their work is signed off, and every step happens in public.</p>
       </header>
-      <section class="featured" id="featured" aria-live="polite"></section>
+      <figure class="featured" id="featured" aria-live="polite">
+        <div class="relay-scroll relay-placeholder"><div></div></div>
+        <figcaption></figcaption>
+      </figure>
+      <p class="proof" id="proof"></p>
       <div class="columns">
         <section>
           <h2>Post a job</h2>
@@ -103,6 +107,7 @@ async function renderHome(owner) {
   });
   const [engagements, stats] = await Promise.all([get("/api/engagements"), get("/api/stats").catch(() => null)]);
   if (owner !== generation) return;
+  if (stats) document.getElementById("proof").textContent = proofLine(stats);
   const jobs = engagements.filter(e => e.state !== "cancelled");
   document.getElementById("engagements").innerHTML = jobs.length === 0
     ? html`<p class="empty">No jobs yet. Write a brief to post the first one.</p>`
@@ -112,21 +117,44 @@ async function renderHome(owner) {
           <span class="m">For ${account(e.org)}, ${usdc(e.deposit)} USDC deposit</span>
           <span class="s">${e.state === "closed" ? "Done" : e.assembled ? "In progress" : "Drafting the team"}</span>
         </a></li>`)}</ul>`;
-  // The featured job is the newest one finished: evidence, not illustration.
+  // The hero's figure is the newest finished job: evidence, not illustration.
+  const featured = document.getElementById("featured");
   const latest = jobs.find(e => e.state === "closed");
-  if (!latest) return;
-  const [e, relay] = await Promise.all([get(`/api/engagements/${latest.number}`), get(`/api/engagements/${latest.number}/timeline`).catch(() => null)]);
-  if (owner !== generation || !relay) return;
+  const [e, relay] = latest
+    ? await Promise.all([get(`/api/engagements/${latest.number}`).catch(() => null), get(`/api/engagements/${latest.number}/timeline`).catch(() => null)])
+    : [];
+  if (owner !== generation) return;
+  if (!e || !relay) return void featured.remove();
+  featured.innerHTML = html`
+    <a class="relay-scroll" href="#/e/${latest.number}" aria-label="${`Open ${latest.title}`}">${swimlane(relay, { links: false, reveal: true })}</a>
+    <figcaption>
+      <a class="caption-title" href="#/e/${latest.number}">${latest.title}</a>
+      <p>${story(e, relay)}</p>
+    </figcaption>`;
+}
+
+// A finished job in one paragraph: who paid, who did the work, the sign-off,
+// the payouts, and how long it took from deposit to done.
+function story(e, relay) {
+  const kind = new Map(relay.lanes.map(lane => [lane.key, lane.kind]));
+  const reviews = e.members.filter(m => m.skills.includes("skill:review"));
+  const who = members => [...new Set(members.map(m => m.handoffBy).filter(Boolean))];
+  const workers = who(e.members.filter(m => !reviews.includes(m)))
+    .map(login => `@${login}, ${kind.get(login) === "agent" ? "an AI agent" : "a person"},`);
+  const reviewers = who(reviews).map(login => `@${login}`);
+  const rounds = relay.events.filter(ev => ev.kind === "changes-requested").length;
   // From deposit to completion; later notes (a retrospective) are not part of the job.
   const done = relay.events.find(ev => ev.kind === "complete") ?? relay.events.at(-1);
-  const took = Date.parse(done.t) - Date.parse(relay.events[0].t);
-  document.getElementById("featured").innerHTML = html`
-    <div class="featured-head">
-      <h2><a href="#/e/${latest.number}">${latest.title}</a></h2>
-      <span class="took">Done in ${duration(took).replace(/m$/, " min")}, ${usdc(e.totals.paid)} USDC paid</span>
-    </div>
-    <a class="relay-scroll" href="#/e/${latest.number}" aria-label="${`Open ${latest.title}`}">${swimlane(relay, { links: false })}</a>
-    ${stats ? html`<p class="proof">${proofLine(stats)}</p>` : ""}`;
+  const minutes = Math.round((Date.parse(done.t) - Date.parse(relay.events[0].t)) / 60_000);
+  const took = minutes < 60 ? `${minutes}\u00a0minutes` : `${Math.floor(minutes / 60)}\u00a0h ${minutes % 60}\u00a0min`;
+  const signOff = reviewers.length
+    ? `${reviewers.join(" and ")} ${rounds ? `asked for ${rounds === 1 ? "one round" : `${rounds} rounds`} of changes and ` : ""}signed it off`
+    : "it was signed off";
+  return [
+    `${account(e.engagement.org)} paid a ${usdc(e.totals.deposit)} USDC deposit.`,
+    workers.length ? `${workers.join(" and ")} did the work; ${signOff};` : `${signOff[0].toUpperCase()}${signOff.slice(1)};`,
+    `the DAO paid ${usdc(e.totals.paid)} USDC. ${took} from deposit to done.`,
+  ].join(" ");
 }
 
 function proofLine({ jobs_done, usdc_paid, agents, people }) {
@@ -344,7 +372,7 @@ function relaySection(relay, e) {
     </section>`;
 }
 
-function swimlane({ lanes, events, open }, { links = true } = {}) {
+function swimlane({ lanes, events, open }, { links = true, reveal = false } = {}) {
   const W = 960, LEFT = 170, RIGHT = 24, ROW = 46, TOP = 30;
   const H = TOP + lanes.length * ROW + 10;
   const row = new Map(lanes.map((lane, i) => [lane.key, TOP + i * ROW + ROW / 2]));
@@ -362,7 +390,8 @@ function swimlane({ lanes, events, open }, { links = true } = {}) {
   const tone = key => ({ money: "paid", client: "client", person: "human", system: "system" })[lanes.find(l => l.key === key)?.kind] ?? "agent";
   const latest = events.length && Date.now() - times.at(-1) < 3 * 60_000 && open ? events.length - 1 : -1;
   return html`
-    <svg class="swimlane" viewBox="0 0 ${W} ${H}" role="img" aria-label="${`${events.length} events across ${lanes.length} participants`}">
+    <svg class="swimlane ${reveal ? "reveal" : ""}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${`${events.length} events across ${lanes.length} participants`}"
+      style="${`--step:${Math.round(Math.min(160, 2400 / Math.max(events.length, 1)))}ms`}">
       ${lanes.map(lane => html`
         <g class="lane">
           <line x1="${LEFT}" x2="${W - RIGHT}" y1="${row.get(lane.key)}" y2="${row.get(lane.key)}"/>
@@ -375,9 +404,9 @@ function swimlane({ lanes, events, open }, { links = true } = {}) {
           <text x="${x(b.at)}" y="${TOP - 12}">${duration(b.gap)}</text>
         </g>`)}
       ${events.slice(1).map((ev, i) => ev.lane === events[i].lane ? "" : html`
-        <line class="handoff-line" x1="${x(pos[i])}" y1="${row.get(events[i].lane)}" x2="${x(pos[i + 1])}" y2="${row.get(ev.lane)}"/>`)}
+        <line class="handoff-line" style="${`--i:${i + 1}`}" x1="${x(pos[i])}" y1="${row.get(events[i].lane)}" x2="${x(pos[i + 1])}" y2="${row.get(ev.lane)}"/>`)}
       ${events.map((ev, i) => {
-        const dot = html`<circle class="ev ${tone(ev.lane)} ${ev.kind} ${i === latest ? "latest" : ""}" cx="${x(pos[i])}" cy="${row.get(ev.lane)}" r="${["deliverable", "paid", "complete", "deposit"].includes(ev.kind) ? 7 : 5}">
+        const dot = html`<circle class="ev ${tone(ev.lane)} ${ev.kind} ${i === latest ? "latest" : ""}" style="${`--i:${i}`}" cx="${x(pos[i])}" cy="${row.get(ev.lane)}" r="${["deliverable", "paid", "complete", "deposit"].includes(ev.kind) ? 7 : 5}">
             <title>${`${EVENT_NAMES[ev.kind] ?? ev.kind}${ev.seat ? ` on #${ev.seat}` : ""}, ${new Date(ev.t).toLocaleString()}`}</title>
           </circle>`;
         return links ? html`<a href="${ev.url}" target="_blank" rel="noopener">${dot}</a>` : dot;
@@ -398,7 +427,7 @@ function labels(events, pos, x, row) {
     let y = row.get(ev.lane) - 13;
     while (placed.some(p => p.y === y && Math.abs(p.x - x(pos[i])) < 84)) y -= 12;
     placed.push({ x: x(pos[i]), y });
-    return html`<text class="ev-label" x="${x(pos[i])}" y="${y}">${EVENT_NAMES[ev.kind]}</text>`;
+    return html`<text class="ev-label" style="${`--i:${i}`}" x="${x(pos[i])}" y="${y}">${EVENT_NAMES[ev.kind]}</text>`;
   });
 }
 
