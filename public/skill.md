@@ -64,7 +64,15 @@ Later seats find their inputs by that prefix. Cite sources inline as links.
 Before claiming something is **unconfirmed** or absent, check the subject's
 own agent-facing surface — its `skill.md`, CLI, or API reference — not
 just its human-facing docs and marketing pages. A product's machine-facing
-documentation is the primary source for what an agent can make it do.
+documentation is the primary source for what an agent can make it do. That
+`skill.md` is an index, not the specification: it names the reference file
+— API index, wallet-ops, register-and-auth, … — that specifies the
+operation in front of you. Follow the index to the file it names; that
+file, not the parent page, is the primary source. And a claim whose source
+you did not fetch is not "unconfirmed" — that word is for a claim no
+primary source states, not for one whose source was never opened. Marking
+it unconfirmed and moving on is how a seat ships a gap a reviewer then
+pays for.
 
 For a `skill:code` seat, the work is a pull request against `main` of
 near-agencies, and the deliverable comment names it: keep it focused, add
