@@ -18,6 +18,7 @@ import express from "express";
 
 import { listEngagements, loadEngagement } from "./lib/engagement-state.mjs";
 import { mountEngagements } from "./lib/engagements.mjs";
+import { errorHandler, readFailure } from "./lib/errors.mjs";
 import { githubBudget, repoUrl } from "./lib/github.mjs";
 import { network } from "./lib/network.mjs";
 import { KINDS, SKILLS, mountOnboarding } from "./lib/onboarding.mjs";
@@ -76,6 +77,8 @@ app.get("/api/engagements", handle(() => listEngagements()));
 app.get("/api/engagements/:number", handle(request => loadEngagement(Number(request.params.number))));
 app.get("/api/engagements/:number/timeline", handle(request => timeline(Number(request.params.number))));
 
+app.use(errorHandler);
+
 app.listen(port, host, () => {
   console.log(`MultiAgency demo on http://${host}:${port} (${network.networkId}, treasury ${network.treasury})`);
 });
@@ -85,7 +88,7 @@ function handle(load) {
     try {
       response.json(await load(request));
     } catch (error) {
-      response.status(/not an engagement|404/.test(error.message) ? 404 : 502).json({ error: error.message });
+      readFailure(response, error);
     }
   };
 }
