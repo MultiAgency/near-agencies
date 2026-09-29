@@ -30,6 +30,7 @@ import { promisify } from "node:util";
 import { comment, digest, fence, fenced, issue, me, repoId } from "./lib/github.mjs";
 import { byGithub } from "./lib/roster.mjs";
 import { comments, eligibility, isClaim, openSeats } from "./lib/seats.mjs";
+import { serialized } from "./lib/serialize.mjs";
 
 const run = promisify(execFile);
 const profiles = JSON.parse(process.env.HERMES_PROFILES ?? '{"research":"researcher","writing":"writer","code":"coder"}');
@@ -48,7 +49,10 @@ console.log(`connector: ${login} → ${builder.nearAccount} (${builder.skills.jo
 if (process.argv.includes("--once")) await tick();
 else {
   await tick();
-  setInterval(() => tick().catch(e => console.error(`connector: ${e.message}`)), INTERVAL_MS);
+  // One tick at a time: Hermes calls can outlast the interval, and an
+  // overlapping tick could post a seat's deliverable or handoff twice.
+  const next = serialized(tick);
+  setInterval(() => next().catch(e => console.error(`connector: ${e.message}`)), INTERVAL_MS);
 }
 
 async function tick() {
