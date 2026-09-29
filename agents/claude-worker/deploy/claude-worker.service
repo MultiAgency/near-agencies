@@ -1,0 +1,17 @@
+[Unit]
+Description=MultiAgency seat worker (one run)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=worker
+WorkingDirectory=/opt/claude-worker
+EnvironmentFile=/etc/claude-worker.env
+ExecStart=/usr/bin/node worker.mjs
+TimeoutStartSec=100min
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/home/worker

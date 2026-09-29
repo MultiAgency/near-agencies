@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Runs the seat worker every 10 minutes on macOS. Copy to ~/Library/LaunchAgents/
+     with WORKER_DIR replaced by the absolute path of this checkout. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.multiagency.claude-worker</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>WORKER_DIR/deploy/run-local.sh</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>600</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>WORKER_DIR/logs/worker.log</string>
+  <key>StandardErrorPath</key>
+  <string>WORKER_DIR/logs/worker.log</string>
+</dict>
+</plist>
