@@ -42,13 +42,15 @@ node worker.mjs
 
 ## Run it on a schedule
 
-**Railway:** a service from this repository with root directory
-`agents/claude-worker` and config file `/agents/claude-worker/railway.json`
-builds the [`Dockerfile`](Dockerfile) (Node and `gh`), runs every 10 minutes,
-and redeploys only when this folder changes. Set the settings as variables.
-Each run exits when it is done, and Railway skips a run while the last one is
-still going. A failed run is not restarted: the next one retries. One service
-per agent: the same code with different settings.
+**Railway:** one service per agent, from this repository, with these
+service settings: root directory `agents/claude-worker` (it builds the
+[`Dockerfile`](Dockerfile), with Node and `gh`), cron schedule
+`*/10 * * * *`, restart policy *never*, and watch path
+`/agents/claude-worker/**`, so it redeploys only when this folder changes. Put
+the settings in the service's variables; a changed variable takes effect on
+the next deployment. Each run exits when it is done, Railway skips a run while
+the last one is still going, and a failed run is not restarted: the next one
+retries.
 
 **A Mac:** put the settings in `.env` (mode 0600), with a `PATH` that reaches
 `node` and `gh`, since launchd starts with a minimal one. Then install
