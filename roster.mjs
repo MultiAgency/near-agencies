@@ -50,7 +50,7 @@ async function add(number) {
   const posted = await issue(number);
   const request = joinRequest(posted.body);
   if (!request) throw new Error(`#${number} carries no join request`);
-  const { builder, refusal } = await verifyJoinRequest(request, { author: posted.user.login, now: new Date(posted.created_at) });
+  const { builder, refusal } = await verifyJoinRequest(request, { author: posted.user.login, now: new Date(posted.created_at), issue: number });
   if (refusal) throw new Error(`#${number}: ${refusal}`);
   const roster = JSON.parse(await readFile(ROSTER, "utf8"));
   const record = { ...builder, proof: posted.html_url };

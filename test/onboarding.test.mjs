@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { bytesToBase64, privateKeyFromRandom, signNep413Message } from "@fastnear/utils";
+import { bytesToBase64, fromBase58, privateKeyFromRandom, signNep413Message } from "@fastnear/utils";
 
-import { RECIPIENT, checkJoinRequest, joinFields, joinIssue, joinMessage, joinRequest, newNonce } from "../lib/onboarding.mjs";
+import { RECIPIENT, canonicalNonce, checkJoinRequest, implicitlyBound, joinFields, joinIssue, joinMessage, joinRequest, newNonce } from "../lib/onboarding.mjs";
 
 const issued = new Date("2026-09-28T12:00:00Z");
 const fields = { github: "new-agent", near: "new-agent.testnet", name: "New agent", kind: "agent", skills: ["research", "writing"], operator: "someone" };
@@ -15,7 +15,7 @@ function signed(overrides = {}, key = privateKeyFromRandom()) {
   return { message, nonce, recipient: RECIPIENT, accountId: fields.near, publicKey, signature: bytesToBase64(signature), ...overrides };
 }
 
-const at = { author: "new-agent", now: new Date("2026-09-28T13:00:00Z") };
+const at = { author: "new-agent", now: new Date("2026-09-28T12:10:00Z") };
 
 describe("join requests", () => {
   test("a signed request posted by its GitHub login becomes a roster record", () => {
@@ -46,7 +46,8 @@ describe("join requests", () => {
   });
 
   test("refuses a stale request", () => {
-    assert.match(checkJoinRequest(signed(), { ...at, now: new Date("2026-10-15T00:00:00Z") }).refusal, /expired/);
+    assert.match(checkJoinRequest(signed(), { ...at, now: new Date("2026-09-28T12:45:00Z") }).refusal, /more than 30 minutes/);
+    assert.match(checkJoinRequest(signed(), { ...at, now: new Date("2026-09-28T11:55:00Z") }).refusal, /in the future/);
   });
 
   test("validates the fields it signs", () => {
@@ -56,5 +57,29 @@ describe("join requests", () => {
     assert.match(joinFields({ ...fields, near: "Not An Account" }).error, /NEAR account/);
     assert.match(joinFields({ ...fields, operator: undefined }).error, /operator/);
     assert.equal(joinFields({ ...fields, kind: "human" }).fields.operator, undefined);
+  });
+
+  test("signs Nearly's claim envelope", () => {
+    const claim = JSON.parse(joinMessage(fields, issued));
+    assert.deepEqual(Object.keys(claim).slice(0, 5), ["action", "domain", "account_id", "version", "timestamp"]);
+    assert.equal(claim.action, "join_roster");
+    assert.equal(claim.domain, RECIPIENT);
+    assert.equal(claim.timestamp, issued.getTime());
+  });
+
+  test("a nonce has one spelling, so a reused one cannot be disguised", () => {
+    const nonce = newNonce();
+    assert.equal(canonicalNonce(nonce), nonce);
+    assert.equal(canonicalNonce(nonce.replace(/=$/, "")), null);
+    assert.equal(canonicalNonce(Buffer.alloc(16).toString("base64")), null);
+    assert.match(checkJoinRequest(signed({ nonce: nonce.replace(/=$/, "") }), at).refusal, /canonical/);
+  });
+
+  test("an implicit account is bound by construction to its own key only", () => {
+    const hexOf = key => Buffer.from(fromBase58(key.slice(8))).toString("hex");
+    const { publicKey } = signed();
+    assert.equal(implicitlyBound(hexOf(publicKey), publicKey), true);
+    assert.equal(implicitlyBound(hexOf(signed().publicKey), publicKey), false);
+    assert.equal(implicitlyBound("new-agent.testnet", publicKey), false);
   });
 });

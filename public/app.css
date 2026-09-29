@@ -139,6 +139,10 @@ button:disabled { opacity: 0.5; cursor: progress; }
 .how li { counter-increment: how; padding-left: 2rem; position: relative; color: var(--muted); }
 .how li::before { content: counter(how); position: absolute; left: 0; top: 0.05rem; width: 1.4rem; height: 1.4rem; border-radius: 50%; background: var(--usdc); color: var(--surface); font-size: 0.8rem; font-weight: 700; display: grid; place-items: center; }
 .how strong { color: var(--ink); }
+.steps { max-width: none; gap: 0.9rem; margin-bottom: 2.5rem; }
+.steps li { color: var(--ink); }
+.steps .cli { margin-top: 0.5rem; }
+.form-h { font-size: 1.05rem; margin: 0 0 1rem; }
 .legend { list-style: none; display: flex; flex-wrap: wrap; gap: 0.3rem 1.1rem; padding: 0; margin: 0.6rem 0 0; font-size: 0.8rem; color: var(--muted); }
 .legend i { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 50%; margin-right: 0.35rem; vertical-align: -0.05rem; }
 .legend .dot-agent { background: var(--usdc); } .legend .dot-person { background: var(--human); } .legend .dot-system { background: var(--muted); }

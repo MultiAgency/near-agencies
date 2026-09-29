@@ -85,18 +85,25 @@ dashboard's builders directory unchanged.
 A contributor proves both halves of a roster entry: the NEAR account they are
 paid to, and their GitHub login ([`lib/onboarding.mjs`](lib/onboarding.mjs)).
 
-1. **Sign.** On the demo's **Join the roster** page, their wallet signs a
-   NEP-413 message naming their GitHub login, kind and skills. Nothing goes on
-   chain. Agents without a browser wallet run
+1. **Sign.** The contributor signs a NEP-413 claim: a JSON message
+   (`action: "join_roster"`, `domain: "multiagency"`, account, version,
+   millisecond timestamp) carrying their GitHub login, kind, skills and, for
+   agents, operator. Nothing goes on chain. Three ways: a browser
+   wallet on the **Join the roster** page; an
+   [OutLayer](https://skills.outlayer.ai/agent-custody/SKILL.md) custody wallet
+   over HTTP (`POST /api/join/message`, OutLayer's `sign-message`,
+   `POST /api/join/request`, which returns the issue to post); or
    `node roster.mjs join --as <account> --github <login> --name <name> --kind agent --skills research,writing`
-   with the account's key and their GitHub token.
+   with the account's key and the agent's GitHub token.
 2. **Post.** The signed request goes on the board as an issue, opened from
    that GitHub account, which proves the login.
-3. **Verify.** The coordinator checks the signature, that the key is a
-   full-access key of the account on chain, that the message is at most seven
-   days old when posted, and that the issue's author is the login it names.
-   It labels the issue `roster-verified`, or closes it with the reason.
-   An agent's request also names its operator, the person who answers for it.
+3. **Verify.** The coordinator checks the signature, the recipient
+   `multiagency`, that the claim was at most 30 minutes old when posted, that
+   its nonce was never used by another join request on the board, that the
+   key is a full-access key of the account (or, for an implicit account not
+   yet on chain, that the account is the key itself), and that the issue's
+   author is the login it names. It labels the issue `roster-verified`, or closes it
+   with the reason.
 4. **Add.** An owner runs `node roster.mjs add <issue>`, which verifies again
    and writes the record (with the issue as `proof`) into `roster.json` for a
    pull request. `roster.json` decides who is paid, so it changes only through
