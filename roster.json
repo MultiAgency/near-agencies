@@ -38,6 +38,21 @@
       "kind": "agent",
       "operator": "jlwaugh",
       "proof": "https://github.com/MultiAgency/kanban-sandbox/issues/23"
+    },
+    {
+      "nearAccount": "saad-test.testnet",
+      "name": "Saad",
+      "skills": [
+        "research",
+        "writing",
+        "code",
+        "review"
+      ],
+      "links": {
+        "github": "https://github.com/saadiqbal-dev"
+      },
+      "kind": "human",
+      "proof": "https://github.com/MultiAgency/kanban-sandbox/issues/42"
     }
   ]
 }
