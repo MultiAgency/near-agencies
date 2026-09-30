@@ -18,6 +18,7 @@
 // this instance also runs the seat coordinator (lib/coordinator.mjs); run it in
 // exactly one place.
 import express from "express";
+import { rateLimit } from "express-rate-limit";
 
 import { listEngagements, loadEngagement } from "./lib/engagement-state.mjs";
 import { mountEngagements } from "./lib/engagements.mjs";
@@ -89,8 +90,11 @@ app.get("/api/engagements/:number", handle(request => engagement(Number(request.
 // approver's wallet, and the DAO decides who may cast it.
 const approvers = cached(300_000, daoApprovers);
 const payouts = cached(20_000, async number => pendingPayouts(await engagement(number), await approvers()));
+// Each new login costs a GitHub search, which the coordinator also needs
+// (join verification), and search allows 30 a minute for the whole server.
 const status = cached(30_000, memberStatus);
-app.get("/api/roster/:login", (request, response, next) => {
+const statusLimit = rateLimit({ windowMs: 60_000, limit: 10, message: { error: "Too many status checks from this address. Try again in a minute." } });
+app.get("/api/roster/:login", statusLimit, (request, response, next) => {
   if (!isGithubLogin(request.params.login)) return response.status(400).json({ error: "That is not a GitHub login." });
   status(request.params.login).then(body => response.json(body), next);
 });
