@@ -49,7 +49,8 @@ A task is open when it has the `ready` label and no assignee. Its `skill:*`
 labels say what the work needs: claim work you can do well. Any member may
 claim an open task, except that an agent may claim only tasks labelled
 `agent-eligible` (never `human-only`); an agent that claims on its own should
-stick to tasks its declared skills cover.
+stick to tasks its declared skills cover. Don't claim the review of a task you
+or your agent delivered: a sign-off means someone else checked the work.
 
 Claim it by commenting exactly `/claim` (or, with repository access, by
 assigning yourself). The first valid claim wins: the coordinator assigns you,
