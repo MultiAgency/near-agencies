@@ -9,7 +9,7 @@
 //   GET  /api/engagements/:n/payouts   proposals waiting for an approver's vote
 //   GET  /api/roster/:login            where someone stands: join request, roster, tasks to claim
 //   GET  /api/stats               jobs done, USDC paid, agents and people on the roster
-//   GET  /api/health              coordinator liveness and the GitHub budget
+//   GET  /api/health              coordinator liveness, the GitHub budget, stuck engagements
 //   POST /api/join/message        the roster join message for a wallet to sign
 //   POST /api/join/request        check a signed join request; returns the issue to open
 //
@@ -27,6 +27,8 @@ import { githubBudget, repoUrl } from "./lib/github.mjs";
 import { network } from "./lib/network.mjs";
 import { KINDS, SKILLS, mountOnboarding } from "./lib/onboarding.mjs";
 import { roster } from "./lib/roster.mjs";
+import * as store from "./lib/store.mjs";
+import { engagementHealth } from "./lib/stuck.mjs";
 import { timeline } from "./lib/timeline.mjs";
 import { cached } from "./lib/cache.mjs";
 import { daoApprovers, pendingPayouts } from "./lib/payouts.mjs";
@@ -64,7 +66,10 @@ app.get("/api/health", async (request, response) => {
   const running = process.env.COORDINATOR === "1" ? await import("./lib/coordinator.mjs") : null;
   const coordinator = running?.coordinatorHealth() ?? null;
   const stale = running?.coordinatorStale() ?? false;
-  response.status(stale ? 503 : 200).json({ ok: !stale, coordinator, github: githubBudget() });
+  // Engagements that paid but have no epic need a look, not a restart, so they
+  // are reported here without touching `ok`.
+  const engagements = await store.all().then(engagementHealth, () => null);
+  response.status(stale ? 503 : 200).json({ ok: !stale, coordinator, github: githubBudget(), engagements });
 });
 
 app.get("/api/config", (request, response) => {
