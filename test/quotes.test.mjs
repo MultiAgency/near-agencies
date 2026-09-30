@@ -22,3 +22,10 @@ describe("payer check", () => {
     assert.deepEqual(payerProblems({ exists: false }, deposit), ["the account does not exist on testnet"]);
   });
 });
+
+test("publicQuote does not return the stored error text", async () => {
+  const { publicQuote } = await import("../lib/engagements.mjs");
+  const quote = publicQuote({ code: "c", title: "t", amount: "1", channel: "x", status: "deposit_settled_epic_failed", expires_at: "", error: "GitHub 401: Bad credentials ghp_secret" });
+  assert.ok(!JSON.stringify(quote).includes("Bad credentials"));
+  assert.equal(publicQuote({ code: "c", status: "open", error: "x" }).error, undefined);
+});
