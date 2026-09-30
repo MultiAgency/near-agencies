@@ -7,6 +7,7 @@
 //   GET  /api/engagements[/:n]    engagements, teams, handoffs and payouts
 //   GET  /api/engagements/:n/timeline  who did what when, for the swimlane
 //   GET  /api/engagements/:n/payouts   proposals waiting for an approver's vote
+//   GET  /api/roster/:login            where someone stands: join request, roster, tasks to claim
 //   GET  /api/stats               jobs done, USDC paid, agents and people on the roster
 //   GET  /api/health              coordinator liveness and the GitHub budget
 //   POST /api/join/message        the roster join message for a wallet to sign
@@ -17,6 +18,7 @@
 // this instance also runs the seat coordinator (lib/coordinator.mjs); run it in
 // exactly one place.
 import express from "express";
+import { rateLimit } from "express-rate-limit";
 
 import { listEngagements, loadEngagement } from "./lib/engagement-state.mjs";
 import { mountEngagements } from "./lib/engagements.mjs";
@@ -28,6 +30,7 @@ import { roster } from "./lib/roster.mjs";
 import { timeline } from "./lib/timeline.mjs";
 import { cached } from "./lib/cache.mjs";
 import { daoApprovers, pendingPayouts } from "./lib/payouts.mjs";
+import { isGithubLogin, memberStatus } from "./lib/status.mjs";
 
 const deposit = process.env.ENGAGEMENT_DEPOSIT ?? "3000000";
 const host = process.env.HOST ?? "127.0.0.1";
@@ -87,6 +90,14 @@ app.get("/api/engagements/:number", handle(request => engagement(Number(request.
 // approver's wallet, and the DAO decides who may cast it.
 const approvers = cached(300_000, daoApprovers);
 const payouts = cached(20_000, async number => pendingPayouts(await engagement(number), await approvers()));
+// Each new login costs a GitHub search, which the coordinator also needs
+// (join verification), and search allows 30 a minute for the whole server.
+const status = cached(30_000, memberStatus);
+const statusLimit = rateLimit({ windowMs: 60_000, limit: 10, message: { error: "Too many status checks from this address. Try again in a minute." } });
+app.get("/api/roster/:login", statusLimit, (request, response, next) => {
+  if (!isGithubLogin(request.params.login)) return response.status(400).json({ error: "That is not a GitHub login." });
+  status(request.params.login).then(body => response.json(body), next);
+});
 app.get("/api/engagements/:number/payouts", handle(request => payouts(Number(request.params.number))));
 
 // The home page's proof: what has been done and paid, from the board.

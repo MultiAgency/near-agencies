@@ -98,7 +98,10 @@ main:focus { outline: none; }
 @media (max-width: 860px) { .columns { grid-template-columns: 1fr; } }
 .lede { font-size: clamp(2rem, 4.2vw, 3.1rem); line-height: 1.08; font-weight: 700; letter-spacing: -0.025em; margin: 0 0 1rem; max-width: 18ch; }
 .sub { color: var(--muted); max-width: 52ch; margin: 0 0 2rem; }
-form { display: grid; gap: 1rem; max-width: 34rem; }
+/* minmax(0, 1fr) here and on .how: a long unbroken line (the join page's curl
+   examples) scrolls inside its block instead of widening the column, and
+   every input or step with it. */
+form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; max-width: 34rem; }
 label { font-weight: 500; font-size: 0.95rem; display: grid; gap: 0.35rem; }
 input, textarea {
   font: inherit; color: var(--ink); background: var(--surface);
@@ -137,6 +140,10 @@ button:disabled { opacity: 0.5; cursor: progress; }
 .memo { font-weight: 700; font-size: 1.15rem; }
 .actions { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; }
 .cli { margin-top: 1.5rem; }
+/* Inline code can hold a 64-character account or contract id: let it wrap. */
+:not(pre) > code { overflow-wrap: anywhere; }
+.codeblock { position: relative; }
+.codeblock .copy { position: absolute; top: 0.45rem; right: 0.45rem; padding: 0.25rem 0.6rem; font-size: 0.8rem; background: var(--paper); }
 .cli pre { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius-field); padding: 0.9rem; overflow-x: auto; font-size: 0.8rem; }
 .status { margin-top: 1.5rem; padding-left: 0.9rem; border-left: 3px solid var(--primary); }
 .status.error { border-color: var(--warn); color: var(--warn); }
@@ -176,6 +183,14 @@ button:disabled { opacity: 0.5; cursor: progress; }
 /* Now, and the result */
 .now { font-size: 1.15rem; font-weight: 500; max-width: var(--measure); margin: -1.5rem 0 1.5rem; padding: 0.8rem 1rem; background: var(--surface); border: 1px solid var(--rule); border-left: 4px solid var(--primary); border-radius: 0 var(--radius-field) var(--radius-field) 0; }
 .now.cancelled { border-left-color: var(--muted); }
+.lookup { margin: 0 0 2rem; }
+.lookup label { font-weight: 400; color: var(--muted); }
+.lookup-row { display: flex; gap: 0.5rem; }
+.lookup-row input { flex: 1; min-width: 0; }
+.status-page .now { margin: 0 0 1.5rem; }
+.task-list { list-style: none; padding: 0; margin: 0.5rem 0 1.25rem; }
+.task-list li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.25rem 1rem; padding: 0.55rem 0; border-top: 1px solid var(--rule); }
+.task-list .m { color: var(--muted); font-variant-numeric: tabular-nums; }
 .approvals { margin: 0 0 3rem; background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius-field); padding: 0.75rem 1.25rem 1rem; }
 .approvals h2 { margin-top: 0.25rem; }
 .approvals-list { list-style: none; padding: 0; margin: 0.75rem 0 1rem; }
@@ -189,7 +204,7 @@ button:disabled { opacity: 0.5; cursor: progress; }
 .result-body h1 { font-size: 1.3rem; } .result-body h2 { font-size: 1.1rem; }
 .result-body table { border-collapse: collapse; font-size: 0.85rem; display: block; overflow-x: auto; }
 .result-body th, .result-body td { border: 1px solid var(--rule); padding: 0.35rem 0.5rem; vertical-align: top; text-align: left; }
-.how { list-style: none; counter-reset: how; padding: 0; margin: 0 0 2rem; display: grid; gap: 0.6rem; max-width: 52ch; }
+.how { list-style: none; counter-reset: how; padding: 0; margin: 0 0 2rem; display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.6rem; max-width: 52ch; }
 .how li { counter-increment: how; padding-left: 2rem; position: relative; color: var(--muted); }
 .how li::before { content: counter(how); position: absolute; left: 0; top: 0.05rem; width: 1.4rem; height: 1.4rem; border-radius: 50%; background: var(--primary); color: var(--primary-ink); font-size: 0.8rem; font-weight: 700; display: grid; place-items: center; }
 .how strong { color: var(--ink); }
