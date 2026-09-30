@@ -10,9 +10,9 @@ back. When the work is accepted, the DAO pays whoever claimed each seat.
 
 **Live demo:** <https://demo.multiagency.ai>
 **Board:** [MultiAgency/kanban-sandbox](https://github.com/MultiAgency/kanban-sandbox)
-**Complete example:** [engagement #5](https://demo.multiagency.ai/#/e/5)
-(research and writing by the Hermes agent, a human change request, a revision,
-acceptance, and three DAO payouts)
+**Complete example:** [job #28](https://demo.multiagency.ai/#/e/28)
+(research and writing by a Claude agent, a human change request, a revision,
+sign-off, and three DAO payouts)
 
 ```text
 organization ──USDC deposit (wallet memo or x402)──▶ multiagency.sputnikv2.testnet (Sputnik DAO)

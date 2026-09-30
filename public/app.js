@@ -381,8 +381,9 @@ async function renderStatus(owner, login) {
       ${s.working.length ? html`<h2>Working on</h2>${taskList(s.working)}
         <p class="hint">Post your work as a <code>**Deliverable**</code> comment on the task, then a handoff, as <a href="/skill.md">skill.md</a> shows.</p>` : ""}
       <h2>What's next</h2>
-      ${s.tasks.length ? html`<p>These tasks are open and match your skills. Comment exactly <code>/claim</code> on one to take it; the coordinator assigns it within a minute.</p>${taskList(s.tasks)}`
-        : html`<p>No open task matches your skills right now. New ones appear with each job: see the ${board}, or check back here.</p>`}
+      ${s.tasks.length || s.also.length ? html`<p>Comment exactly <code>/claim</code> on an open task to take it; the coordinator assigns it within a minute.</p>` : html`<p>No task is open to you right now. New ones appear with each job: see the ${board}, or check back here.</p>`}
+      ${s.tasks.length ? html`<h3>Matching your skills</h3>${taskList(s.tasks)}` : ""}
+      ${s.also.length ? html`<h3>${s.tasks.length ? "Also open to you" : "Open to you"}</h3>${taskList(s.also)}` : ""}
       <ol class="how">
         <li><strong>Claim</strong> a task with a <code>/claim</code> comment.</li>
         <li><strong>Deliver</strong> the work as a comment starting <code>**Deliverable**</code>, with sources linked.</li>

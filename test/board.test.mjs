@@ -3,7 +3,7 @@ import { describe, test } from "node:test";
 
 import { assignmentClaims, isChangeRequest, revisionNotice } from "../lib/coordinator.mjs";
 import { fence, fenced } from "../lib/github.mjs";
-import { byGithub, covers } from "../lib/roster.mjs";
+import { byGithub, covers, isProfileUpdate } from "../lib/roster.mjs";
 import { eligibility, handoffProblem, isClaim, pinProblem, seat } from "../lib/seats.mjs";
 
 const issue = (overrides = {}) => ({
@@ -54,14 +54,14 @@ describe("seats", () => {
     assert.equal(eligibility(seat(issue()), agent), null);
   });
 
-  test("refuses claimants who are off the roster, the wrong kind, or unskilled", () => {
+  test("refuses claimants who are off the roster or the wrong kind; skills only suggest", () => {
     assert.match(eligibility(seat(issue()), null), /not on the MultiAgency roster/);
     const humanOnly = seat(issue({ labels: [{ name: "ready" }, { name: "skill:review" }, { name: "human-only" }] }));
     assert.match(eligibility(humanOnly, agent), /human-only/);
     assert.equal(eligibility(humanOnly, human), null);
     const notAgentEligible = seat(issue({ labels: [{ name: "ready" }, { name: "skill:writing" }] }));
     assert.match(eligibility(notAgentEligible, agent), /not agent-eligible/);
-    assert.match(eligibility(seat(issue()), { kind: "agent", skills: ["research"] }), /do not cover skill:writing/);
+    assert.equal(eligibility(seat(issue()), { kind: "agent", skills: ["research"] }), null);
   });
 });
 
@@ -92,8 +92,8 @@ describe("native assignment claims", () => {
     assert.match(assignmentClaims(humanOnly([{ login: "multi-agency" }])).refused[0].refusal, /human-only/);
     const notAgentEligible = seat(issue({ labels: [{ name: "ready" }, { name: "skill:writing" }], assignees: [{ login: "multi-agency" }] }));
     assert.match(assignmentClaims(notAgentEligible).refused[0].refusal, /not agent-eligible/);
-    const unskilled = seat(issue({ labels: [{ name: "ready" }, { name: "skill:review" }, { name: "agent-eligible" }], assignees: [{ login: "multi-agency" }] }));
-    assert.match(assignmentClaims(unskilled).refused[0].refusal, /do not cover skill:review/);
+    const outsideSkills = seat(issue({ labels: [{ name: "ready" }, { name: "skill:review" }, { name: "agent-eligible" }], assignees: [{ login: "multi-agency" }] }));
+    assert.equal(assignmentClaims(outsideSkills).accepted?.login, "multi-agency");
   });
 
   test("the first eligible assignee wins and ineligible ones are refused", () => {
@@ -174,5 +174,21 @@ describe("revisions", () => {
       body: "@jlwaugh, round 2 of #26 is in: https://example/deliverable-2. It passed the handoff checks: sign it off here, or ask for another round.",
     });
     assert.match(revisionNotice(26, [changes(1), changes(2), handoff], handoff).body, /round 3 of #26/);
+  });
+});
+
+describe("profile updates", () => {
+  const member = { nearAccount: "alice.testnet", kind: "agent", operator: "bob", skills: ["research"], name: "Alice" };
+
+  test("a request that keeps the account, kind and operator only updates the profile", () => {
+    assert.equal(isProfileUpdate(member, { ...member, skills: ["research", "writing"], name: "Alice B" }), true);
+  });
+
+  test("anything else needs an owner: a new member, account, kind or operator", () => {
+    assert.equal(isProfileUpdate(null, member), false);
+    assert.equal(isProfileUpdate(member, { ...member, nearAccount: "other.testnet" }), false);
+    assert.equal(isProfileUpdate(member, { ...member, kind: "human" }), false);
+    assert.equal(isProfileUpdate(member, { ...member, operator: "carol" }), false);
+    assert.equal(isProfileUpdate({ ...member, operator: undefined }, { ...member, operator: undefined }), true);
   });
 });
