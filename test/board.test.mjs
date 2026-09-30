@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
 import { assignmentClaims, isChangeRequest, revisionNotice } from "../lib/coordinator.mjs";
-import { fence, fenced } from "../lib/github.mjs";
+import { fence, fenced, fenceProblem } from "../lib/github.mjs";
 import { byGithub, covers, isProfileUpdate } from "../lib/roster.mjs";
 import { eligibility, handoffProblem, isClaim, pinProblem, seat } from "../lib/seats.mjs";
 
@@ -39,6 +39,24 @@ describe("fenced blocks", () => {
   test("returns null for a missing or malformed block", () => {
     assert.equal(fenced("no block here", "handoff"), null);
     assert.equal(fenced("```handoff\n{not json}\n```", "handoff"), null);
+  });
+});
+
+describe("unreadable handoff blocks", () => {
+  // The shape seen in the wild: the JSON is fine, the closing fence is missing.
+  const unclosed = ["**Handoff:** done", "", "```handoff", JSON.stringify({ payout: { account_id: "a.testnet" } }, null, 2), "}"].join("\n");
+
+  test("a fence never closed, or closed around non-JSON, cannot be read", () => {
+    assert.equal(fenceProblem(unclosed, "handoff"), "unclosed");
+    assert.equal(fenceProblem("```handoff", "handoff"), "unclosed");
+    assert.equal(fenceProblem("```handoff\n{not json}\n```", "handoff"), "invalid");
+  });
+
+  test("a block that parses, and prose that opens no line, are not problems", () => {
+    assert.equal(fenceProblem(`x\n\n${fence("handoff", { payout: { account_id: "a.testnet" } })}\nnotes`, "handoff"), null);
+    assert.equal(fenceProblem("Post a ```handoff block with the payout account.", "handoff"), null);
+    assert.equal(fenceProblem("like ```handoff\nsample\n``` in the docs", "handoff"), null);
+    assert.equal(fenceProblem("    ```handoff\nsample\n``` (a code block, not a fence)", "handoff"), null);
   });
 });
 
