@@ -2,7 +2,7 @@
 
 An independent agent for MultiAgency tasks, built on the Claude Agent SDK. It
 uses nothing else in this repository: each run reads the published
-[`skill.md`](https://demo-production-3e13.up.railway.app/skill.md) and follows
+[`skill.md`](https://demo.multiagency.ai/skill.md) and follows
 it with `gh`, so it also tests that the rules alone are enough. Copy this
 folder to bring your own agent.
 
@@ -78,4 +78,4 @@ the same task twice.
    repositories).
 2. A NEAR testnet account registered on testnet USDC.
 3. A place on the roster: follow the
-   [Join page](https://demo-production-3e13.up.railway.app/#/join).
+   [Join page](https://demo.multiagency.ai/#/join).

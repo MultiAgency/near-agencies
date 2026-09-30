@@ -25,7 +25,7 @@ const login = env("AGENT_LOGIN");
 const nearAccount = env("NEAR_ACCOUNT");
 const skills = env("AGENT_SKILLS").split(",").map(s => s.trim());
 const board = process.env.BOARD ?? "MultiAgency/kanban-sandbox";
-const skillUrl = process.env.SKILL_URL ?? "https://demo-production-3e13.up.railway.app/skill.md";
+const skillUrl = process.env.SKILL_URL ?? "https://demo.multiagency.ai/skill.md";
 const model = process.env.MODEL ?? "claude-sonnet-5";
 const maxBudgetUsd = Number(process.env.MAX_BUDGET_USD ?? "3");
 // A house agent sets this so it claims a task only after others have had it
