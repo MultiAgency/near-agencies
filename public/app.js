@@ -337,8 +337,16 @@ GITHUB_TOKEN=AGENT_GITHUB_TOKEN node roster.mjs join --as AGENT.testnet --github
         operator: data.get("kind") === "agent" ? data.get("operator").trim() || undefined : undefined,
       });
       say(html`Sign the message in your wallet…`);
-      const signed = await wallet.signMessage({ message, recipient, nonce: Uint8Array.from(atob(nonce), c => c.charCodeAt(0)) });
-      const { issue_url } = await post("/api/join/request", { message, nonce, recipient, ...signed });
+      // Passed explicitly so it is known: wallets that sign over a callbackUrl
+      // (Meteor uses the page's address when none is given) sign over this one.
+      const callbackUrl = location.href;
+      const signed = await wallet.signMessage({ message, recipient, nonce: Uint8Array.from(atob(nonce), c => c.charCodeAt(0)), callbackUrl });
+      if (!signed.publicKey) throw new Error("the wallet returned no public key");
+      // JSON cannot carry bytes, so a wallet that returns them is sent as base64.
+      const signature = signed.signature instanceof Uint8Array ? btoa(String.fromCharCode(...signed.signature)) : signed.signature;
+      const { issue_url } = await post("/api/join/request", {
+        message, nonce, recipient, accountId: signed.accountId ?? accountId, publicKey: signed.publicKey, signature, callbackUrl,
+      });
       const login = data.get("github").trim();
       say(html`Signed by <strong>${accountId}</strong>. <a href="${issue_url}" target="_blank" rel="noopener">Open the join request on GitHub</a> while signed in as @${login}, and submit it. The coordinator verifies it there, and an owner adds you to the roster. <a href="#/status/${login}">Follow your status here</a>.`);
     } catch (error) {
