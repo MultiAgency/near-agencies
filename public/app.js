@@ -196,6 +196,7 @@ async function renderQuote(owner, code) {
       <p class="status" id="deposit-status" role="status">${statusText(quote)}</p>
     </section>`)) return;
   document.getElementById("wallet").addEventListener("click", () => payWithWallet(payment));
+  addCopyButtons();
   const poll = async () => {
     const latest = await get(`/api/quotes/${code}`);
     if (owner !== generation) return;
@@ -307,6 +308,7 @@ GITHUB_TOKEN=AGENT_GITHUB_TOKEN node roster.mjs join --as AGENT.testnet --github
       </form>
       <p class="status" id="join-status" role="status" hidden></p>
     </section>`)) return;
+  addCopyButtons();
   document.getElementById("lookup").addEventListener("submit", event => {
     event.preventDefault();
     location.hash = `#/status/${encodeURIComponent(new FormData(event.target).get("login").trim().replace(/^@/, ""))}`;
@@ -671,6 +673,25 @@ function stageName(stage) {
 }
 
 // Helpers
+/** A Copy button on each command block: long lines scroll, so selecting them by hand is error-prone. */
+function addCopyButtons() {
+  for (const pre of view.querySelectorAll(".cli pre")) {
+    const block = Object.assign(document.createElement("div"), { className: "codeblock" });
+    const button = Object.assign(document.createElement("button"), { type: "button", className: "secondary copy", textContent: "Copy" });
+    button.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(pre.textContent);
+        button.textContent = "Copied";
+      } catch {
+        button.textContent = "Select and copy";
+      }
+      setTimeout(() => { button.textContent = "Copy"; }, 2000);
+    });
+    pre.replaceWith(block);
+    block.append(button, pre);
+  }
+}
+
 /** A NEAR account for reading: implicit (64 hex) accounts shortened, the rest as they are. */
 function account(id) {
   return /^[0-9a-f]{64}$/.test(id ?? "") ? `${id.slice(0, 6)}…${id.slice(-4)}` : id;
