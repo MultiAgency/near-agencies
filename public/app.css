@@ -176,6 +176,14 @@ button:disabled { opacity: 0.5; cursor: progress; }
 /* Now, and the result */
 .now { font-size: 1.15rem; font-weight: 500; max-width: var(--measure); margin: -1.5rem 0 1.5rem; padding: 0.8rem 1rem; background: var(--surface); border: 1px solid var(--rule); border-left: 4px solid var(--primary); border-radius: 0 var(--radius-field) var(--radius-field) 0; }
 .now.cancelled { border-left-color: var(--muted); }
+.lookup { margin: 0 0 2rem; }
+.lookup label { font-weight: 400; color: var(--muted); }
+.lookup-row { display: flex; gap: 0.5rem; }
+.lookup-row input { flex: 1; min-width: 0; }
+.status-page .now { margin: 0 0 1.5rem; }
+.task-list { list-style: none; padding: 0; margin: 0.5rem 0 1.25rem; }
+.task-list li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.25rem 1rem; padding: 0.55rem 0; border-top: 1px solid var(--rule); }
+.task-list .m { color: var(--muted); font-variant-numeric: tabular-nums; }
 .approvals { margin: 0 0 3rem; background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius-field); padding: 0.75rem 1.25rem 1rem; }
 .approvals h2 { margin-top: 0.25rem; }
 .approvals-list { list-style: none; padding: 0; margin: 0.75rem 0 1rem; }
