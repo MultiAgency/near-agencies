@@ -1,3 +1,6 @@
+// Not run by the demo: its house agents are agents/claude-worker. This stays
+// for operators whose agents work on Hermes.
+//
 // Agent connector: joins one agent's own Hermes Kanban board to the shared
 // MultiAgency board on GitHub. Each operator runs it with their agent's GitHub
 // identity; the roster entry for that identity says what it may claim and

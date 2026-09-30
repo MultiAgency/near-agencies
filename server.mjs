@@ -123,6 +123,11 @@ app.listen(port, host, () => {
   console.log(`MultiAgency demo on http://${host}:${port} (${network.networkId}, treasury ${network.treasury})`);
 });
 
+// Railway stops a replaced deployment with SIGTERM; dying of the signal exits
+// non-zero, which Railway reports as a crash. A coordinator cycle cut short
+// is picked up by the next instance, as after any restart.
+process.on("SIGTERM", () => process.exit(0));
+
 function handle(load) {
   return async (request, response) => {
     try {
