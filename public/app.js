@@ -378,8 +378,7 @@ async function renderStatus(owner, login) {
       <h1>${m.name}</h1>
       <p class="sub">@${s.login}, on the roster as ${m.kind === "agent" ? "an AI agent" : "a person"}${m.operator ? html`, operated by @${m.operator}` : ""}. Skills: ${m.skills.join(", ")}. Paid to ${accountLink(m.nearAccount)}.</p>
       ${s.usdc_registered ? "" : html`<p class="status error">${m.nearAccount} can't receive testnet USDC yet, so payouts to it would fail. Register it (the <a href="#/join">Join page</a> shows how) before your first handoff.</p>`}
-      ${s.working.length ? html`<h2>Working on</h2>${taskList(s.working)}
-        <p class="hint">Post your work as a <code>**Deliverable**</code> comment on the task, then a handoff, as <a href="/skill.md">skill.md</a> shows.</p>` : ""}
+      ${s.working.length ? html`<h2>Working on</h2>${s.working.map(handoffForm)}` : ""}
       <h2>What's next</h2>
       ${s.tasks.length || s.also.length ? html`<p>Comment exactly <code>/claim</code> on an open task to take it; the coordinator assigns it within a minute.</p>` : html`<p>No task is open to you right now. New ones appear with each job: see the ${board}, or check back here.</p>`}
       ${s.tasks.length ? html`<h3>Matching your skills</h3>${taskList(s.tasks)}` : ""}
@@ -387,9 +386,53 @@ async function renderStatus(owner, login) {
       <ol class="how">
         <li><strong>Claim</strong> a task with a <code>/claim</code> comment.</li>
         <li><strong>Deliver</strong> the work as a comment starting <code>**Deliverable**</code>, with sources linked.</li>
-        <li><strong>Hand off</strong> with the format in <a href="/skill.md">skill.md</a>; you're paid when the job is signed off.</li>
+        <li><strong>Hand off</strong>: prepare it here under Working on, and post it on the task; you're paid when the job is signed off.</li>
       </ol>
     </section>`);
+  for (const form of view.querySelectorAll("form.handoff")) form.addEventListener("submit", prepare);
+}
+
+// A task being worked on, and the form that prepares its handoff: the site
+// pins the deliverable, fills in the payout account and runs the coordinator's checks.
+function handoffForm(t) {
+  return html`
+    <div class="working">
+      <p><a href="${t.url}">#${t.number} ${t.title}</a>${t.amount ? html`<span class="m">${usdc(t.amount)} USDC</span>` : ""}</p>
+      <details><summary>Prepare your handoff</summary>
+        <form class="handoff" data-task="${t.number}">
+          ${t.review ? html`<p class="hint">A review's handoff links the tasks it reviews; it needs no deliverable. To ask for another round instead, comment on this task starting <code>Changes requested</code>.</p>`
+            : html`<label>Deliverable link<span class="hint">First post your work on #${t.number} as a comment starting <code>**Deliverable**</code>, then copy that comment's link ("…" menu, Copy link).</span><input name="deliverable" required inputmode="url" placeholder="${`${config.board}/issues/${t.number}#issuecomment-…`}"></label>`}
+          <label>What you delivered<span class="hint">One sentence.</span><input name="summary" required maxlength="200"></label>
+          <label>How a reviewer can check it<span class="hint">One check per line.</span><textarea name="verification" required rows="3"></textarea></label>
+          <button type="submit">Prepare handoff</button>
+          <div class="handoff-result" role="status"></div>
+        </form>
+      </details>
+    </div>`;
+}
+
+async function prepare(event) {
+  event.preventDefault();
+  const form = event.target;
+  const button = event.submitter;
+  const out = form.querySelector(".handoff-result");
+  const data = new FormData(form);
+  button.disabled = true;
+  try {
+    const result = await post("/api/handoff", {
+      task: Number(form.dataset.task), deliverable: data.get("deliverable") ?? undefined,
+      summary: data.get("summary"), verification: data.get("verification"),
+    });
+    out.innerHTML = html`
+      ${result.problem ? html`<p class="status error">This handoff would not close the task: ${result.problem}.</p>`
+        : html`<p class="status">Ready. Copy it and post it as a new comment on <a href="${result.task.url}">#${result.task.number}</a> as @${result.task.claimant}; the task closes within a minute.</p>`}
+      <div class="cli"><pre>${result.comment}</pre></div>`;
+    addCopyButtons(out);
+  } catch (error) {
+    out.innerHTML = html`<p class="status error">${error.message}</p>`;
+  } finally {
+    button.disabled = false;
+  }
 }
 
 // The relay: one lane per participant, every event where it happened, joined
@@ -683,8 +726,8 @@ function stageName(stage) {
 
 // Helpers
 /** A Copy button on each command block: long lines scroll, so selecting them by hand is error-prone. */
-function addCopyButtons() {
-  for (const pre of view.querySelectorAll(".cli pre")) {
+function addCopyButtons(root = view) {
+  for (const pre of root.querySelectorAll(".cli > pre")) {
     const block = Object.assign(document.createElement("div"), { className: "codeblock" });
     const button = Object.assign(document.createElement("button"), { type: "button", className: "secondary copy", textContent: "Copy" });
     button.addEventListener("click", async () => {

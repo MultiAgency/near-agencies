@@ -12,6 +12,7 @@
 //   GET  /api/health              coordinator liveness, the GitHub budget, stuck engagements
 //   POST /api/join/message        the roster join message for a wallet to sign
 //   POST /api/join/request        check a signed join request; returns the issue to open
+//   POST /api/handoff             a task's handoff, pinned and checked, for its claimant to post
 //
 // With FACILITATOR_URL set, the x402-paid routes are mounted too
 // (lib/x402-intake.mjs): POST /engagements and GET /brief. With COORDINATOR=1
@@ -26,6 +27,7 @@ import { errorHandler, readFailure } from "./lib/errors.mjs";
 import { githubBudget, repoUrl } from "./lib/github.mjs";
 import { network } from "./lib/network.mjs";
 import { KINDS, SKILLS, mountOnboarding } from "./lib/onboarding.mjs";
+import { prepareHandoff } from "./lib/handoff.mjs";
 import { roster } from "./lib/roster.mjs";
 import * as store from "./lib/store.mjs";
 import { engagementHealth } from "./lib/stuck.mjs";
@@ -102,6 +104,11 @@ const statusLimit = rateLimit({ windowMs: 60_000, limit: 10, message: { error: "
 app.get("/api/roster/:login", statusLimit, (request, response, next) => {
   if (!isGithubLogin(request.params.login)) return response.status(400).json({ error: "That is not a GitHub login." });
   status(request.params.login).then(body => response.json(body), next);
+});
+// Each preparation reads the task and the deliverable comment from GitHub.
+const handoffLimit = rateLimit({ windowMs: 60_000, limit: 10, message: { error: "Too many handoffs prepared from this address. Try again in a minute." } });
+app.post("/api/handoff", handoffLimit, (request, response, next) => {
+  prepareHandoff(request.body ?? {}).then(result => response.status(result.error ? 400 : 200).json(result), next);
 });
 app.get("/api/engagements/:number/payouts", handle(request => payouts(Number(request.params.number))));
 
