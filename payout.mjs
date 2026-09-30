@@ -15,8 +15,8 @@
 // job closes once every payout has executed, which also settles its board
 // state: the `blocked` label comes off and the `## Team` checklist records
 // which tasks delivered. NEAR_NETWORK selects testnet (default) or mainnet.
-import { loadEngagement, recordPaid } from "./lib/engagement-state.mjs";
-import { call, explorer, ftBalance, view } from "./lib/near.mjs";
+import { loadEngagement, proposalState, recordPaid } from "./lib/engagement-state.mjs";
+import { call, explorer, ftBalance } from "./lib/near.mjs";
 import { network } from "./lib/network.mjs";
 import { DEAD, closeIfPaid, deliverablesProblem, payoutProblem, proposePayouts, recordApprovals } from "./lib/payouts.mjs";
 
@@ -65,7 +65,7 @@ if (command === "status") {
     }, { gas: "200000000000000" });
     // The transfer runs as a detached promise whose callback can flip the
     // status to Failed; FINAL covers it, and the balance delta is the proof.
-    const { status } = await view(network.treasury, "get_proposal", { id: m.payout.proposal_id });
+    const { status } = await proposalState(network.treasury, m.payout.proposal_id);
     const received = (await ftBalance(m.payee)) - before;
     if (status !== "Approved" || received !== BigInt(m.amount)) {
       throw new Error(`proposal ${m.payout.proposal_id} is ${status}; ${m.payee} received ${received} of ${m.amount}`);

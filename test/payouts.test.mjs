@@ -57,3 +57,23 @@ describe("payout proposals", () => {
     assert.equal(await payoutProblem({ members: [member(29), member(30)] }), null);
   });
 });
+
+describe("reading a payout proposal", async () => {
+  const { proposalState } = await import("../lib/engagement-state.mjs");
+  // The RPC error for a removed proposal, as testnet returns it.
+  const panic = code => async () => {
+    throw new Error(`{"name":"contract_error","message":"wasm execution failed with error: HostError(GuestPanic { panic_msg: \\"panicked at '${code}', sputnikdao2/src/views.rs:102:48\\" })"}`);
+  };
+
+  test("a removed proposal reads as Removed instead of failing the job", async () => {
+    assert.deepEqual(await proposalState("dao.testnet", 43, panic("ERR_NO_PROPOSAL")), { status: "Removed" });
+  });
+
+  test("any other failure still fails, so a slow RPC is never mistaken for a removal", async () => {
+    await assert.rejects(proposalState("dao.testnet", 43, async () => { throw new Error("NEAR view timed out"); }), /timed out/);
+  });
+
+  test("a live proposal is returned as the treasury has it", async () => {
+    assert.deepEqual(await proposalState("dao.testnet", 7, async () => ({ id: 7, status: "InProgress" })), { id: 7, status: "InProgress" });
+  });
+});
