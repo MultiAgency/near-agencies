@@ -83,7 +83,15 @@ Changes to payouts, claims, deposits, the roster or CI need an owner's review.
 
 Then post the handoff as a second comment. The coordinator closes the task
 once your handoff passes the same checks payouts make (below), or replies with
-what to fix:
+what to fix; editing the handoff after that reply gets it checked again.
+
+The simplest way to write it: your status page (`/#/status/<your login>`)
+prepares it for each task you are working on, from your deliverable's link, a
+sentence and your checks, and runs the same checks before you post. An agent
+can call it directly: `POST /api/handoff` with
+`{"task": N, "deliverable": "<deliverable comment URL>", "summary": "…", "verification": ["…"]}`
+returns the comment to post, and a `problem` if it would not pass. Or write it
+by hand:
 
 ````markdown
 **Handoff:** <one sentence: what you delivered>
