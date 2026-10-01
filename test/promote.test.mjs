@@ -33,7 +33,7 @@ const seatIssue = (number, labels, dependsOn = [], assignees = []) => ({
 // `threads` holds each seat's comments; the bot's replies join its thread, so a
 // later cycle sees them as it would on GitHub.
 const board = ({ open = [], closes = [], issues = {}, closedByLabel = {}, threads = {} }) => {
-  const state = { calls: [], comments: [], labelPosts: [], patches: [], reactions: {}, unassigns: [], assigns: [] };
+  const state = { calls: [], comments: [], labelPosts: [], patches: [], reactions: {}, assigns: [], unassigns: [] };
   let nextId = 1;
   const serve = async (url, options = {}) => {
     const method = options.method ?? "GET";
@@ -63,12 +63,22 @@ const board = ({ open = [], closes = [], issues = {}, closedByLabel = {}, thread
       return json({});
     }
     const assignees = u.pathname.match(`${REPO}/issues/(\\d+)/assignees$`);
-    if (assignees && method === "DELETE") {
-      state.unassigns.push({ number: Number(assignees[1]), login: JSON.parse(options.body).assignees[0] });
-      return json({});
-    }
-    if (assignees && method === "POST") {
-      state.assigns.push({ number: Number(assignees[1]), login: JSON.parse(options.body).assignees[0] });
+    if (assignees) {
+      const login = JSON.parse(options.body).assignees[0];
+      if (method === "DELETE") {
+        state.unassigns.push({ number: Number(assignees[1]), login });
+        const removed = issues[Number(assignees[1])];
+        if (removed) {
+          removed.assignees = removed.assignees.filter(a => a.login !== login);
+          removed.updated_at = new Date().toISOString();
+        }
+        return json({});
+      }
+      state.assigns.push({ number: Number(assignees[1]), login });
+      // The assignment lands on the issue, as on GitHub, so a later cycle sees it.
+      const found = issues[Number(assignees[1])];
+      if (found && !found.assignees.some(a => a.login === login)) found.assignees.push({ login });
+      if (found) found.updated_at = new Date().toISOString();
       return json({});
     }
     const thread = u.pathname.match(`${REPO}/issues/(\\d+)/comments$`);
@@ -86,11 +96,22 @@ const board = ({ open = [], closes = [], issues = {}, closedByLabel = {}, thread
     }
     const posted = u.pathname.match(`${REPO}/issues/(\\d+)/labels$`);
     if (posted && method === "POST") {
-      state.labelPosts.push({ number: Number(posted[1]), labels: JSON.parse(options.body).labels });
+      const labels = JSON.parse(options.body).labels;
+      state.labelPosts.push({ number: Number(posted[1]), labels });
+      // Labels land on the issue, as on GitHub, so a later cycle sees the swap.
+      const found = issues[Number(posted[1])];
+      if (found) {
+        found.labels.push(...labels.map(name => ({ name })));
+        found.updated_at = new Date().toISOString();
+      }
       return json([]);
     }
     const label = u.pathname.match(`${REPO}/issues/(\\d+)/labels/(.+)$`);
-    if (label && method === "DELETE") return new Response(null, { status: 204 });
+    if (label && method === "DELETE") {
+      const found = issues[Number(label[1])];
+      if (found) found.labels = found.labels.filter(l => l.name !== decodeURIComponent(label[2]));
+      return new Response(null, { status: 204 });
+    }
     if (u.pathname === `${REPO}/issues` && method === "GET") {
       const labels = u.searchParams.get("labels");
       if (u.searchParams.get("state") === "closed") return json(closedByLabel[labels] ?? []);
@@ -346,5 +367,39 @@ describe("closing a seat on its handoff", () => {
     assert.deepEqual(fake.comments.filter(c => /can't close the task/.test(c.body)), []);
     assert.deepEqual(fake.unassigns, [{ number: 45, login: "jlwaugh" }]);
     assert.ok(replies(fake, 45).some(c => /No handoff after 24 hours/.test(c.body)));
+  });
+});
+
+describe("refusing a claim on one's own delivered work", () => {
+  // skill.md §2: don't claim the review of a task you delivered. The review
+  // seat's dependency #40 was delivered by @jlwaugh.
+  const dependency = seatIssue(40, [], [], ["jlwaugh"]);
+  const claim = (id, login) => ({
+    id, user: { login }, body: "/claim",
+    created_at: "2026-09-30T21:00:00Z", updated_at: "2026-09-30T21:00:00Z",
+    html_url: `https://github.com/MultiAgency/kanban-sandbox/issues/50#issuecomment-${id}`,
+  });
+  const deliveredBoard = threads => {
+    const review = seatIssue(50, ["ready", "skill:review", "agent-eligible"], [40]);
+    return board({ open: [review], issues: { 40: dependency, 50: review }, threads });
+  };
+
+  test("the dependency's assignee is refused with the reason, and the seat stays ready", async () => {
+    const fake = await runCycle(deliveredBoard({ 50: [claim(9100, "jlwaugh")] }));
+
+    const reply = fake.comments.find(c => c.number === 50);
+    assert.match(reply.body, /^@jlwaugh can't claim this task: this task reviews #40, which you delivered — a sign-off means someone else checked the work\.$/);
+    assert.deepEqual(fake.reactions[9100], [{ user: { login: "multi-agency" }, content: "-1" }]);
+    assert.deepEqual(fake.assigns, [], "nothing is assigned to a refused claim");
+    assert.deepEqual(labelWrites(fake, 50), [], "the seat stays ready");
+  });
+
+  test("a roster member who delivered none of the dependencies still claims it", async () => {
+    const fake = await runCycle(deliveredBoard({ 50: [claim(9101, "multi-agency")] }));
+
+    assert.deepEqual(fake.assigns, [{ number: 50, login: "multi-agency" }]);
+    assert.deepEqual(fake.labelPosts.find(w => w.number === 50)?.labels, ["in-progress"]);
+    assert.deepEqual(fake.reactions[9101], [{ user: { login: "multi-agency" }, content: "+1" }]);
+    assert.match(fake.comments.find(c => c.number === 50).body, /Claimed by @multi-agency\. .*`agent\.agency\.testnet`/);
   });
 });

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { describe, test } from "node:test";
+import { afterEach, describe, test } from "node:test";
 
 import { assignmentClaims, isChangeRequest, revisionNotice } from "../lib/coordinator.mjs";
 import { fence, fenced } from "../lib/github.mjs";
 import { byGithub, covers, isProfileUpdate } from "../lib/roster.mjs";
-import { eligibility, handoffProblem, isClaim, pinProblem, seat } from "../lib/seats.mjs";
+import { eligibility, handoffProblem, isClaim, pinProblem, seat, selfReviewProblem } from "../lib/seats.mjs";
 
 const issue = (overrides = {}) => ({
   number: 11,
@@ -29,6 +29,22 @@ const issue = (overrides = {}) => ({
 
 const agent = { kind: "agent", skills: ["research", "writing"] };
 const human = { kind: "human", skills: ["review"] };
+
+// Serves the default seat's dependency #10 with the given assignees: a ready
+// seat's dependencies are closed, so checking who delivered them reads each
+// dependency issue.
+const realFetch = globalThis.fetch;
+afterEach(() => { globalThis.fetch = realFetch; });
+const serveDependency = (...deliveredBy) => {
+  globalThis.fetch = async (url, options = {}) => {
+    const u = new URL(url);
+    if (u.pathname !== "/repos/MultiAgency/kanban-sandbox/issues/10" || (options.method ?? "GET") !== "GET") {
+      throw new Error(`unexpected request: ${options.method ?? "GET"} ${u.pathname}${u.search}`);
+    }
+    return new Response(JSON.stringify({ number: 10, assignees: deliveredBy.map(login => ({ login })) }),
+      { status: 200, headers: { "content-type": "application/json" } });
+  };
+};
 
 describe("fenced blocks", () => {
   test("round-trips a handoff block", () => {
@@ -63,6 +79,14 @@ describe("seats", () => {
     assert.match(eligibility(notAgentEligible, agent), /not agent-eligible/);
     assert.equal(eligibility(seat(issue()), { kind: "agent", skills: ["research"] }), null);
   });
+
+  test("refuses a claimant who delivered a seat this one depends on", async () => {
+    serveDependency("jlwaugh");
+    assert.match(await selfReviewProblem(seat(issue()), "jlwaugh"),
+      /this task reviews #10, which you delivered — a sign-off means someone else checked the work/);
+    assert.equal(await selfReviewProblem(seat(issue()), "multi-agency"), null);
+    assert.equal(await selfReviewProblem(seat(issue({ body: fence("terms", { engagement: 5, amount: "1000000" }) })), "jlwaugh"), null);
+  });
 });
 
 describe("native assignment claims", () => {
@@ -71,50 +95,64 @@ describe("native assignment claims", () => {
   const humanOnly = assignees =>
     seat(issue({ labels: [{ name: "ready" }, { name: "skill:review" }, { name: "human-only" }], assignees }));
 
-  test("an eligible assignee is accepted, naming the payout account", () => {
-    const { accepted, refused } = assignmentClaims(assigned("multi-agency"));
+  test("an eligible assignee is accepted, naming the payout account", async () => {
+    serveDependency();
+    const { accepted, refused } = await assignmentClaims(assigned("multi-agency"));
     assert.ok(accepted);
     assert.equal(accepted.login, "multi-agency");
     assert.equal(accepted.builder.nearAccount, "agent.agency.testnet");
     assert.deepEqual(refused, []);
   });
 
-  test("a human assignee may take a human-only seat", () => {
-    const { accepted } = assignmentClaims(humanOnly([{ login: "jlwaugh" }]));
+  test("a human assignee may take a human-only seat", async () => {
+    serveDependency();
+    const { accepted } = await assignmentClaims(humanOnly([{ login: "jlwaugh" }]));
     assert.ok(accepted);
     assert.equal(accepted.builder.nearAccount, "reviewer.agency.testnet");
   });
 
-  test("ineligible assignees are refused with the /claim reasons", () => {
-    const offRoster = assignmentClaims(assigned("stranger"));
+  test("ineligible assignees are refused with the /claim reasons", async () => {
+    serveDependency();
+    const offRoster = await assignmentClaims(assigned("stranger"));
     assert.equal(offRoster.accepted, null);
     assert.match(offRoster.refused[0].refusal, /not on the MultiAgency roster/);
-    assert.match(assignmentClaims(humanOnly([{ login: "multi-agency" }])).refused[0].refusal, /human-only/);
+    assert.match(await assignmentClaims(humanOnly([{ login: "multi-agency" }])).then(r => r.refused[0].refusal), /human-only/);
     const notAgentEligible = seat(issue({ labels: [{ name: "ready" }, { name: "skill:writing" }], assignees: [{ login: "multi-agency" }] }));
-    assert.match(assignmentClaims(notAgentEligible).refused[0].refusal, /not agent-eligible/);
+    assert.match((await assignmentClaims(notAgentEligible)).refused[0].refusal, /not agent-eligible/);
     const outsideSkills = seat(issue({ labels: [{ name: "ready" }, { name: "skill:review" }, { name: "agent-eligible" }], assignees: [{ login: "multi-agency" }] }));
-    assert.equal(assignmentClaims(outsideSkills).accepted?.login, "multi-agency");
+    assert.equal((await assignmentClaims(outsideSkills)).accepted?.login, "multi-agency");
   });
 
-  test("the first eligible assignee wins and ineligible ones are refused", () => {
-    const { accepted, refused } = assignmentClaims(assigned("stranger", "multi-agency", "nobody"));
+  test("an assignee who delivered a dependency is refused; another roster member still gets the seat", async () => {
+    serveDependency("jlwaugh");
+    const { accepted, refused } = await assignmentClaims(assigned("jlwaugh", "multi-agency"));
+    assert.equal(accepted.login, "multi-agency");
+    assert.deepEqual(refused.map(claim => claim.login), ["jlwaugh"]);
+    assert.match(refused[0].refusal, /this task reviews #10, which you delivered — a sign-off means someone else checked the work/);
+  });
+
+  test("the first eligible assignee wins and ineligible ones are refused", async () => {
+    serveDependency();
+    const { accepted, refused } = await assignmentClaims(assigned("stranger", "multi-agency", "nobody"));
     assert.equal(accepted.login, "multi-agency");
     assert.deepEqual(refused.map(claim => claim.login), ["stranger", "nobody"]);
   });
 
-  test("two eligible assignees: the first wins and the second is refused naming the winner", () => {
+  test("two eligible assignees: the first wins and the second is refused naming the winner", async () => {
+    serveDependency();
     const contested = seat(issue({
       labels: [{ name: "ready" }, { name: "agent-eligible" }],
       assignees: [{ login: "multi-agency" }, { login: "jlwaugh" }],
     }));
-    const { accepted, refused } = assignmentClaims(contested);
+    const { accepted, refused } = await assignmentClaims(contested);
     assert.equal(accepted.login, "multi-agency");
     assert.deepEqual(refused.map(claim => claim.login), ["jlwaugh"]);
     assert.match(refused[0].refusal, /@multi-agency claimed it first/);
   });
 
-  test("a seat nobody assigned has nothing to settle", () => {
-    const { accepted, refused } = assignmentClaims(seat(issue()));
+  test("a seat nobody assigned has nothing to settle", async () => {
+    serveDependency();
+    const { accepted, refused } = await assignmentClaims(seat(issue()));
     assert.equal(accepted, null);
     assert.deepEqual(refused, []);
   });
