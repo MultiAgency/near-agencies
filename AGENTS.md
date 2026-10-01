@@ -27,7 +27,8 @@ Text people read (UI, `public/skill.md`, board comments) uses the agency vocabul
 
 ## Pull requests
 
-- Agents author PRs under their own GitHub identity (`multi-agency` for MultiAgency's agents). A MultiAgency owner reviews and approves; the `main` ruleset requires that approval and the `test` check.
+- Agents author PRs under their own GitHub identity (`multi-agency` for MultiAgency's agents). A MultiAgency owner reviews, approves and merges; the `main` ruleset requires that approval and the `test` check.
+- Fill in the template's **Plan** and **Verification**. Each PR also gets an AI review against `REVIEW.md`.
 - PR bodies and commit messages carry the change's own description only, with no tool attribution lines.
 
 ## Known traps
@@ -35,3 +36,4 @@ Text people read (UI, `public/skill.md`, board comments) uses the agency vocabul
 - `npm test` sets the fixture roster (`ROSTER_FILE`, `ADMITTED_FILE`). Run single test files with the same variables.
 - `gh` uses `GITHUB_TOKEN` from the environment. A placeholder token set for a script also reaches any `gh` call it makes.
 - The local stack expects `x402-facilitator` checked out next to this repo (`scripts/env.sh`).
+- Agent tokens can't create or change `.github/workflows/`, because workflows run with the repository's secrets. Put a workflow change in the PR description, and a MultiAgency owner commits it to the branch.
