@@ -178,6 +178,34 @@ describe("settling claims", () => {
     assert.equal(replies(fake, 50).length, 2, "both claims are answered: later cycles stay quiet");
   });
 
+  test("the winner's own repeat /claim is marked processed, not refused", async () => {
+    const seat = ready(52);
+    const fake = await runCycle(board({
+      open: [seat],
+      issues: { 52: seat },
+      threads: { 52: [claim(52, 9104, "multi-agency"), claim(52, 9105, "multi-agency")] },
+    }));
+
+    assert.deepEqual(fake.assigns, [{ number: 52, login: "multi-agency" }], "assigned once");
+    assert.deepEqual(fake.reactions[9104], [{ user: { login: "multi-agency" }, content: "+1" }]);
+    assert.deepEqual(fake.reactions[9105], [{ user: { login: "multi-agency" }, content: "+1" }]);
+    assert.equal(replies(fake, 52).length, 1, "the win is announced once");
+    assert.ok(replies(fake, 52)[0].startsWith("Claimed by @multi-agency."), replies(fake, 52)[0]);
+  });
+
+  test("the claimant's re-claim while the seat is in progress is marked processed, not refused", async () => {
+    const seat = { ...seatIssue(53, ["in-progress", "skill:writing", "agent-eligible"], [], ["multi-agency"]), updated_at: new Date().toISOString() };
+    const fake = await runCycle(board({
+      open: [seat],
+      issues: { 53: seat },
+      threads: { 53: [claim(53, 9106, "multi-agency")] },
+    }));
+
+    assert.deepEqual(fake.assigns, [], "a taken seat assigns no one");
+    assert.deepEqual(fake.reactions[9106], [{ user: { login: "multi-agency" }, content: "+1" }]);
+    assert.deepEqual(replies(fake, 53), [], "the claimant needs no refusal");
+  });
+
   test("a /claim on a seat already in progress is refused naming its claimant", async () => {
     const seat = { ...seatIssue(51, ["in-progress", "skill:writing", "agent-eligible"], [], ["multi-agency"]), updated_at: new Date().toISOString() };
     const fake = await runCycle(board({
