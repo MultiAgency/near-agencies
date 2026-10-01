@@ -45,8 +45,19 @@ describe("recovering stuck engagements", () => {
     assert.equal(records["ma-1"].status, "open");
     assert.equal(records["ma-1"].issue, 7);
     assert.equal(records["ma-1"].brief, undefined);
-    // The lookup starts a minute before the record was first claimed.
-    assert.equal(listedSince, minutesAgo(11));
+    // The lookup starts a minute before the quote was created, which no epic can predate.
+    assert.equal(listedSince, minutesAgo(61));
+  });
+
+  test("a second recovery after a failed lookup finds the original epic", async () => {
+    // The first attempt claimed at NOW-12, created epic #7, then died.
+    const records = { "ma-1": record("ma-1", { status: "opening", opening_at: minutesAgo(12) }) };
+    const epic = epicFor("ma-1", 7, { updated_at: minutesAgo(12) });
+    const listEpics = async since => [epic].filter(i => i.updated_at >= since);
+    const store = memoryStore(records);
+    await recoverStuck({ store, now: NOW - 6 * 60_000, listEpics: async () => { throw new Error("502"); }, create: async () => assert.fail() });
+    await recoverStuck({ store, now: NOW, listEpics, create: async () => assert.fail("created a duplicate epic") });
+    assert.equal(records["ma-1"].issue, 7);
   });
 
   test("with no epic on the board it creates exactly one", async () => {
