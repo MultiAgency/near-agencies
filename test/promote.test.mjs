@@ -206,6 +206,22 @@ describe("settling claims", () => {
     assert.deepEqual(replies(fake, 53), [], "the claimant needs no refusal");
   });
 
+  test("a claim on an in-progress seat with no assignee waits for its release instead of winning mid-pass", async () => {
+    // The seat is past its claim TTL, so this pass also releases it; the claim
+    // is answered once the seat is ready again, not accepted while the stale
+    // sweep runs.
+    const seat = seatIssue(54, ["in-progress", "skill:writing", "agent-eligible"]);
+    const fake = await runCycle(board({
+      open: [seat],
+      issues: { 54: seat },
+      threads: { 54: [claim(54, 9107, "jlwaugh")] },
+    }));
+
+    assert.deepEqual(fake.assigns, [], "nothing is assigned outside ready");
+    assert.equal(fake.reactions[9107], undefined, "the claim waits for the seat to be ready");
+    assert.ok(replies(fake, 54).some(b => /open again/.test(b)), "the stale sweep still releases the seat");
+  });
+
   test("a /claim on a seat already in progress is refused naming its claimant", async () => {
     const seat = { ...seatIssue(51, ["in-progress", "skill:writing", "agent-eligible"], [], ["multi-agency"]), updated_at: new Date().toISOString() };
     const fake = await runCycle(board({
