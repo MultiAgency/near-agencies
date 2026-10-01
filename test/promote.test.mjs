@@ -11,13 +11,13 @@ afterEach(() => { globalThis.fetch = realFetch; });
 const REPO = "/repos/MultiAgency/kanban-sandbox";
 const terms = fence("terms", { engagement: 5, amount: "1000000", asset: "usdc" });
 
-const seatIssue = (number, labels, dependsOn = []) => ({
+const seatIssue = (number, labels, dependsOn = [], assignees = []) => ({
   number,
   title: `Write: comparison #${number}`,
   html_url: `https://github.com/MultiAgency/kanban-sandbox/issues/${number}`,
   state: "open",
   updated_at: "2026-09-28T01:00:00Z",
-  assignees: [],
+  assignees: assignees.map(login => ({ login })),
   labels: labels.map(name => ({ name })),
   body: [
     "Turn the research into a comparison.",
@@ -30,8 +30,11 @@ const seatIssue = (number, labels, dependsOn = []) => ({
 // A fetch stub serving the requests one cycle makes, with a log of everything
 // it saw. `closes` lists seats flipped to state "closed" as soon as the open
 // list has been served: an owner closing a seat mid-cycle, the race pinned here.
-const board = ({ open = [], closes = [], issues = {}, closedByLabel = {} }) => {
-  const state = { calls: [], comments: [], labelPosts: [] };
+// `threads` holds each seat's comments; the bot's replies join its thread, so a
+// later cycle sees them as it would on GitHub.
+const board = ({ open = [], closes = [], issues = {}, closedByLabel = {}, threads = {} }) => {
+  const state = { calls: [], comments: [], labelPosts: [], patches: [], reactions: {}, unassigns: [] };
+  let nextId = 1;
   const serve = async (url, options = {}) => {
     const method = options.method ?? "GET";
     const u = new URL(url);
@@ -44,12 +47,37 @@ const board = ({ open = [], closes = [], issues = {}, closedByLabel = {} }) => {
     const seat = u.pathname.match(`${REPO}/issues/(\\d+)$`);
     if (seat) {
       const found = issues[Number(seat[1])];
+      if (method === "PATCH") {
+        const patch = JSON.parse(options.body);
+        state.patches.push({ number: Number(seat[1]), ...patch });
+        if (found) found.state = patch.state ?? found.state;
+        return json(found ?? {});
+      }
       return found ? json(found) : refuse();
+    }
+    const reactions = u.pathname.match(`${REPO}/issues/comments/(\\d+)/reactions$`);
+    if (reactions) {
+      const id = Number(reactions[1]);
+      if (method === "GET") return json(state.reactions[id] ?? []);
+      state.reactions[id] = [...(state.reactions[id] ?? []), { user: { login: "multi-agency" }, content: JSON.parse(options.body).content }];
+      return json({});
+    }
+    const assignees = u.pathname.match(`${REPO}/issues/(\\d+)/assignees$`);
+    if (assignees && method === "DELETE") {
+      state.unassigns.push({ number: Number(assignees[1]), login: JSON.parse(options.body).assignees[0] });
+      return json({});
     }
     const thread = u.pathname.match(`${REPO}/issues/(\\d+)/comments$`);
     if (thread) {
-      if (method === "GET") return json([]);
-      state.comments.push({ number: Number(thread[1]), body: JSON.parse(options.body).body });
+      const number = Number(thread[1]);
+      if (method === "GET") return json(threads[number] ?? []);
+      const body = JSON.parse(options.body).body;
+      state.comments.push({ number, body });
+      const at = new Date().toISOString();
+      (threads[number] ??= []).push({
+        id: nextId, user: { login: "multi-agency" }, body, created_at: at, updated_at: at,
+        html_url: `https://github.com/MultiAgency/kanban-sandbox/issues/${number}#issuecomment-${nextId++}`,
+      });
       return json({});
     }
     const posted = u.pathname.match(`${REPO}/issues/(\\d+)/labels$`);
@@ -131,5 +159,98 @@ describe("tidying closed seats", () => {
     assert.ok(fake.calls.includes(`DELETE ${REPO}/issues/30/labels/in-progress`));
     assert.ok(fake.calls.includes(`DELETE ${REPO}/issues/31/labels/ready`));
     assert.ok(fake.calls.includes(`DELETE ${REPO}/issues/32/labels/blocked`));
+  });
+});
+
+describe("closing a seat on its handoff", () => {
+  // Claimed just now, so the stale sweep stays out of the way unless a test opts in.
+  const claimed = (number, updated_at = new Date().toISOString()) =>
+    ({ ...seatIssue(number, ["in-progress", "skill:review"], [], ["jlwaugh"]), updated_at });
+  const posted = "2026-09-30T20:14:21Z";
+  const byClaimant = (number, id, body, at = posted) => ({
+    id, user: { login: "jlwaugh" }, body, created_at: at, updated_at: at,
+    html_url: `https://github.com/MultiAgency/kanban-sandbox/issues/${number}#issuecomment-${id}`,
+  });
+  const valid = "**Handoff:** done\n\n" + fence("handoff", { payout: { account_id: "reviewer.agency.testnet" } });
+  // The shape seen on kanban-sandbox#39: valid JSON, closing fence missing.
+  const unclosed = valid.replace(/\n```$/, "");
+  const replies = (fake, number) => fake.comments.filter(c => c.number === number);
+
+  test("an unclosed handoff is answered once, linking it, and the seat stays open", async () => {
+    const seat = claimed(40);
+    const handoff = byClaimant(40, 9001, unclosed);
+    const fake = await runCycle(board({ open: [seat], issues: { 40: seat }, threads: { 40: [handoff] } }));
+
+    assert.equal(replies(fake, 40).length, 1);
+    assert.match(replies(fake, 40)[0].body, /^@jlwaugh, \[this handoff\]\(.+#issuecomment-9001\) can't close the task: its handoff block is never closed/);
+    assert.match(replies(fake, 40)[0].body, /Edit it, or post a corrected one/);
+    assert.deepEqual(fake.patches, [], "the seat is not closed on an unreadable handoff");
+
+    await runCycle(fake);
+    assert.equal(replies(fake, 40).length, 1, "the reply answers it: later cycles stay quiet");
+  });
+
+  test("editing the unreadable handoff into a valid one closes the seat (the #39 path)", async () => {
+    const seat = claimed(41);
+    const handoff = byClaimant(41, 9002, unclosed);
+    const fake = await runCycle(board({ open: [seat], issues: { 41: seat }, threads: { 41: [handoff] } }));
+    assert.equal(replies(fake, 41).length, 1);
+
+    // The claimant fixes the same comment after the reply.
+    handoff.body = valid;
+    handoff.updated_at = new Date(Date.now() + 60_000).toISOString();
+    await runCycle(fake);
+
+    assert.deepEqual(fake.patches, [{ number: 41, state: "closed", state_reason: "completed" }]);
+    assert.deepEqual(fake.reactions[9002], [{ user: { login: "multi-agency" }, content: "+1" }]);
+    assert.equal(replies(fake, 41).length, 1, "no second reply");
+  });
+
+  test("an edit that is still unreadable is answered again, with the new reason", async () => {
+    const seat = claimed(42);
+    const handoff = byClaimant(42, 9003, unclosed);
+    const fake = await runCycle(board({ open: [seat], issues: { 42: seat }, threads: { 42: [handoff] } }));
+
+    handoff.body = "**Handoff:** done\n\n```handoff\n{not json}\n```";
+    handoff.updated_at = new Date(Date.now() + 60_000).toISOString();
+    await runCycle(fake);
+
+    assert.equal(replies(fake, 42).length, 2);
+    assert.match(replies(fake, 42)[1].body, /its handoff block is not valid JSON/);
+    assert.deepEqual(fake.patches, []);
+  });
+
+  test("a corrected handoff posted after an unreadable one closes on the new one", async () => {
+    const seat = claimed(43);
+    const fake = await runCycle(board({
+      open: [seat],
+      issues: { 43: seat },
+      threads: { 43: [byClaimant(43, 9004, unclosed), byClaimant(43, 9005, valid, "2026-09-30T20:20:00Z")] },
+    }));
+
+    assert.deepEqual(fake.patches, [{ number: 43, state: "closed", state_reason: "completed" }]);
+    assert.deepEqual(fake.reactions[9005], [{ user: { login: "multi-agency" }, content: "+1" }]);
+    assert.deepEqual(replies(fake, 43), []);
+  });
+
+  test("a valid handoff closes the seat with no reply", async () => {
+    const seat = claimed(44);
+    const fake = await runCycle(board({ open: [seat], issues: { 44: seat }, threads: { 44: [byClaimant(44, 9006, valid)] } }));
+
+    assert.deepEqual(fake.patches, [{ number: 44, state: "closed", state_reason: "completed" }]);
+    assert.deepEqual(replies(fake, 44), []);
+  });
+
+  test("a question about the format is not a handoff, and the stale sweep applies as before", async () => {
+    const seat = claimed(45, "2026-09-28T01:00:00Z");
+    const fake = await runCycle(board({
+      open: [seat],
+      issues: { 45: seat },
+      threads: { 45: [byClaimant(45, 9007, "What should the ```handoff block contain? The example has a sha256 field.")] },
+    }));
+
+    assert.deepEqual(fake.comments.filter(c => /can't close the task/.test(c.body)), []);
+    assert.deepEqual(fake.unassigns, [{ number: 45, login: "jlwaugh" }]);
+    assert.ok(replies(fake, 45).some(c => /No handoff after 24 hours/.test(c.body)));
   });
 });
