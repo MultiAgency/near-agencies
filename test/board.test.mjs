@@ -33,19 +33,27 @@ const issue = (overrides = {}) => ({
 const agent = { kind: "agent", skills: ["research", "writing"] };
 const human = { kind: "human", skills: ["review"] };
 
-// Serves the default seat's dependency #10 with the given assignees: a ready
-// seat's dependencies are closed, so checking who delivered them reads each
-// dependency issue.
+// Serves the default seat's dependency #10: its assignees and the claims its
+// thread records. A ready seat's dependencies are closed, so checking who
+// delivered them reads each dependency issue and its comments.
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
-const serveDependency = (...deliveredBy) => {
+const comment = (id, login, body) => ({ id, user: { login }, body });
+const claimedRecord = (id, by, login) =>
+  comment(id, by, `Claimed by @${login}. Once the work is signed off, 1 USDC is paid to \`x.testnet\`.`);
+const serveDependency = (assignees = [], records = []) => {
   globalThis.fetch = async (url, options = {}) => {
     const u = new URL(url);
-    if (u.pathname !== "/repos/MultiAgency/kanban-sandbox/issues/10" || (options.method ?? "GET") !== "GET") {
-      throw new Error(`unexpected request: ${options.method ?? "GET"} ${u.pathname}${u.search}`);
+    const get = (options.method ?? "GET") === "GET";
+    const json = body => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    if (get && u.pathname === "/user") return json({ login: "multi-agency" });
+    if (get && u.pathname === "/repos/MultiAgency/kanban-sandbox/issues/10") {
+      return json({ number: 10, assignees: assignees.map(login => ({ login })) });
     }
-    return new Response(JSON.stringify({ number: 10, assignees: deliveredBy.map(login => ({ login })) }),
-      { status: 200, headers: { "content-type": "application/json" } });
+    if (get && u.pathname === "/repos/MultiAgency/kanban-sandbox/issues/10/comments") return json(records);
+    const permission = u.pathname.match(/^\/repos\/[^/]+\/[^/]+\/collaborators\/([^/]+)\/permission$/);
+    if (get && permission) return json({ role_name: "read" });
+    throw new Error(`unexpected request: ${options.method ?? "GET"} ${u.pathname}${u.search}`);
   };
 };
 
@@ -83,11 +91,25 @@ describe("seats", () => {
     assert.equal(eligibility(seat(issue()), { kind: "agent", skills: ["research"] }), null);
   });
 
-  test("refuses a claimant who delivered a seat this one depends on", async () => {
-    serveDependency("jlwaugh");
-    assert.match(await selfReviewProblem(seat(issue()), "jlwaugh"),
+  test("refuses a claimant who delivered a seat this one reviews", async () => {
+    const review = seat(issue({ labels: [{ name: "ready" }, { name: "skill:review" }] }));
+    serveDependency(["jlwaugh"]);
+    assert.match(await selfReviewProblem(review, "jlwaugh"),
       /this task reviews #10, which you delivered — a sign-off means someone else checked the work/);
-    assert.equal(await selfReviewProblem(seat(issue()), "multi-agency"), null);
+    assert.equal(await selfReviewProblem(review, "multi-agency"), null);
+  });
+
+  test("the coordinator's claimed record refuses too, but only from the bot or an owner", async () => {
+    const review = seat(issue({ labels: [{ name: "ready" }, { name: "skill:review" }] }));
+    serveDependency([], [claimedRecord(1, "multi-agency", "jlwaugh")]);
+    assert.match(await selfReviewProblem(review, "jlwaugh"), /reviews #10, which you delivered/);
+    serveDependency([], [claimedRecord(2, "stranger", "jlwaugh")]);
+    assert.equal(await selfReviewProblem(review, "jlwaugh"), null, "a forged record counts for nothing");
+  });
+
+  test("a seat that only builds on its dependency gates nobody", async () => {
+    serveDependency(["jlwaugh"]);
+    assert.equal(await selfReviewProblem(seat(issue()), "jlwaugh"), null);
     assert.equal(await selfReviewProblem(seat(issue({ body: fence("terms", { engagement: 5, amount: "1000000" }) })), "jlwaugh"), null);
   });
 });
@@ -127,8 +149,12 @@ describe("native assignment claims", () => {
   });
 
   test("an assignee who delivered a dependency is refused; another roster member still gets the seat", async () => {
-    serveDependency("jlwaugh");
-    const { accepted, refused } = await assignmentClaims(assigned("jlwaugh", "multi-agency"));
+    serveDependency(["jlwaugh"]);
+    const reviewOf = logins => seat(issue({
+      labels: [{ name: "ready" }, { name: "skill:review" }, { name: "agent-eligible" }],
+      assignees: logins.map(login => ({ login })),
+    }));
+    const { accepted, refused } = await assignmentClaims(reviewOf(["jlwaugh", "multi-agency"]));
     assert.equal(accepted.login, "multi-agency");
     assert.deepEqual(refused.map(claim => claim.login), ["jlwaugh"]);
     assert.match(refused[0].refusal, /this task reviews #10, which you delivered — a sign-off means someone else checked the work/);

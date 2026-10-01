@@ -112,6 +112,8 @@ const board = ({ open = [], closes = [], issues = {}, closedByLabel = {}, thread
       if (found) found.labels = found.labels.filter(l => l.name !== decodeURIComponent(label[2]));
       return new Response(null, { status: 204 });
     }
+    const permission = u.pathname.match(`${REPO}/collaborators/([^/]+)/permission$`);
+    if (permission && method === "GET") return json({ role_name: "read" });
     if (u.pathname === `${REPO}/issues` && method === "GET") {
       const labels = u.searchParams.get("labels");
       if (u.searchParams.get("state") === "closed") return json(closedByLabel[labels] ?? []);
@@ -373,19 +375,29 @@ describe("closing a seat on its handoff", () => {
 describe("refusing a claim on one's own delivered work", () => {
   // skill.md §2: don't claim the review of a task you delivered. The review
   // seat's dependency #40 was delivered by @jlwaugh.
-  const dependency = seatIssue(40, [], [], ["jlwaugh"]);
+  const dependency = (assignees = []) => seatIssue(40, [], [], assignees);
+  const record = (id, by, login) => ({
+    id, user: { login: by }, body: `Claimed by @${login}. Once the work is signed off, 1 USDC is paid to \`x.testnet\`.`,
+    created_at: "2026-09-30T20:00:00Z", updated_at: "2026-09-30T20:00:00Z",
+    html_url: `https://github.com/MultiAgency/kanban-sandbox/issues/40#issuecomment-${id}`,
+  });
   const claim = (id, login) => ({
     id, user: { login }, body: "/claim",
     created_at: "2026-09-30T21:00:00Z", updated_at: "2026-09-30T21:00:00Z",
     html_url: `https://github.com/MultiAgency/kanban-sandbox/issues/50#issuecomment-${id}`,
   });
-  const deliveredBoard = threads => {
+  const board50 = (on50, extra = {}, dep = dependency(["jlwaugh"])) => {
     const review = seatIssue(50, ["ready", "skill:review", "agent-eligible"], [40]);
-    return board({ open: [review], issues: { 40: dependency, 50: review }, threads });
+    return board({ open: [review], issues: { 40: dep, 50: review }, threads: { 50: on50, ...extra } });
+  };
+  const accepted50 = fake => {
+    assert.deepEqual(fake.assigns, [{ number: 50, login: "multi-agency" }]);
+    assert.deepEqual(fake.labelPosts.find(w => w.number === 50)?.labels, ["in-progress"]);
+    assert.match(fake.comments.find(c => c.number === 50).body, /Claimed by @multi-agency\. .*`agent\.agency\.testnet`/);
   };
 
   test("the dependency's assignee is refused with the reason, and the seat stays ready", async () => {
-    const fake = await runCycle(deliveredBoard({ 50: [claim(9100, "jlwaugh")] }));
+    const fake = await runCycle(board50([claim(9100, "jlwaugh")]));
 
     const reply = fake.comments.find(c => c.number === 50);
     assert.match(reply.body, /^@jlwaugh can't claim this task: this task reviews #40, which you delivered — a sign-off means someone else checked the work\.$/);
@@ -394,12 +406,31 @@ describe("refusing a claim on one's own delivered work", () => {
     assert.deepEqual(labelWrites(fake, 50), [], "the seat stays ready");
   });
 
-  test("a roster member who delivered none of the dependencies still claims it", async () => {
-    const fake = await runCycle(deliveredBoard({ 50: [claim(9101, "multi-agency")] }));
+  test("the coordinator's claimed record refuses even after the assignee was cleared", async () => {
+    const fake = await runCycle(board50([claim(9100, "jlwaugh")], { 40: [record(9000, "multi-agency", "jlwaugh")] }, dependency()));
 
-    assert.deepEqual(fake.assigns, [{ number: 50, login: "multi-agency" }]);
-    assert.deepEqual(fake.labelPosts.find(w => w.number === 50)?.labels, ["in-progress"]);
-    assert.deepEqual(fake.reactions[9101], [{ user: { login: "multi-agency" }, content: "+1" }]);
-    assert.match(fake.comments.find(c => c.number === 50).body, /Claimed by @multi-agency\. .*`agent\.agency\.testnet`/);
+    assert.match(fake.comments.find(c => c.number === 50).body, /can't claim this task: this task reviews #40, which you delivered/);
+    assert.deepEqual(fake.assigns, []);
+  });
+
+  test("a claimed record forged by a stranger gates nobody", async () => {
+    const fake = await runCycle(board50([claim(9101, "multi-agency")], { 40: [record(9001, "stranger", "jlwaugh")] }, dependency()));
+
+    accepted50(fake);
+  });
+
+  test("a roster member who delivered none of the dependencies still claims it", async () => {
+    const fake = await runCycle(board50([claim(9101, "multi-agency")]));
+
+    accepted50(fake);
+  });
+
+  test("work that only builds on its dependency is not gated: the writer may claim after researching", async () => {
+    const research = dependency(["jlwaugh"]);
+    const writing = seatIssue(51, ["ready", "skill:writing", "agent-eligible"], [40]);
+    const fake = await runCycle(board({ open: [writing], issues: { 40: research, 51: writing }, threads: { 51: [claim(9102, "jlwaugh")] } }));
+
+    assert.deepEqual(fake.assigns, [{ number: 51, login: "jlwaugh" }]);
+    assert.deepEqual(fake.comments.filter(c => /can't claim this task/.test(c.body)), []);
   });
 });
