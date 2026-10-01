@@ -6,6 +6,9 @@ import { fence, fenced } from "../lib/github.mjs";
 import { byGithub, covers, isProfileUpdate } from "../lib/roster.mjs";
 import { eligibility, handoffProblem, isClaim, pinProblem, seat, selfReviewProblem } from "../lib/seats.mjs";
 
+// Requests go only to the fetch stubs below; the token just has to resolve.
+process.env.GITHUB_TOKEN = "test-token";
+
 const issue = (overrides = {}) => ({
   number: 11,
   title: "Write: comparison",
