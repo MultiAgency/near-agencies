@@ -91,6 +91,12 @@ describe("idle jobs", () => {
     assert.deepEqual(await report([forPeople], events), []);
   });
 
+  test("human-only vetoes agent-eligible, as it does for the workers", async () => {
+    const events = { 20: [labeled("2026-09-28T00:00:00Z")] };
+    const vetoed = seat(seatIssue(20, { labels: ["ready", "agent-eligible", "human-only"] }));
+    assert.deepEqual(await report([vetoed], events), []);
+  });
+
   test("jobs are reported separately, most stale first", async () => {
     const events = { 20: [labeled("2026-09-28T00:00:00Z")], 23: [labeled("2026-09-27T19:00:00Z")] }; // 25h and 30h
     const seats = [seat(seatIssue(20)), seat(seatIssue(23, { job: 6 }))];
