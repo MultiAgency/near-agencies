@@ -1,6 +1,6 @@
 # Plan: an AI-native engineering loop for near-agencies
 
-Status: accepted 2026-09-30. Phase 1 is this pull request.
+Status: accepted 2026-09-30. Phase 1 done (#55, #56); phase 2 in progress.
 
 ## Goal
 
@@ -12,7 +12,7 @@ Context: near-agencies runs MultiAgency's own operations. The quarter's measure 
 
 - **Strong:** the board's chain of records (brief → job → team draft → `/approve` → tasks → deliverable → pinned handoff → sign-off → DAO payout); CI on every PR; a scheduled maintainer that turns repeated problems into coder cards; Jev in shadow mode before it decides anything.
 - **Weak:**
-  - The `main` ruleset requires a code-owner approval, yet #46–#53 merged with `--admin` and no review. An owner can't approve their own PR, so the gate never passed.
+  - The `main` ruleset requires a code-owner approval, yet #46–#53 merged with no review. An owner can't approve their own PR, so the gate never passed. (Its `update` rule lets only owners merge, through the bypass, so `--admin` is how an owner merges. The approval is what was missing.)
   - Agent knowledge lived in personal notes and chats.
   - Operations tooling and the Jev experiments were unversioned.
   - Merging to `main` deploys straight to production.
@@ -35,7 +35,8 @@ Context: near-agencies runs MultiAgency's own operations. The quarter's measure 
    - `REVIEW.md` with passes for bugs, security (the `CODEOWNERS` paths are high-risk) and compliance with the PR's plan;
    - a PR template with **Plan** and **Verification** sections;
    - the `claude-code-action` review. Fork PRs get no secrets, so an outside contributor's PR is reviewed when an owner triggers it; untrusted code never runs with secrets.
-   - a Claude Code hook that blocks `gh pr merge --admin`.
+   - a Claude Code hook that holds `gh pr merge` on a PR without an approving review;
+   - `CODEOWNERS` also covers `AGENTS.md`, `CLAUDE.md`, `REVIEW.md` and `.claude/`, the files that steer agents.
 3. **Staging:**
    - a Railway `staging` environment deploying the `staging` branch;
    - its own board repo, testnet treasury and keys, domain, and a coordinator running only there;
@@ -57,7 +58,7 @@ Deliberately not now: managed settings, sandboxing, deterministic control bands,
 
 ## How we measure it
 
-- Merges with `--admin`: zero, from PR history.
+- Merges without an approving review: zero, from PR history.
 - Time to the first AI review on a PR.
 - The share of agent PRs merged on the first pass.
 - Corrections to `AGENTS.md` that repeat.

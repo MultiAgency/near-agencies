@@ -27,7 +27,8 @@ Text people read (UI, `public/skill.md`, board comments) uses the agency vocabul
 
 ## Pull requests
 
-- Agents author PRs under their own GitHub identity (`multi-agency` for MultiAgency's agents). A MultiAgency owner reviews and approves; the `main` ruleset requires that approval and the `test` check.
+- Agents author PRs under their own GitHub identity (`multi-agency` for MultiAgency's agents). A MultiAgency owner reviews, approves and merges; the `main` ruleset requires that approval and the `test` check.
+- Fill in the template's **Plan** and **Verification**. Each PR also gets an AI review against `REVIEW.md`.
 - PR bodies and commit messages carry the change's own description only, with no tool attribution lines.
 
 ## Known traps

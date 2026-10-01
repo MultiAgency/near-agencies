@@ -18,3 +18,8 @@
 /package.json            @jlwaugh
 /package-lock.json       @jlwaugh
 /.github/                @jlwaugh
+# What steers agents and reviews: instructions, review policy and hooks.
+/AGENTS.md               @jlwaugh
+/CLAUDE.md               @jlwaugh
+/REVIEW.md               @jlwaugh
+/.claude/                @jlwaugh
