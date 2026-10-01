@@ -84,6 +84,7 @@ describe("preparing a handoff", () => {
     const byId = new Map([[555, comment], ...thread.map(c => [c.id, c])]);
     globalThis.fetch = async url => {
       const path = new URL(url).pathname;
+      if (path === "/user") return new Response(JSON.stringify({ login: "multi-agency" }));
       if (path.endsWith("/issues/39")) return new Response(JSON.stringify(issue));
       if (path.endsWith("/issues/39/comments")) return new Response(JSON.stringify(thread));
       const id = path.match(/\/issues\/comments\/(\d+)$/)?.[1];
@@ -91,6 +92,8 @@ describe("preparing a handoff", () => {
         const found = byId.get(Number(id));
         return found ? new Response(JSON.stringify(found)) : new Response("{}", { status: 404 });
       }
+      const permission = path.match(/^\/repos\/[^/]+\/[^/]+\/collaborators\/([^/]+)\/permission$/);
+      if (permission) return new Response(JSON.stringify({ role_name: permission[1] === "jlwaugh" ? "admin" : "read" }));
       return new Response("{}", { status: 404 });
     };
   }
@@ -142,7 +145,7 @@ describe("preparing a handoff", () => {
   test("with no link it pins the claimant's latest **Deliverable** comment since the last round", async () => {
     const claim = posted(1, "multi-agency", "/claim", 5);
     const first = posted(2, "multi-agency", work, 10);
-    const round = changes(3, "multiagency", 15);
+    const round = changes(3, "jlwaugh", 15);
     const second = posted(4, "multi-agency", "**Deliverable**\n\nRevised with the missing sources.", 20);
     github(task(["in-progress", "skill:research"]), undefined, [claim, first, round, second]);
     const auto = await askAuto();
@@ -164,7 +167,7 @@ describe("preparing a handoff", () => {
 
   test("a deliverable from before the last round is left behind; a new one is used", async () => {
     const stale = posted(1, "multi-agency", work, 10);
-    const round = changes(2, "multiagency", 15);
+    const round = changes(2, "jlwaugh", 15);
     github(task(["in-progress", "skill:research"]), undefined, [stale, round]);
     assert.match((await askAuto()).error, /Post your work on #39/);
     const fresh = posted(3, "multi-agency", "**Deliverable**\n\nRound two, with the fixes.", 20);
@@ -175,6 +178,13 @@ describe("preparing a handoff", () => {
   test("only the claimant's **Deliverable** comments count", async () => {
     github(task(["in-progress", "skill:research"]), undefined, [posted(1, "multi-agency", "/claim", 5), posted(2, "stranger", work, 8)]);
     assert.match((await askAuto()).error, /Post your work on #39/);
+  });
+
+  test("a round counts only when the coordinator routed it: a stranger's ```changes block moves no boundary", async () => {
+    const mine = posted(1, "multi-agency", work, 10);
+    const fake = changes(2, "stranger", 15);
+    github(task(["in-progress", "skill:research"]), undefined, [mine, fake]);
+    assert.equal(fenced((await askAuto()).comment, "handoff").deliverable.sha256, digest(work));
   });
 
   test("an override link to another comment says what that comment opens", async () => {
