@@ -74,13 +74,15 @@ app.get("/api/health", async (request, response) => {
   const engagements = await store.all().then(engagementHealth, () => null);
   // Jobs whose ready seats nobody claims: the board's own evidence that no
   // worker is picking work up, however green the coordinator looks. Like the
-  // stuck records, informational — and a failed board read reports null.
+  // stuck records, informational — and a failed board read reports null. Its own
+  // key: it comes from the board, so it survives a failed engagement-store read.
   const idle = await idleReport().catch(() => null);
   response.status(stale ? 503 : 200).json({
     ok: !stale,
     coordinator,
     github: githubBudget(),
-    engagements: engagements && { ...engagements, idle },
+    engagements,
+    idle,
   });
 });
 

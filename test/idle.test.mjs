@@ -3,7 +3,7 @@ import { afterEach, describe, test } from "node:test";
 
 process.env.GITHUB_TOKEN = "test-token";
 const { fence } = await import("../lib/github.mjs");
-const { idleJobs, idleReport, readySince } = await import("../lib/idle.mjs");
+const { idleAfterMs, idleJobs, idleReport, readySince } = await import("../lib/idle.mjs");
 const { seat } = await import("../lib/seats.mjs");
 
 const realFetch = globalThis.fetch;
@@ -85,6 +85,12 @@ describe("idle jobs", () => {
     assert.deepEqual(await report(seats, events), []);
   });
 
+  test("only agent-eligible seats count: a human-only seat waiting is not a sign of stopped workers", async () => {
+    const events = { 20: [labeled("2026-09-28T00:00:00Z")] };
+    const forPeople = seat(seatIssue(20, { labels: ["ready", "human-only", "skill:review"] }));
+    assert.deepEqual(await report([forPeople], events), []);
+  });
+
   test("jobs are reported separately, most stale first", async () => {
     const events = { 20: [labeled("2026-09-28T00:00:00Z")], 23: [labeled("2026-09-27T19:00:00Z")] }; // 25h and 30h
     const seats = [seat(seatIssue(20)), seat(seatIssue(23, { job: 6 }))];
@@ -92,6 +98,17 @@ describe("idle jobs", () => {
       { job: 6, oldest_ready_seconds: 108_000, ready_seats: 1 },
       { job: 5, oldest_ready_seconds: 90_000, ready_seats: 1 },
     ]);
+  });
+});
+
+describe("the idle threshold", () => {
+  test("hours from IDLE_AFTER_HOURS, 24 when unset", () => {
+    assert.equal(idleAfterMs("6"), 6 * 3600_000);
+    assert.equal(idleAfterMs(undefined), 24 * 3600_000);
+  });
+
+  test("a value that is not a positive number falls back to 24 hours, not to never reporting", () => {
+    for (const bad of ["24h", "", "0", "-3", "abc"]) assert.equal(idleAfterMs(bad), 24 * 3600_000, JSON.stringify(bad));
   });
 });
 
