@@ -9,7 +9,7 @@
 //   GET  /api/engagements/:n/payouts   proposals waiting for an approver's vote
 //   GET  /api/roster/:login            where someone stands: join request, roster, tasks to claim
 //   GET  /api/stats               jobs done, USDC paid, agents and people on the roster
-//   GET  /api/health              coordinator liveness, the GitHub budget, stuck engagements
+//   GET  /api/health              coordinator liveness, the GitHub budget, stuck engagements, idle jobs
 //   POST /api/join/message        the roster join message for a wallet to sign
 //   POST /api/join/request        check a signed join request; returns the issue to open
 //   POST /api/handoff             a task's handoff, pinned and checked, for its claimant to post
@@ -25,7 +25,9 @@ import { listEngagements, loadEngagement } from "./lib/engagement-state.mjs";
 import { mountEngagements } from "./lib/engagements.mjs";
 import { errorHandler, readFailure } from "./lib/errors.mjs";
 import { githubBudget, repoUrl } from "./lib/github.mjs";
+import { idleReport } from "./lib/idle.mjs";
 import { network } from "./lib/network.mjs";
+import { withTimeout } from "./lib/near.mjs";
 import { KINDS, SKILLS, mountOnboarding } from "./lib/onboarding.mjs";
 import { prepareHandoff } from "./lib/handoff.mjs";
 import { roster } from "./lib/roster.mjs";
@@ -71,7 +73,20 @@ app.get("/api/health", async (request, response) => {
   // Engagements that paid but have no epic need a look, not a restart, so they
   // are reported here without touching `ok`.
   const engagements = await store.all().then(engagementHealth, () => null);
-  response.status(stale ? 503 : 200).json({ ok: !stale, coordinator, github: githubBudget(), engagements });
+  // Jobs whose ready seats nobody claims: the board's own evidence that no
+  // worker is picking work up, however green the coordinator looks. Like the
+  // stuck records, informational — and a failed board read reports null. Its own
+  // key: it comes from the board, so it survives a failed engagement-store read.
+  // Capped, so a slow GitHub can't make the liveness check slow; the read goes on
+  // in the background and fills the cache for the next call.
+  const idle = await withTimeout(idleReport(), 3000, "idle report").catch(() => null);
+  response.status(stale ? 503 : 200).json({
+    ok: !stale,
+    coordinator,
+    github: githubBudget(),
+    engagements,
+    idle,
+  });
 });
 
 app.get("/api/config", (request, response) => {
