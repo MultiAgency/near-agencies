@@ -239,7 +239,7 @@ function statusText(quote) {
     opening: "Deposit received. Opening the job…",
     underpaid: `The deposit of ${usdc(quote.deposit?.amount)} USDC is below the quoted amount, so the job was not opened. Contact MultiAgency.`,
     expired: "This quote expired before a deposit arrived. Submit the brief again for a new code.",
-    deposit_settled_epic_failed: "Your deposit is final. The job could not be opened on the first try; we are retrying and this page updates when it opens.",
+    deposit_settled_epic_failed: "Your deposit is final. The job is being opened and this page updates when it is.",
   }[quote.status] ?? quote.status;
 }
 
