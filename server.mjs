@@ -27,6 +27,7 @@ import { errorHandler, readFailure } from "./lib/errors.mjs";
 import { githubBudget, repoUrl } from "./lib/github.mjs";
 import { idleReport } from "./lib/idle.mjs";
 import { network } from "./lib/network.mjs";
+import { withTimeout } from "./lib/near.mjs";
 import { KINDS, SKILLS, mountOnboarding } from "./lib/onboarding.mjs";
 import { prepareHandoff } from "./lib/handoff.mjs";
 import { roster } from "./lib/roster.mjs";
@@ -76,7 +77,9 @@ app.get("/api/health", async (request, response) => {
   // worker is picking work up, however green the coordinator looks. Like the
   // stuck records, informational — and a failed board read reports null. Its own
   // key: it comes from the board, so it survives a failed engagement-store read.
-  const idle = await idleReport().catch(() => null);
+  // Capped, so a slow GitHub can't make the liveness check slow; the read goes on
+  // in the background and fills the cache for the next call.
+  const idle = await withTimeout(idleReport(), 3000, "idle report").catch(() => null);
   response.status(stale ? 503 : 200).json({
     ok: !stale,
     coordinator,
