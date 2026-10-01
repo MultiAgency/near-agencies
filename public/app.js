@@ -228,7 +228,7 @@ async function renderQuote(owner, code) {
     if (owner !== generation) return;
     if (latest.status === "open") return void (location.hash = `#/e/${latest.issue}`);
     document.getElementById("deposit-status").textContent = statusText(latest);
-    if (latest.status === "awaiting_deposit" || latest.status === "opening") timer = setTimeout(poll, 5000);
+    if (["awaiting_deposit", "opening", "deposit_settled_epic_failed"].includes(latest.status)) timer = setTimeout(poll, 5000);
   };
   timer = setTimeout(poll, 5000);
 }
