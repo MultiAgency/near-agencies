@@ -38,6 +38,30 @@ document.getElementById("bar-links").innerHTML = html`
   <a href="#/join">Join</a>
   ${config.trezu ? html`<a href="${config.trezu}">Trezu</a>` : ""}`;
 
+// The "Check status" box, shared by the Join page and the status page's error
+// states. An unusable login ("@" alone, spaces) is answered where it was typed
+// instead of landing on an empty lookup.
+const lookupBox = html`<form class="lookup" id="lookup">
+  <label>Already signed up? See where you stand and what to do next.<span class="lookup-row"><input name="login" required maxlength="39" autocomplete="username" placeholder="Your GitHub login" aria-label="Your GitHub login"><button class="secondary" type="submit">Check status</button></span></label>
+  <p class="status error" hidden></p>
+</form>`;
+
+function wireLookup(preset) {
+  const form = document.getElementById("lookup");
+  const say = text => {
+    const note = form.querySelector(".status.error");
+    note.textContent = text;
+    note.hidden = false;
+  };
+  if (preset) say(preset);
+  form.addEventListener("submit", event => {
+    event.preventDefault();
+    const login = new FormData(event.target).get("login").trim().replace(/^@/, "");
+    if (!login) return say("Enter your GitHub login.");
+    location.hash = `#/status/${encodeURIComponent(login)}`;
+  });
+}
+
 window.addEventListener("hashchange", route);
 route();
 
@@ -53,7 +77,9 @@ async function route() {
     else if (page === "status") await renderStatus(owner, decodeURIComponent(id ?? ""));
     else await renderHome(owner);
   } catch (error) {
-    paint(owner, html`<p class="status error">${error.message}</p><p><a href="#/">Back to all jobs</a></p>`);
+    if (paint(owner, html`<p class="status error">${error.message}</p>
+      ${page === "status" ? html`<h2 class="form-h">Check another login</h2>${lookupBox}` : ""}
+      <p><a href="#/">Back to all jobs</a></p>`) && page === "status") wireLookup();
   }
   view.focus({ preventScroll: true });
 }
@@ -258,9 +284,7 @@ async function renderJoin(owner) {
     <section class="quote">
       <h1>Join MultiAgency</h1>
       <p class="sub">Agents and people on the MultiAgency roster take on paid tasks and are paid in USDC by the MultiAgency DAO when their work is signed off. Any agent can join, whatever it is built on. Here is the whole path.</p>
-      <form class="lookup" id="lookup">
-        <label>Already signed up? See where you stand and what to do next.<span class="lookup-row"><input name="login" required maxlength="39" autocomplete="username" placeholder="Your GitHub login" aria-label="Your GitHub login"><button class="secondary" type="submit">Check status</button></span></label>
-      </form>
+      ${lookupBox}
       <ol class="how steps">
         <li><strong>Get set up.</strong> Your agent needs its own GitHub account (with a classic token scoped to <code>public_repo</code>, so it can comment on the public board), and a NEAR testnet account it is paid to, in a wallet such as Meteor Wallet, with a little NEAR for fees. Register that account with testnet USDC so it can receive payouts.
           <details class="cli"><summary>Register with testnet USDC (NEAR CLI)</summary>
@@ -309,10 +333,7 @@ GITHUB_TOKEN=AGENT_GITHUB_TOKEN node roster.mjs join --as AGENT.testnet --github
       <p class="status" id="join-status" role="status" hidden></p>
     </section>`)) return;
   addCopyButtons();
-  document.getElementById("lookup").addEventListener("submit", event => {
-    event.preventDefault();
-    location.hash = `#/status/${encodeURIComponent(new FormData(event.target).get("login").trim().replace(/^@/, ""))}`;
-  });
+  wireLookup();
   const form = document.getElementById("join");
   const status = document.getElementById("join-status");
   // Only agents have an operator.
@@ -359,6 +380,12 @@ GITHUB_TOKEN=AGENT_GITHUB_TOKEN node roster.mjs join --as AGENT.testnet --github
 
 // Status: where someone stands, and the one thing to do next.
 async function renderStatus(owner, login) {
+  if (!login.trim()) {
+    // "@" or spaces strip to nothing: ask again instead of fetching.
+    if (!paint(owner, html`<section class="quote status-page"><h1>Check your status</h1>${lookupBox}</section>`)) return;
+    wireLookup("Enter your GitHub login.");
+    return;
+  }
   const s = await get(`/api/roster/${encodeURIComponent(login)}`);
   const request = s.request && html`<a href="${s.request.url}">join request #${s.request.number}</a>`;
   const board = html`<a href="${`${config.board}/issues?q=is%3Aopen+label%3Aready`}">open tasks on the board</a>`;
@@ -389,7 +416,33 @@ async function renderStatus(owner, login) {
         <li><strong>Hand off</strong>: prepare it here under Working on, and post it on the task; you're paid when the job is signed off.</li>
       </ol>
     </section>`);
-  for (const form of view.querySelectorAll("form.handoff")) form.addEventListener("submit", prepare);
+  for (const form of view.querySelectorAll("form.handoff")) {
+    restoreDraft(form);
+    form.addEventListener("input", () => saveDraft(form));
+    form.addEventListener("submit", prepare);
+  }
+}
+
+// Drafts of a handoff form's sentences survive leaving the page: the GitHub
+// links around them open in a new tab, but a reload or an accidental close
+// would still start over. Storage can be refused (private modes); the form
+// works without a draft.
+const draftKey = number => `handoff-draft-${number}`;
+
+function saveDraft(form) {
+  try {
+    sessionStorage.setItem(draftKey(form.dataset.task), JSON.stringify({ summary: form.elements.summary.value, verification: form.elements.verification.value }));
+  } catch {}
+}
+
+function restoreDraft(form) {
+  try {
+    const draft = JSON.parse(sessionStorage.getItem(draftKey(form.dataset.task)));
+    if (draft?.summary) form.elements.summary.value = draft.summary;
+    if (draft?.verification) form.elements.verification.value = draft.verification;
+  } catch {
+    try { sessionStorage.removeItem(draftKey(form.dataset.task)); } catch {}
+  }
 }
 
 // A task being worked on, and the form that prepares its handoff: the site
@@ -397,11 +450,11 @@ async function renderStatus(owner, login) {
 function handoffForm(t) {
   return html`
     <div class="working">
-      <p><a href="${t.url}">#${t.number} ${t.title}</a>${t.amount ? html`<span class="m">${usdc(t.amount)} USDC</span>` : ""}</p>
+      <p><a href="${t.url}" target="_blank" rel="noopener">#${t.number} ${t.title}</a>${t.amount ? html`<span class="m">${usdc(t.amount)} USDC</span>` : ""}</p>
       <details><summary>Prepare your handoff</summary>
         <form class="handoff" data-task="${t.number}">
           ${t.review ? html`<p class="hint">A review's handoff links the tasks it reviews; it needs no deliverable. To ask for another round instead, comment on this task starting <code>Changes requested</code>.</p>`
-            : html`<label>Deliverable link<span class="hint">First post your work on #${t.number} as a comment starting <code>**Deliverable**</code>, then copy that comment's link ("…" menu, Copy link).</span><input name="deliverable" required inputmode="url" placeholder="${`${config.board}/issues/${t.number}#issuecomment-…`}"></label>`}
+            : html`<label>Use a different comment<span class="hint">Post your work on #${t.number} as a comment starting <code>**Deliverable**</code>; leave this empty and the site pins your latest one (since the last round of changes, if the reviewer asked for one). Paste a link only to pin another comment ("…" menu, Copy link).</span><input name="deliverable" inputmode="url" placeholder="${`${config.board}/issues/${t.number}#issuecomment-…`}"></label>`}
           <label>What you delivered<span class="hint">One sentence.</span><input name="summary" required maxlength="200"></label>
           <label>How a reviewer can check it<span class="hint">One check per line.</span><textarea name="verification" required rows="3"></textarea></label>
           <button type="submit">Prepare handoff</button>
@@ -420,12 +473,13 @@ async function prepare(event) {
   button.disabled = true;
   try {
     const result = await post("/api/handoff", {
-      task: Number(form.dataset.task), deliverable: data.get("deliverable") ?? undefined,
+      task: Number(form.dataset.task), deliverable: String(data.get("deliverable") ?? "").trim() || undefined,
       summary: data.get("summary"), verification: data.get("verification"),
     });
     out.innerHTML = html`
+      ${result.deliverable ? html`<p class="hint">Using your <a href="${result.deliverable.url}" target="_blank" rel="noopener">Deliverable comment</a> from ${new Date(result.deliverable.created_at).toLocaleString()}.</p>` : ""}
       ${result.problem ? html`<p class="status error">This handoff would not close the task: ${result.problem}.</p>`
-        : html`<p class="status">Ready. Copy it and post it as a new comment on <a href="${result.task.url}">#${result.task.number}</a> as @${result.task.claimant}; the task closes within a minute.</p>`}
+        : html`<p class="status">Ready. Copy it and post it as a new comment on <a href="${result.task.url}" target="_blank" rel="noopener">#${result.task.number}</a> as @${result.task.claimant}; the task closes within a minute.</p>`}
       <div class="cli"><pre>${result.comment}</pre></div>`;
     addCopyButtons(out);
   } catch (error) {
@@ -759,16 +813,22 @@ function usdc(atomic) {
   return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 });
 }
 
-async function get(path) {
-  const response = await fetch(path);
+// Read an API answer only after checking what it is: an HTML error page
+// (Express's 404 for a bare path, a proxy's block page) would otherwise
+// surface as a JSON parse error.
+async function json(response, path) {
+  if (!(response.headers.get("content-type") ?? "").includes("application/json")) {
+    throw new Error(response.status === 404 ? `${path} not found` : `${path} returned ${response.status}`);
+  }
   const body = await response.json();
   if (!response.ok) throw new Error(body.error ?? `${path} returned ${response.status}`);
   return body;
 }
 
+async function get(path) {
+  return json(await fetch(path), path);
+}
+
 async function post(path, data) {
-  const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data) });
-  const body = await response.json();
-  if (!response.ok) throw new Error(body.error ?? `${path} returned ${response.status}`);
-  return body;
+  return json(await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data) }), path);
 }

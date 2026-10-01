@@ -73,15 +73,27 @@ describe("preparing a handoff", () => {
     body: `Part of job #32.\n\nDepends on:\n- [ ] #36\n- [ ] #37\n\n${terms}`,
     labels: labels.map(name => ({ name })), assignees: [{ login: "multi-agency" }], ...extra,
   });
-  function github(issue, comment = { user: { login: "multi-agency" }, body: work }) {
+  const ask = fields => prepareHandoff({ task: 39, deliverable, summary: "Compared the four setups.", verification: "Check each claim's link\nCheck the recovery section", ...fields });
+  // The status page's default: no link, so the thread is searched instead.
+  const askAuto = fields => prepareHandoff({ task: 39, summary: "Compared the four setups.", verification: "Check each claim's link\nCheck the recovery section", ...fields });
+  const at = minute => `2026-09-30T20:${String(minute).padStart(2, "0")}:00Z`;
+  const posted = (id, login, body, minute) =>
+    ({ id, user: { login }, body, html_url: `${board}/issues/39#issuecomment-${id}`, created_at: at(minute), updated_at: at(minute) });
+  const changes = (id, login, minute) => posted(id, login, `**Changes requested** by @${login}\n\n${fence("changes", { review: 40 })}`, minute);
+  function github(issue, comment = { user: { login: "multi-agency" }, body: work }, thread = []) {
+    const byId = new Map([[555, comment], ...thread.map(c => [c.id, c])]);
     globalThis.fetch = async url => {
       const path = new URL(url).pathname;
       if (path.endsWith("/issues/39")) return new Response(JSON.stringify(issue));
-      if (path.endsWith("/issues/comments/555")) return new Response(JSON.stringify(comment));
+      if (path.endsWith("/issues/39/comments")) return new Response(JSON.stringify(thread));
+      const id = path.match(/\/issues\/comments\/(\d+)$/)?.[1];
+      if (id !== undefined) {
+        const found = byId.get(Number(id));
+        return found ? new Response(JSON.stringify(found)) : new Response("{}", { status: 404 });
+      }
       return new Response("{}", { status: 404 });
     };
   }
-  const ask = fields => prepareHandoff({ task: 39, deliverable, summary: "Compared the four setups.", verification: "Check each claim's link\nCheck the recovery section", ...fields });
 
   test("pins the deliverable, fills in the roster account, and passes the checks", async () => {
     github(task(["in-progress", "skill:research"]));
@@ -117,7 +129,7 @@ describe("preparing a handoff", () => {
     github(task(["in-progress", "skill:research"]), { user: { login: "stranger" }, body: work });
     assert.match((await ask()).error, /by @stranger/);
     github(task(["in-progress", "skill:research"]), { user: { login: "multi-agency" }, body: "Here it is" });
-    assert.match((await ask()).error, /does not start with \*\*Deliverable\*\*/);
+    assert.match((await ask()).error, /starting `Here it is`/);
     github(task(["in-progress", "skill:research"]));
     assert.match((await ask({ deliverable: `${board}/issues/38#issuecomment-555` })).error, /comment on #39/);
     assert.match((await ask({ verification: "" })).error, /how a reviewer can check/);
@@ -125,5 +137,51 @@ describe("preparing a handoff", () => {
     assert.match((await ask()).error, /not in progress/);
     globalThis.fetch = async () => new Response('{"message":"Not Found"}', { status: 404 });
     assert.match((await ask()).error, /not a task/);
+  });
+
+  test("with no link it pins the claimant's latest **Deliverable** comment since the last round", async () => {
+    const claim = posted(1, "multi-agency", "/claim", 5);
+    const first = posted(2, "multi-agency", work, 10);
+    const round = changes(3, "multiagency", 15);
+    const second = posted(4, "multi-agency", "**Deliverable**\n\nRevised with the missing sources.", 20);
+    github(task(["in-progress", "skill:research"]), undefined, [claim, first, round, second]);
+    const auto = await askAuto();
+    assert.equal(auto.problem, null);
+    assert.equal(auto.deliverable.url, second.html_url);
+    assert.equal(auto.deliverable.created_at, second.created_at);
+    assert.deepEqual(fenced(auto.comment, "handoff").deliverable, { url: second.html_url, sha256: digest(second.body) });
+    // The same comment given as a link prepares the same handoff.
+    github(task(["in-progress", "skill:research"]), undefined, [claim, first, round, second]);
+    const explicit = await ask({ deliverable: second.html_url });
+    assert.equal(explicit.comment, auto.comment);
+    assert.equal(explicit.problem, auto.problem);
+  });
+
+  test("with no **Deliverable** comment to find it says to post one", async () => {
+    github(task(["in-progress", "skill:research"]), undefined, [posted(1, "multi-agency", "/claim", 5)]);
+    assert.match((await askAuto()).error, /Post your work on #39 as a comment starting \*\*Deliverable\*\* first/);
+  });
+
+  test("a deliverable from before the last round is left behind; a new one is used", async () => {
+    const stale = posted(1, "multi-agency", work, 10);
+    const round = changes(2, "multiagency", 15);
+    github(task(["in-progress", "skill:research"]), undefined, [stale, round]);
+    assert.match((await askAuto()).error, /Post your work on #39/);
+    const fresh = posted(3, "multi-agency", "**Deliverable**\n\nRound two, with the fixes.", 20);
+    github(task(["in-progress", "skill:research"]), undefined, [stale, round, fresh]);
+    assert.equal(fenced((await askAuto()).comment, "handoff").deliverable.url, fresh.html_url);
+  });
+
+  test("only the claimant's **Deliverable** comments count", async () => {
+    github(task(["in-progress", "skill:research"]), undefined, [posted(1, "multi-agency", "/claim", 5), posted(2, "stranger", work, 8)]);
+    assert.match((await askAuto()).error, /Post your work on #39/);
+  });
+
+  test("an override link to another comment says what that comment opens", async () => {
+    github(task(["in-progress", "skill:research"]), { user: { login: "multi-agency" }, body: "/claim" });
+    assert.match((await ask()).error, /That link is to your comment starting `\/claim`\. Use the one that starts with \*\*Deliverable\*\*\./);
+    const long = "An opening line that runs well past the forty characters a reader needs here";
+    github(task(["in-progress", "skill:research"]), { user: { login: "multi-agency" }, body: long });
+    assert.match((await ask()).error, /^That link is to your comment starting `An opening line that runs well past[^`]*…`\. Use the one that starts with \*\*Deliverable\*\*\.$/);
   });
 });
