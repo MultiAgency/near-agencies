@@ -33,7 +33,7 @@ const seatIssue = (number, labels, dependsOn = [], assignees = []) => ({
 // `threads` holds each seat's comments; the bot's replies join its thread, so a
 // later cycle sees them as it would on GitHub.
 const board = ({ open = [], closes = [], issues = {}, closedByLabel = {}, threads = {} }) => {
-  const state = { calls: [], comments: [], labelPosts: [], patches: [], reactions: {}, unassigns: [] };
+  const state = { calls: [], comments: [], labelPosts: [], patches: [], reactions: {}, unassigns: [], assigns: [] };
   let nextId = 1;
   const serve = async (url, options = {}) => {
     const method = options.method ?? "GET";
@@ -65,6 +65,10 @@ const board = ({ open = [], closes = [], issues = {}, closedByLabel = {}, thread
     const assignees = u.pathname.match(`${REPO}/issues/(\\d+)/assignees$`);
     if (assignees && method === "DELETE") {
       state.unassigns.push({ number: Number(assignees[1]), login: JSON.parse(options.body).assignees[0] });
+      return json({});
+    }
+    if (assignees && method === "POST") {
+      state.assigns.push({ number: Number(assignees[1]), login: JSON.parse(options.body).assignees[0] });
       return json({});
     }
     const thread = u.pathname.match(`${REPO}/issues/(\\d+)/comments$`);
@@ -140,6 +144,96 @@ describe("promoting a blocked seat", () => {
     const invite = fake.comments.find(c => c.number === 20);
     assert.match(invite.body, /Dependencies #10 are done/);
     assert.match(invite.body, /`\/claim`/);
+  });
+});
+
+describe("settling claims", () => {
+  // The taken seat reads as claimed just now, so the stale sweep stays out of the way.
+  const ready = number => seatIssue(number, ["ready", "skill:writing", "agent-eligible"]);
+  const claim = (number, id, login) => ({
+    id, user: { login }, body: "/claim",
+    created_at: "2026-09-30T21:00:00Z", updated_at: "2026-09-30T21:00:00Z",
+    html_url: `https://github.com/MultiAgency/kanban-sandbox/issues/${number}#issuecomment-${id}`,
+  });
+  const replies = (fake, number) => fake.comments.filter(c => c.number === number).map(c => c.body);
+
+  test("two /claims on one ready seat: the first wins, the loser is refused naming the winner", async () => {
+    const seat = ready(50);
+    const fake = await runCycle(board({
+      open: [seat],
+      issues: { 50: seat },
+      threads: { 50: [claim(50, 9101, "multi-agency"), claim(50, 9102, "jlwaugh")] },
+    }));
+
+    assert.deepEqual(fake.assigns, [{ number: 50, login: "multi-agency" }]);
+    assert.deepEqual(fake.reactions[9101], [{ user: { login: "multi-agency" }, content: "+1" }]);
+    assert.deepEqual(fake.reactions[9102], [{ user: { login: "multi-agency" }, content: "-1" }]);
+    assert.equal(replies(fake, 50).length, 2);
+    assert.ok(replies(fake, 50)[0].startsWith("Claimed by @multi-agency."), replies(fake, 50)[0]);
+    assert.equal(replies(fake, 50)[1], "@jlwaugh can't claim this task: @multi-agency claimed it first.");
+    assert.deepEqual(fake.labelPosts.find(w => w.number === 50)?.labels, ["in-progress"]);
+    assert.ok(fake.calls.includes(`DELETE ${REPO}/issues/50/labels/ready`));
+
+    await runCycle(fake);
+    assert.equal(replies(fake, 50).length, 2, "both claims are answered: later cycles stay quiet");
+  });
+
+  test("the winner's own repeat /claim is marked processed, not refused", async () => {
+    const seat = ready(52);
+    const fake = await runCycle(board({
+      open: [seat],
+      issues: { 52: seat },
+      threads: { 52: [claim(52, 9104, "multi-agency"), claim(52, 9105, "multi-agency")] },
+    }));
+
+    assert.deepEqual(fake.assigns, [{ number: 52, login: "multi-agency" }], "assigned once");
+    assert.deepEqual(fake.reactions[9104], [{ user: { login: "multi-agency" }, content: "+1" }]);
+    assert.deepEqual(fake.reactions[9105], [{ user: { login: "multi-agency" }, content: "+1" }]);
+    assert.equal(replies(fake, 52).length, 1, "the win is announced once");
+    assert.ok(replies(fake, 52)[0].startsWith("Claimed by @multi-agency."), replies(fake, 52)[0]);
+  });
+
+  test("the claimant's re-claim while the seat is in progress is marked processed, not refused", async () => {
+    const seat = { ...seatIssue(53, ["in-progress", "skill:writing", "agent-eligible"], [], ["multi-agency"]), updated_at: new Date().toISOString() };
+    const fake = await runCycle(board({
+      open: [seat],
+      issues: { 53: seat },
+      threads: { 53: [claim(53, 9106, "multi-agency")] },
+    }));
+
+    assert.deepEqual(fake.assigns, [], "a taken seat assigns no one");
+    assert.deepEqual(fake.reactions[9106], [{ user: { login: "multi-agency" }, content: "+1" }]);
+    assert.deepEqual(replies(fake, 53), [], "the claimant needs no refusal");
+  });
+
+  test("a claim on an in-progress seat with no assignee waits for its release instead of winning mid-pass", async () => {
+    // The seat is past its claim TTL, so this pass also releases it; the claim
+    // is answered once the seat is ready again, not accepted while the stale
+    // sweep runs.
+    const seat = seatIssue(54, ["in-progress", "skill:writing", "agent-eligible"]);
+    const fake = await runCycle(board({
+      open: [seat],
+      issues: { 54: seat },
+      threads: { 54: [claim(54, 9107, "jlwaugh")] },
+    }));
+
+    assert.deepEqual(fake.assigns, [], "nothing is assigned outside ready");
+    assert.equal(fake.reactions[9107], undefined, "the claim waits for the seat to be ready");
+    assert.ok(replies(fake, 54).some(b => /open again/.test(b)), "the stale sweep still releases the seat");
+  });
+
+  test("a /claim on a seat already in progress is refused naming its claimant", async () => {
+    const seat = { ...seatIssue(51, ["in-progress", "skill:writing", "agent-eligible"], [], ["multi-agency"]), updated_at: new Date().toISOString() };
+    const fake = await runCycle(board({
+      open: [seat],
+      issues: { 51: seat },
+      threads: { 51: [claim(51, 9103, "jlwaugh")] },
+    }));
+
+    assert.deepEqual(fake.assigns, [], "a taken seat assigns no one");
+    assert.deepEqual(fake.reactions[9103], [{ user: { login: "multi-agency" }, content: "-1" }]);
+    assert.deepEqual(replies(fake, 51), ["@jlwaugh can't claim this task: this task is already claimed by @multi-agency."]);
+    assert.deepEqual(labelWrites(fake, 51), [], "the seat keeps its label");
   });
 });
 
