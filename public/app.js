@@ -228,7 +228,7 @@ async function renderQuote(owner, code) {
     if (owner !== generation) return;
     if (latest.status === "open") return void (location.hash = `#/e/${latest.issue}`);
     document.getElementById("deposit-status").textContent = statusText(latest);
-    if (["awaiting_deposit", "opening", "deposit_settled_epic_failed"].includes(latest.status)) timer = setTimeout(poll, 5000);
+    if (["awaiting_deposit", "opening"].includes(latest.status) || (latest.status === "deposit_settled_epic_failed" && !latest.gave_up)) timer = setTimeout(poll, 5000);
   };
   timer = setTimeout(poll, 5000);
 }
@@ -239,7 +239,9 @@ function statusText(quote) {
     opening: "Deposit received. Opening the job…",
     underpaid: `The deposit of ${usdc(quote.deposit?.amount)} USDC is below the quoted amount, so the job was not opened. Contact MultiAgency.`,
     expired: "This quote expired before a deposit arrived. Submit the brief again for a new code.",
-    deposit_settled_epic_failed: "Your deposit is final. The job is being opened and this page updates when it is.",
+    deposit_settled_epic_failed: quote.gave_up
+      ? "Your deposit is final, but the job could not be opened automatically. MultiAgency will follow up."
+      : "Your deposit is final. The job is being opened and this page updates when it is.",
   }[quote.status] ?? quote.status;
 }
 

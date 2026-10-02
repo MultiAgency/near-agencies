@@ -60,7 +60,8 @@ describe("recovering stuck engagements", () => {
     const listEpics = async since => [epic].filter(i => i.updated_at >= since);
     const store = memoryStore(records);
     await recoverStuck({ store, now: NOW - 6 * 60_000, trusted, listEpics: async () => { throw new Error("502"); }, create: async () => assert.fail() });
-    await recoverStuck({ store, now: NOW, trusted, listEpics, create: async () => assert.fail("created a duplicate epic") });
+    // failed_at is the real failure time, so the retry tick is ten minutes after it.
+    await recoverStuck({ store, now: Date.now() + 10 * 60_000, trusted, listEpics, create: async () => assert.fail("created a duplicate epic") });
     assert.equal(records["ma-1"].issue, 7);
   });
 
@@ -131,13 +132,43 @@ describe("recovering stuck engagements", () => {
       await run(records, { listEpics: async () => [], create: async () => { throw new Error("GitHub POST /issues: 403"); } });
       assert.equal(records["ma-6"].status, "deposit_settled_epic_failed");
       assert.match(records["ma-6"].error, /403/);
-      assert.equal(records["ma-6"].failed_at, new Date(NOW).toISOString());
+      assert.equal(records["ma-6"].attempts, 1);
+      assert.ok(Date.now() - Date.parse(records["ma-6"].failed_at) < 5_000, "failed_at is when it failed");
       assert.equal(records["ma-6"].brief, "What the organization wants done.");
       // The next tick finds it freshly failed and leaves it for later.
       await run(records, { listEpics: async () => assert.fail("too soon"), create: async () => assert.fail("too soon") });
     } finally {
       console.error = real;
     }
+  });
+
+  test("a failure that never clears is retried a limited number of times, then left for a person", async () => {
+    const { MAX_RECOVERY_ATTEMPTS, engagementHealth } = await import("../lib/stuck.mjs");
+    const records = { "ma-7": record("ma-7", { status: "opening", opening_at: minutesAgo(10) }) };
+    const real = console.error;
+    console.error = () => {};
+    let creates = 0;
+    const deps = { listEpics: async () => [], create: async () => { creates++; throw new Error("GitHub POST /issues: 422"); } };
+    try {
+      for (let attempt = 1; attempt <= MAX_RECOVERY_ATTEMPTS + 3; attempt++) {
+        // Each tick is ten minutes later, so the previous failure is old enough to retry.
+        await recoverStuck({ store: memoryStore(records), now: Date.now() + attempt * 10 * 60_000, trusted, ...deps });
+      }
+    } finally {
+      console.error = real;
+    }
+    assert.equal(creates, MAX_RECOVERY_ATTEMPTS, "no attempt past the limit");
+    assert.equal(records["ma-7"].status, "deposit_settled_epic_failed");
+    assert.equal(records["ma-7"].attempts, MAX_RECOVERY_ATTEMPTS);
+    // It stays visible to an operator, marked as given up.
+    const later = Date.now() + 24 * 60 * 60_000;
+    assert.deepEqual(engagementHealth(records, later).stuck.map(r => [r.code, r.gave_up]), [["ma-7", true]]);
+  });
+
+  test("a record that succeeds before the limit is opened", async () => {
+    const records = { "ma-8": record("ma-8", { status: "deposit_settled_epic_failed", attempts: 2, failed_at: minutesAgo(10) }) };
+    await run(records, { listEpics: async () => [], create: async () => epicFor("ma-8", 12) });
+    assert.equal(records["ma-8"].status, "open");
   });
 });
 
@@ -160,5 +191,10 @@ describe("listing epics", () => {
     assert.equal(first.searchParams.get("labels"), "engagement");
     assert.equal(first.searchParams.get("state"), "all");
     assert.equal(first.searchParams.get("since"), "2026-09-30T11:00:00.000Z");
+  });
+
+  test("throws rather than dropping epics when there are more pages than it reads", async () => {
+    globalThis.fetch = async () => new Response(JSON.stringify(Array.from({ length: 100 }, (_, i) => ({ number: i }))));
+    await assert.rejects(() => epicIssues("2026-09-30T11:00:00.000Z"), /more than 2000 engagement epics/);
   });
 });

@@ -11,6 +11,8 @@
 /lib/onboarding.mjs      @jlwaugh
 /lib/near.mjs            @jlwaugh
 /lib/engagements.mjs     @jlwaugh
+/lib/epic.mjs            @jlwaugh
+/lib/recover.mjs         @jlwaugh
 /lib/history.mjs         @jlwaugh
 /lib/pay.mjs             @jlwaugh
 /lib/x402-intake.mjs     @jlwaugh
