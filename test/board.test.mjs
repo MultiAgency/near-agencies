@@ -41,14 +41,22 @@ afterEach(() => { globalThis.fetch = realFetch; });
 const comment = (id, login, body) => ({ id, user: { login }, body });
 const claimedRecord = (id, by, login) =>
   comment(id, by, `Claimed by @${login}. Once the work is signed off, 1 USDC is paid to \`x.testnet\`.`);
-const serveDependency = (assignees = [], records = []) => {
+const handoffRecord = (id, by, at = "2026-09-30T20:20:00Z") => ({
+  ...comment(id, by, `**Handoff:** done\n\n${fence("handoff", { payout: { account_id: "x.testnet" } })}`),
+  created_at: at, updated_at: at,
+});
+const serveDependency = (assignees = [], records = [], closedAt = null) => {
   globalThis.fetch = async (url, options = {}) => {
     const u = new URL(url);
     const get = (options.method ?? "GET") === "GET";
     const json = body => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
     if (get && u.pathname === "/user") return json({ login: "multi-agency" });
     if (get && u.pathname === "/repos/MultiAgency/kanban-sandbox/issues/10") {
-      return json({ number: 10, assignees: assignees.map(login => ({ login })) });
+      return json({
+        number: 10,
+        assignees: assignees.map(login => ({ login })),
+        ...(closedAt ? { state: "closed", closed_at: closedAt } : {}),
+      });
     }
     if (get && u.pathname === "/repos/MultiAgency/kanban-sandbox/issues/10/comments") return json(records);
     const permission = u.pathname.match(/^\/repos\/[^/]+\/[^/]+\/collaborators\/([^/]+)\/permission$/);
@@ -105,6 +113,28 @@ describe("seats", () => {
     assert.match(await selfReviewProblem(review, "jlwaugh"), /reviews #10, which you delivered/);
     serveDependency([], [claimedRecord(2, "stranger", "jlwaugh")]);
     assert.equal(await selfReviewProblem(review, "jlwaugh"), null, "a forged record counts for nothing");
+  });
+
+  test("only the claimant at close gates: a claim the stale sweep released does not", async () => {
+    const review = seat(issue({ labels: [{ name: "ready" }, { name: "skill:review" }] }));
+    serveDependency([], [
+      claimedRecord(1, "multi-agency", "jlwaugh"),
+      claimedRecord(2, "multi-agency", "writer"),
+      handoffRecord(3, "writer"),
+    ], "2026-09-30T20:30:00Z");
+    assert.match(await selfReviewProblem(review, "writer"), /reviews #10, which you delivered/);
+    assert.equal(await selfReviewProblem(review, "jlwaugh"), null, "a released claim is not a delivery");
+  });
+
+  test("the handoff that closed the dependency delivered it, but only before the close", async () => {
+    const review = seat(issue({ labels: [{ name: "ready" }, { name: "skill:review" }] }));
+    serveDependency([], [handoffRecord(1, "jlwaugh")]);
+    assert.match(await selfReviewProblem(review, "jlwaugh"), /reviews #10, which you delivered/,
+      "an open dependency's latest handoff still names its deliverer");
+    serveDependency([], [handoffRecord(2, "jlwaugh")], "2026-09-30T20:30:00Z");
+    assert.match(await selfReviewProblem(review, "jlwaugh"), /reviews #10, which you delivered/);
+    serveDependency([], [{ ...handoffRecord(3, "jlwaugh"), created_at: "2026-09-30T20:40:00Z", updated_at: "2026-09-30T20:40:00Z" }], "2026-09-30T20:30:00Z");
+    assert.equal(await selfReviewProblem(review, "jlwaugh"), null, "a handoff posted after the close closed nothing");
   });
 
   test("a seat that only builds on its dependency gates nobody", async () => {

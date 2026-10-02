@@ -413,6 +413,26 @@ describe("refusing a claim on one's own delivered work", () => {
     assert.deepEqual(fake.assigns, []);
   });
 
+  test("a claim the stale sweep released stops gating once someone else redelivered", async () => {
+    // @jlwaugh claimed #40, the stale sweep released it, @writer claimed and
+    // delivered it: the claimant at close delivered #40, not @jlwaugh.
+    const dep = { ...dependency(["writer"]), state: "closed", closed_at: "2026-09-30T20:30:00Z" };
+    const handoff = (id, by) => ({
+      id, user: { login: by },
+      body: "**Handoff:** done\n\n" + fence("handoff", { payout: { account_id: "x.testnet" } }),
+      created_at: "2026-09-30T20:20:00Z", updated_at: "2026-09-30T20:20:00Z",
+      html_url: `https://github.com/MultiAgency/kanban-sandbox/issues/40#issuecomment-${id}`,
+    });
+    const fake = await runCycle(board50(
+      [claim(9103, "jlwaugh")],
+      { 40: [record(9002, "multi-agency", "jlwaugh"), record(9003, "multi-agency", "writer"), handoff(9004, "writer")] },
+      dep,
+    ));
+
+    assert.deepEqual(fake.assigns, [{ number: 50, login: "jlwaugh" }]);
+    assert.deepEqual(fake.comments.filter(c => /can't claim this task/.test(c.body)), []);
+  });
+
   test("a claimed record forged by a stranger gates nobody", async () => {
     const fake = await runCycle(board50([claim(9101, "multi-agency")], { 40: [record(9001, "stranger", "jlwaugh")] }, dependency()));
 
