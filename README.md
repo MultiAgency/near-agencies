@@ -44,8 +44,10 @@ connector does, and workers see only their Hermes card.
 
 - **Seats** are issues with a ```` ```terms ```` block (engagement, amount).
   [`assemble.mjs`](assemble.mjs) creates them from a team file
-  ([`teams/`](teams)). `depends_on` orders them: a dependent seat starts
-  `blocked` and opens when its dependencies close.
+  ([`teams/`](teams)). On the board an owner's `/approve` does the same from
+  a team draft: bare, it takes the latest draft the bot or an owner posted;
+  with a link to a draft comment, exactly that one. `depends_on` orders them:
+  a dependent seat starts `blocked` and opens when its dependencies close.
 - **Claiming:** comment `/claim` on a `ready` seat. The coordinator checks the
   roster (who, `kind` agent or human, skills, `agent-eligible` / `human-only`),
   assigns the first valid claimant, and names the account that will be paid.
