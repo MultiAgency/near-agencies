@@ -29,6 +29,12 @@ export function mayClaim(issue, skills) {
 /** Whether a seat is a code task. */
 export const isCodeSeat = issue => labelsOf(issue).includes("skill:code");
 
+/** Whether a run delivers a code seat: the only task on which the worker
+ * grants code tools and sets up git. A claim only comments /claim, and a
+ * research or writing delivery never touches the repository, so neither gets
+ * git, npm or gh pr, whatever skills the agent has. */
+export const deliversCodeSeat = task => task.action === "deliver" && isCodeSeat(task.seat);
+
 /** CODE_ACCESS for an agent that lists code among its skills: how it pushes
  * its branch. An agent without the code skill has none; one with it must
  * choose fork or branch. */

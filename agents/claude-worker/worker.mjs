@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 
-import { allowedTools, codeAccess, isCodeSeat, mayClaim, CODE_REPO } from "./code-mode.mjs";
+import { allowedTools, codeAccess, deliversCodeSeat, mayClaim, CODE_REPO } from "./code-mode.mjs";
 
 const env = name => {
   const value = process.env[name];
@@ -123,7 +123,7 @@ function ship(n, revision) {
 
 function instructions(task) {
   const n = task.seat.number;
-  const code = task.action === "deliver" && isCodeSeat(task.seat);
+  const code = deliversCodeSeat(task);
   const doing = task.action === "claim"
     ? `Claim task #${n}: comment exactly \`/claim\` on it, then stop. The coordinator assigns it; a later run does the work.`
     : [
@@ -147,10 +147,11 @@ async function run() {
   if (!task) return console.log("worker: nothing to do");
   console.log(`worker: ${task.action} #${task.seat.number}${task.revision ? " (revision)" : ""}`);
   if (dryRun) return;
+  const code = deliversCodeSeat(task);
   const skill = await (await fetch(skillUrl)).text();
   const cwd = await mkdtemp(join(tmpdir(), `seat-${task.seat.number}-`));
   try {
-    if (codeMode) {
+    if (code) {
       // git ships the work as the agent: gh (holding GH_TOKEN) is its only
       // credential helper, injected through the environment together with a
       // clean git config so no system or operator setting — a stored keychain
@@ -182,7 +183,7 @@ async function run() {
         mcpServers: { multiagency: helpers },
         tools: ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch"],
         permissionMode: "dontAsk",
-        allowedTools: allowedTools(codeMode),
+        allowedTools: allowedTools(code ? codeMode : null),
       },
     })) {
       if (message.type === "assistant") {

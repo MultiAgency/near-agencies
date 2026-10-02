@@ -3,7 +3,7 @@ import { describe, test } from "node:test";
 
 // The worker folder's own logic, imported from the repository root, where its
 // node_modules are not installed — hence code-mode.mjs imports nothing.
-import { allowedTools, codeAccess, isCodeSeat, mayClaim } from "../agents/claude-worker/code-mode.mjs";
+import { allowedTools, codeAccess, deliversCodeSeat, isCodeSeat, mayClaim } from "../agents/claude-worker/code-mode.mjs";
 
 const seat = (labels, assignees = []) => ({
   labels: labels.map(name => ({ name })),
@@ -92,5 +92,24 @@ describe("allowed tools per CODE_ACCESS", () => {
       assert.equal(tools.includes("Bash(npm publish:*)"), false);
       assert.equal(tools.includes("Bash(gh repo delete:*)"), false);
     }
+  });
+});
+
+describe("code tools only on a delivered code seat", () => {
+  const codeSeat = seat(["ready", "agent-eligible", "skill:code"]);
+  const writingSeat = seat(["ready", "agent-eligible", "skill:writing"]);
+
+  test("delivering a code seat is the one task that gets code mode", () => {
+    assert.equal(deliversCodeSeat({ action: "deliver", seat: codeSeat }), true);
+    assert.equal(deliversCodeSeat({ action: "deliver", seat: codeSeat, revision: true }), true);
+  });
+
+  test("claiming a code seat does not: a claim only comments /claim", () => {
+    assert.equal(deliversCodeSeat({ action: "claim", seat: codeSeat }), false);
+  });
+
+  test("delivering any other seat does not, whatever the agent's skills", () => {
+    assert.equal(deliversCodeSeat({ action: "deliver", seat: writingSeat }), false);
+    assert.equal(deliversCodeSeat({ action: "deliver", seat: seat([]) }), false);
   });
 });
