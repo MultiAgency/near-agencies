@@ -19,6 +19,9 @@ const record = (code, fields) => ({
   ...fields,
 });
 
+// The bot and an owner may open an epic; anyone else's issue is not one.
+const trusted = async login => ["multi-agency", "jlwaugh"].includes(login);
+
 const memoryStore = records => ({
   all: async () => records,
   update: async mutate => mutate(records),
@@ -28,11 +31,12 @@ const epicFor = (code, number, extra = {}) => ({
   number,
   html_url: `https://github.com/x/y/issues/${number}`,
   body: `Job\n\n${fence("engagement", { engagement_id: code })}`,
+  user: { login: "multi-agency" },
   ...extra,
 });
 
 describe("recovering stuck engagements", () => {
-  const run = (records, deps) => recoverStuck({ store: memoryStore(records), now: NOW, ...deps });
+  const run = (records, deps) => recoverStuck({ store: memoryStore(records), now: NOW, trusted, ...deps });
 
   test("an epic the first attempt already created is found, not duplicated", async () => {
     const records = { "ma-1": record("ma-1", { status: "opening", opening_at: minutesAgo(10) }) };
@@ -55,8 +59,8 @@ describe("recovering stuck engagements", () => {
     const epic = epicFor("ma-1", 7, { updated_at: minutesAgo(12) });
     const listEpics = async since => [epic].filter(i => i.updated_at >= since);
     const store = memoryStore(records);
-    await recoverStuck({ store, now: NOW - 6 * 60_000, listEpics: async () => { throw new Error("502"); }, create: async () => assert.fail() });
-    await recoverStuck({ store, now: NOW, listEpics, create: async () => assert.fail("created a duplicate epic") });
+    await recoverStuck({ store, now: NOW - 6 * 60_000, trusted, listEpics: async () => { throw new Error("502"); }, create: async () => assert.fail() });
+    await recoverStuck({ store, now: NOW, trusted, listEpics, create: async () => assert.fail("created a duplicate epic") });
     assert.equal(records["ma-1"].issue, 7);
   });
 
@@ -70,6 +74,25 @@ describe("recovering stuck engagements", () => {
     assert.equal(created, 1);
     assert.deepEqual(recovered, [{ code: "ma-2", issue: 9, created: true }]);
     assert.equal(records["ma-2"].status, "open");
+  });
+
+  test("an issue someone else opened with the code is ignored, and the epic is created", async () => {
+    // The code is the deposit memo, public on chain, so anyone who can label an issue can copy it.
+    const records = { "ma-5": record("ma-5", { status: "opening", opening_at: minutesAgo(10) }) };
+    const recovered = await run(records, {
+      listEpics: async () => [epicFor("ma-5", 4, { user: { login: "someone-else" } })],
+      create: async () => epicFor("ma-5", 6),
+    });
+    assert.deepEqual(recovered, [{ code: "ma-5", issue: 6, created: true }]);
+  });
+
+  test("an epic an owner opened by hand is reused", async () => {
+    const records = { "ma-6": record("ma-6", { status: "deposit_settled_epic_failed", failed_at: minutesAgo(10) }) };
+    const recovered = await run(records, {
+      listEpics: async () => [epicFor("ma-6", 8, { user: { login: "jlwaugh" } })],
+      create: async () => assert.fail("must not duplicate the owner's epic"),
+    });
+    assert.deepEqual(recovered, [{ code: "ma-6", issue: 8, created: false }]);
   });
 
   test("a pull request that quotes the code is not an epic", async () => {
