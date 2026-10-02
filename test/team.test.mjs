@@ -110,37 +110,47 @@ describe("/approve", () => {
     const strangers = draft(2, { login: "stranger", at: 2 });
     const command = comment(3, `/approve ${strangers.html_url} — this one`, { at: 10 });
     const thread = [draft(1, { login: "multi-agency", at: 1 }), strangers, command];
-    const named = namedDraft(thread, command, 28);
+    const named = namedDraft(thread, command, 28, trusted);
     assert.equal(named.draft.comment.id, 2);
     assert.deepEqual(named.draft.issues.map(i => i.key), ["t2"]);
     // Named, not latest: an earlier draft linked by the owner is the one approved.
     const earlier = draft(1, { login: "multi-agency", at: 1 });
     const naming = comment(3, `/approve ${earlier.html_url}`, { at: 10 });
-    assert.equal(namedDraft([earlier, draft(2, { at: 2 }), naming], naming, 28).draft.comment.id, 1);
+    assert.equal(namedDraft([earlier, draft(2, { at: 2 }), naming], naming, 28, trusted).draft.comment.id, 1);
   });
 
   test("other trailing text keeps the bare behaviour", () => {
     const command = comment(3, "/approve looks good", { at: 10 });
-    assert.equal(namedDraft([draft(1), command], command, 28), null);
+    assert.equal(namedDraft([draft(1), command], command, 28, trusted), null);
   });
 
   test("a link to a comment that is not a draft on this job is refused", () => {
     const command = comment(2, `/approve ${repoUrl}/issues/29#issuecomment-1`, { at: 10 });
-    assert.match(namedDraft([draft(1), command], command, 28).refusal, /not on this job/);
+    assert.match(namedDraft([draft(1), command], command, 28, trusted).refusal, /not on this job/);
     const missing = comment(2, `/approve ${repoUrl}/issues/28#issuecomment-99`, { at: 10 });
-    assert.match(namedDraft([draft(1), missing], missing, 28).refusal, /not on this job/);
+    assert.match(namedDraft([draft(1), missing], missing, 28, trusted).refusal, /not on this job/);
     const chatter = comment(1, "sounds fine to me", { at: 1 });
     const linked = comment(2, `/approve ${chatter.html_url}`, { at: 10 });
-    assert.match(namedDraft([chatter, linked], linked, 28).refusal, /holds no team draft/);
+    assert.match(namedDraft([chatter, linked], linked, 28, trusted).refusal, /holds no team draft/);
   });
 
   test("a link to a draft posted or edited after the command is refused", () => {
     const later = draft(1, { login: "stranger", at: 11 });
     const command = comment(2, `/approve ${later.html_url}`, { at: 10 });
-    assert.match(namedDraft([command, later], command, 28).refusal, /posted after the command/);
+    assert.match(namedDraft([command, later], command, 28, trusted).refusal, /posted after the command/);
     const edited = draft(1, { at: 1, edited: 11 });
     const before = comment(2, `/approve ${edited.html_url}`, { at: 10 });
-    assert.match(namedDraft([edited, before], before, 28).refusal, /edited after the command/);
+    assert.match(namedDraft([edited, before], before, 28, trusted).refusal, /edited after the command/);
+  });
+
+  test("a link to a stranger's draft edited since it was posted is refused", () => {
+    const revised = draft(1, { login: "stranger", at: 1, edited: 5 });
+    const command = comment(2, `/approve ${revised.html_url}`, { at: 10 });
+    assert.match(namedDraft([revised, command], command, 28, trusted).refusal, /edited after it was posted/);
+    // The bot's own revision stands: a trusted author may edit its draft.
+    const bots = draft(1, { login: "multi-agency", at: 1, edited: 5 });
+    const approving = comment(2, `/approve ${bots.html_url}`, { at: 10 });
+    assert.equal(namedDraft([bots, approving], approving, 28, trusted).draft.comment.id, 1);
   });
 
   test("reports a draft whose block is not valid JSON, rather than skipping it", () => {

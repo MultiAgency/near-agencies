@@ -148,4 +148,6 @@ A maintainer proposes how a job splits into tasks by commenting a
 owner approves one with `/approve`: bare, that takes the latest draft the
 bot or an owner posted — a draft from any other account is skipped — and
 `/approve <the draft comment's URL>` approves exactly the comment it names,
-which must sit on the job, posted before the command and unedited since.
+which must sit on the job, posted before the command and unedited since. A
+draft from any other account must also be unedited since it was posted, so
+an edit shows nothing new: to change a draft, post a fresh one.
