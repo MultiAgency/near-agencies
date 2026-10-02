@@ -52,22 +52,27 @@ Decided by the owner, 2026-10-02.
 
 **Switching over:**
 1. Create `staging` from `main`, and make it the default branch.
-2. Rulesets and teams as above, plus the CODEOWNERS change (owner commit, since it's in `.github/`).
+2. Rulesets and teams as above, plus the CODEOWNERS change (owner commit, since it's in `.github/`), and the matching AGENTS.md change: its money-and-permissions paragraph says CODEOWNERS routes those files to a MultiAgency owner, which stops holding on `staging`, where internal review is enough for them (the owner still reviews them in the release PR to `main`).
 3. `ci.yml`: run on pushes to `staging` as well as `main` (today `push: branches: [main]`).
 4. Railway: the demo service deploys from `staging`.
-5. Point every "against main" at `staging`: `connector.mjs:195`, AGENTS.md, README, the coder card template, `CONTRIBUTING.md`. Retarget open PRs.
+5. Point every "against main" at `staging`: `connector.mjs:195`, `agents/claude-worker/worker.mjs` (the code-task instructions), `public/skill.md:79`, AGENTS.md, README, the coder card template, `CONTRIBUTING.md`. Retarget open PRs.
 6. The coder's base clone (`near-agencies-agent`) tracks `origin/staging`.
 7. The local merge hook (`.claude/hooks/require-approval.sh`) already requires an approving review for any PR; it holds for both branches.
 
+**From the AI review of this plan** (2026-10-02):
+- Triage reaches the labels that gate claims (`agent-eligible`, `human-only`; `lib/seats.mjs:35-36`): mitigation — those labels change only from the bot or an owner, and the coordinator restores any other change to them.
+- An internal person can approve their own agent's PR: mitigation — an approval from the agent's `operator` doesn't count (roster lookup, the way `isTrusted` decides records).
+- A same-repo PR runs `ai-review.yml` from its merge commit, so a pushed edit to the workflow could read `ANTHROPIC_API_KEY` before anyone reviews it: accepted risk, owner to confirm.
+
 ## Changes needed
 
-1. **`/approve` uses only a trusted draft, or the one it links.** Today `/approve` takes the latest team draft from anyone, which matters more once several accounts post drafts. **First;** in progress.
+1. **`/approve` uses only a trusted draft, or the one it links.** Today `/approve` takes the latest team draft from anyone, which matters more once several accounts post drafts. **First;** done (#65, merged 2026-10-02 19:04Z).
 2. **One maintainer marker, checked by author.** Two things read `<!-- multiagency-maintainer -->`:
    - `board-changes.py:55` ignores comments carrying it when deciding whether to wake. With different markers, maintainers count each other's comments as changes and wake each run, so all maintainers share the one marker, and the dedupe rules ("don't repeat what a maintainer already said") apply across agents.
    - `classify` in `lib/timeline.mjs:11-18` puts any comment carrying it in the job page's "Maintainer" lane, whoever wrote it. Today anyone can paste the marker into a comment and appear there (display only). Count it only from the bot or a member of `internal-agents`, and show which agent wrote it.
 3. **Improvement work as GitHub issues, not local cards** (needed once a second coder exists; until then the house coder's local queue works). The maintainer files improvement cards in the Hermes kanban on the owner's laptop, which other coders can't see. It files them as near-agencies issues labelled `agent-ready` instead; a coder takes one by commenting, as people do with `good first issue`. The maintainer also needs issue-write on near-agencies (open item since 2026-10-01).
 4. **Maintainer template.** The board-maintainer skill and `board-changes.py` exist only in `~/.hermes/profiles/maintainer/` on the owner's laptop, outside any repository. Move them into near-agencies (e.g. `agents/hermes-maintainer/`), so every internal maintainer runs the same reviewed version.
-5. **agency-builder becomes the first internal agent:** stop its Railway Claude worker and provision it through the runbook. It keeps its board triage, which the internal level includes.
+5. **agency-builder stays the internal test agent on its Railway Claude worker** (branch PRs, board triage) instead of moving it to Hermes; the runbook's Hermes setup waits for a real internal contributor.
 
 ## Out of scope
 
