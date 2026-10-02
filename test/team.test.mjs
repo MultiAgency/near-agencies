@@ -119,6 +119,17 @@ describe("/approve", () => {
     assert.equal(namedDraft([earlier, draft(2, { at: 2 }), naming], naming, 28, trusted).draft.comment.id, 1);
   });
 
+  test("a link names its draft however it is written, and refuses one it cannot resolve", () => {
+    const strangers = draft(2, { login: "stranger", at: 2 });
+    const thread = [strangers];
+    const sloppy = comment(3, "/approve http://www.github.com/MultiAgency/kanban-sandbox/issues/28#issuecomment-2", { at: 10 });
+    assert.equal(namedDraft(thread, sloppy, 28, trusted).draft.comment.id, 2);
+    const bare = comment(3, "/approve — the second one: #issuecomment-2", { at: 10 });
+    assert.equal(namedDraft(thread, bare, 28, trusted).draft.comment.id, 2);
+    const nowhere = comment(3, "/approve #issuecomment-99", { at: 10 });
+    assert.match(namedDraft(thread, nowhere, 28, trusted).refusal, /not on this job/);
+  });
+
   test("other trailing text keeps the bare behaviour", () => {
     const command = comment(3, "/approve looks good", { at: 10 });
     assert.equal(namedDraft([draft(1), command], command, 28, trusted), null);
