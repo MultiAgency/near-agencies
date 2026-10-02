@@ -29,3 +29,10 @@ test("publicQuote does not return the stored error text", async () => {
   assert.ok(!JSON.stringify(quote).includes("Bad credentials"));
   assert.equal(publicQuote({ code: "c", status: "open", error: "x" }).error, undefined);
 });
+
+test("publicQuote says when recovery gave up, so the page stops saying the job is being opened", async () => {
+  const { publicQuote } = await import("../lib/engagements.mjs");
+  const base = { code: "c", title: "t", amount: "1", channel: "x", status: "deposit_settled_epic_failed", expires_at: "" };
+  assert.equal(publicQuote({ ...base, attempts: 1 }).gave_up, undefined);
+  assert.equal(publicQuote({ ...base, attempts: 99 }).gave_up, true);
+});
