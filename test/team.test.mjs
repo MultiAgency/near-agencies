@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { draftFor, isApproval } from "../lib/coordinator.mjs";
-import { fence } from "../lib/github.mjs";
+import { draftFor, isApproval, namedDraft } from "../lib/coordinator.mjs";
+import { fence, repoUrl } from "../lib/github.mjs";
 import { tasksMade, teamProblem } from "../lib/team.mjs";
 
 const job = (overrides = {}) => ({
@@ -67,8 +67,18 @@ describe("team drafts", () => {
 });
 
 describe("/approve", () => {
-  const comment = (id, body) => ({ id, body, html_url: `https://example/c${id}`, user: { login: "jlwaugh" } });
-  const draft = n => comment(n, `**Maintainer:** draft ${n}\n\n\`\`\`team-draft\n${JSON.stringify({ issues: [task(`t${n}`)] })}\n\`\`\``);
+  const t0 = Date.parse("2026-10-02T12:00:00Z");
+  const comment = (id, body, { login = "jlwaugh", at = 0, edited = at } = {}) => ({
+    id,
+    body,
+    html_url: `${repoUrl}/issues/28#issuecomment-${id}`,
+    user: { login },
+    created_at: new Date(t0 + at * 60_000).toISOString(),
+    updated_at: new Date(t0 + edited * 60_000).toISOString(),
+  });
+  const draft = (n, opts = {}) =>
+    comment(n, `**Maintainer:** draft ${n}\n\n\`\`\`team-draft\n${JSON.stringify({ issues: [task(`t${n}`)] })}\n\`\`\``, opts);
+  const trusted = new Set(["multi-agency", "jlwaugh"]);  // the bot and an owner
 
   test("recognises the command", () => {
     assert.equal(isApproval(comment(1, "/approve")), true);
@@ -79,15 +89,64 @@ describe("/approve", () => {
   test("takes the latest draft posted before the command, never a later one", () => {
     const command = comment(4, "/approve");
     const thread = [draft(1), comment(2, "chatter"), draft(3), command, draft(5)];
-    const found = draftFor(thread, command);
+    const found = draftFor(thread, command, trusted);
     assert.equal(found.comment.id, 3);
     assert.deepEqual(found.issues.map(i => i.key), ["t3"]);
-    assert.equal(draftFor([command, draft(5)], command), undefined);
+    assert.equal(draftFor([command, draft(5)], command, trusted), undefined);
+  });
+
+  test("a bare command takes the latest draft by the bot or an owner, skipping a stranger's", () => {
+    const command = comment(4, "/approve", { at: 10 });
+    // Posted after the bot's draft and before the command: not what the owner saw.
+    const thread = [draft(1, { login: "multi-agency", at: 1 }), draft(2, { login: "stranger", at: 2 }), command];
+    assert.equal(draftFor(thread, command, trusted).comment.id, 1);
+    assert.equal(
+      draftFor([draft(1, { login: "stranger", at: 1 }), draft(2, { login: "multi-agency", at: 2 }), command], command, trusted).comment.id, 2);
+    // A stranger's draft is skipped, not refused: with only one, there is no draft.
+    assert.equal(draftFor([draft(1, { login: "stranger", at: 1 }), command], command, trusted), undefined);
+  });
+
+  test("a link names exactly that draft, whoever posted it", () => {
+    const strangers = draft(2, { login: "stranger", at: 2 });
+    const command = comment(3, `/approve ${strangers.html_url} — this one`, { at: 10 });
+    const thread = [draft(1, { login: "multi-agency", at: 1 }), strangers, command];
+    const named = namedDraft(thread, command, 28);
+    assert.equal(named.draft.comment.id, 2);
+    assert.deepEqual(named.draft.issues.map(i => i.key), ["t2"]);
+    // Named, not latest: an earlier draft linked by the owner is the one approved.
+    const earlier = draft(1, { login: "multi-agency", at: 1 });
+    const naming = comment(3, `/approve ${earlier.html_url}`, { at: 10 });
+    assert.equal(namedDraft([earlier, draft(2, { at: 2 }), naming], naming, 28).draft.comment.id, 1);
+  });
+
+  test("other trailing text keeps the bare behaviour", () => {
+    const command = comment(3, "/approve looks good", { at: 10 });
+    assert.equal(namedDraft([draft(1), command], command, 28), null);
+  });
+
+  test("a link to a comment that is not a draft on this job is refused", () => {
+    const command = comment(2, `/approve ${repoUrl}/issues/29#issuecomment-1`, { at: 10 });
+    assert.match(namedDraft([draft(1), command], command, 28).refusal, /not on this job/);
+    const missing = comment(2, `/approve ${repoUrl}/issues/28#issuecomment-99`, { at: 10 });
+    assert.match(namedDraft([draft(1), missing], missing, 28).refusal, /not on this job/);
+    const chatter = comment(1, "sounds fine to me", { at: 1 });
+    const linked = comment(2, `/approve ${chatter.html_url}`, { at: 10 });
+    assert.match(namedDraft([chatter, linked], linked, 28).refusal, /holds no team draft/);
+  });
+
+  test("a link to a draft posted or edited after the command is refused", () => {
+    const later = draft(1, { login: "stranger", at: 11 });
+    const command = comment(2, `/approve ${later.html_url}`, { at: 10 });
+    assert.match(namedDraft([command, later], command, 28).refusal, /posted after the command/);
+    const edited = draft(1, { at: 1, edited: 11 });
+    const before = comment(2, `/approve ${edited.html_url}`, { at: 10 });
+    assert.match(namedDraft([edited, before], before, 28).refusal, /edited after the command/);
   });
 
   test("reports a draft whose block is not valid JSON, rather than skipping it", () => {
     const broken = comment(1, "```team-draft\n{ not json\n```");
     const command = comment(2, "/approve");
-    assert.deepEqual(draftFor([broken, command], command), { comment: broken, issues: null });
+    assert.deepEqual(draftFor([broken, command], command, trusted), { comment: broken, issues: null });
   });
 });
+
