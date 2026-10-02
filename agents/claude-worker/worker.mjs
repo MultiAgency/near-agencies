@@ -16,6 +16,8 @@ import { join } from "node:path";
 import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 
+import { allowedTools, codeAccess, isCodeSeat, mayClaim, CODE_REPO } from "./code-mode.mjs";
+
 const env = name => {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is required`);
@@ -24,6 +26,10 @@ const env = name => {
 const login = env("AGENT_LOGIN");
 const nearAccount = env("NEAR_ACCOUNT");
 const skills = env("AGENT_SKILLS").split(",").map(s => s.trim());
+// Code mode: how an agent with the code skill ships its branch — "fork" (its
+// own fork, an outside contributor) or "branch" (near-agencies itself, an
+// internal contributor). Null without the code skill.
+const codeMode = codeAccess(skills, process.env.CODE_ACCESS);
 const board = process.env.BOARD ?? "MultiAgency/kanban-sandbox";
 const skillUrl = process.env.SKILL_URL ?? "https://demo.multiagency.ai/skill.md";
 const model = process.env.MODEL ?? "claude-sonnet-5";
@@ -45,15 +51,6 @@ async function github(path) {
 
 const same = (a, b) => a.toLowerCase() === b.toLowerCase();
 const isSeat = issue => !issue.pull_request && /```terms\n/.test(issue.body ?? "");
-const labelsOf = issue => issue.labels.map(label => label.name);
-
-// The claim rules of skill.md section 2.
-function mayClaim(issue) {
-  const labels = labelsOf(issue);
-  return labels.includes("ready") && issue.assignees.length === 0 &&
-    labels.includes("agent-eligible") && !labels.includes("human-only") &&
-    labels.filter(l => l.startsWith("skill:")).every(l => skills.includes(l.slice(6)));
-}
 
 // When a task last became claimable: its latest `ready` label, or its creation.
 async function readySince(issue) {
@@ -70,7 +67,7 @@ async function nextTask() {
     const handedOff = thread.slice(since + 1).some(c => same(c.user.login, login) && c.body.includes("```handoff\n"));
     if (!handedOff) return { action: "deliver", seat, revision: since !== -1 };
   }
-  for (const seat of seats.filter(mayClaim)) {
+  for (const seat of seats.filter(s => mayClaim(s, skills))) {
     const wait = claimAfterMs - (Date.now() - await readySince(seat));
     if (wait > 0) {
       console.log(`worker: leaving #${seat.number} to others for ${Math.ceil(wait / 60_000)} more min`);
@@ -98,14 +95,42 @@ const helpers = createSdkMcpServer({
   ],
 });
 
+// How Claude ships a code task (public/skill.md § 3): the work lands as a
+// pull request against main of near-agencies, titled after the task and
+// linked from the deliverable and the handoff; a revision round pushes to the
+// same pull request.
+function ship(n, revision) {
+  const fork = codeMode === "fork";
+  const branch = `task-${n}`;
+  const name = CODE_REPO.split("/")[1];
+  const clone = fork ? `https://github.com/${login}/${name}.git` : `https://github.com/${CODE_REPO}.git`;
+  const pulls = `\`gh pr view ${branch} --repo ${CODE_REPO}\``;
+  return [
+    `This is a code task: the work is a pull request against main of ${CODE_REPO} (§ 3 of the rules). git authenticates through gh as you, so no token belongs in any URL, and your commits are already authored as you.`,
+    fork
+      ? `\`gh repo fork ${CODE_REPO} --clone=false\` if you have no fork yet (it only reports an existing one), then, in this directory, \`git clone ${clone} .\`. You push to your fork.`
+      : `In this directory: \`git clone ${clone} .\`. You push to ${CODE_REPO}.`,
+    revision
+      ? `\`git checkout ${branch}\`: the pull request exists; push your fixes to that same branch and never open a second pull request. ${pulls} shows it.`
+      : `\`git checkout -b ${branch}\`.`,
+    "Make the change there: keep it focused, add tests, and make `npm ci`, `npm run check` and `npm test` pass.",
+    `\`git add\` only the files you changed, \`git commit\`, and \`git push\` the branch${fork ? " to your fork" : ""}. If ${pulls} shows a pull request already, push to its branch instead of opening another.`,
+    ...(revision ? [] : [
+      `Open the pull request: write its body to a file first, then \`gh pr create --repo ${CODE_REPO} --head ${fork ? `${login}:` : ""}${branch} --title "Task #${n}: <what changed>" --body-file <file>\`. The body links task #${n} and says what changed and how you verified it.`,
+    ]),
+  ];
+}
+
 function instructions(task) {
   const n = task.seat.number;
+  const code = task.action === "deliver" && isCodeSeat(task.seat);
   const doing = task.action === "claim"
     ? `Claim task #${n}: comment exactly \`/claim\` on it, then stop. The coordinator assigns it; a later run does the work.`
     : [
       `Deliver task #${n}, which is assigned to you.${task.revision ? " The reviewer asked for another round (the latest ```changes comment): address every point in a new deliverable." : ""}`,
       "Read the task, the job it names, and the deliverables of any tasks it depends on. Do the work, citing sources inline as links.",
-      "Then post the deliverable comment, get its sha256 with the deliverable_sha256 tool, and post the handoff comment, exactly as the rules say. The coordinator closes the task once the handoff checks out.",
+      ...(code ? ship(n, task.revision) : []),
+      `Then post the deliverable comment${code ? ", naming the pull request," : ""}, get its sha256 with the deliverable_sha256 tool, and post the handoff comment, exactly as the rules say. The coordinator closes the task once the handoff checks out.`,
     ].join("\n");
   return [
     `You are @${login}, an AI agent on the MultiAgency roster with skills ${skills.join(", ")}. Your roster NEAR account, for payout.account_id, is ${nearAccount}.`,
@@ -125,6 +150,26 @@ async function run() {
   const skill = await (await fetch(skillUrl)).text();
   const cwd = await mkdtemp(join(tmpdir(), `seat-${task.seat.number}-`));
   try {
+    if (codeMode) {
+      // git ships the work as the agent: gh (holding GH_TOKEN) is its only
+      // credential helper, injected through the environment together with a
+      // clean git config so no system or operator setting — a stored keychain
+      // entry, say — can answer first or leak another identity into a push.
+      // Every commit is authored as the agent, and a failed authentication
+      // fails instead of hanging the run waiting for input.
+      Object.assign(process.env, {
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "credential.https://github.com.helper",
+        GIT_CONFIG_VALUE_0: "gh auth git-credential",
+        GIT_AUTHOR_NAME: login,
+        GIT_AUTHOR_EMAIL: `${login}@users.noreply.github.com`,
+        GIT_COMMITTER_NAME: login,
+        GIT_COMMITTER_EMAIL: `${login}@users.noreply.github.com`,
+        GIT_TERMINAL_PROMPT: "0",
+      });
+    }
     for await (const message of query({
       prompt: instructions(task),
       options: {
@@ -137,11 +182,7 @@ async function run() {
         mcpServers: { multiagency: helpers },
         tools: ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch"],
         permissionMode: "dontAsk",
-        allowedTools: [
-          "Read(./**)", "Write(./**)", "Edit(./**)", "Glob", "Grep", "WebSearch", "WebFetch",
-          "Bash(gh issue view:*)", "Bash(gh issue comment:*)", "Bash(gh api:*)",
-          "mcp__multiagency__deliverable_sha256",
-        ],
+        allowedTools: allowedTools(codeMode),
       },
     })) {
       if (message.type === "assistant") {
