@@ -60,8 +60,8 @@ Decided by the owner, 2026-10-02.
 7. The local merge hook (`.claude/hooks/require-approval.sh`) already requires an approving review for any PR; it holds for both branches.
 
 **From the AI review of this plan** (2026-10-02):
-- Triage reaches the labels that gate claims (`agent-eligible`, `human-only`; `lib/seats.mjs:35-36`): mitigation — those labels change only from the bot or an owner, and the coordinator restores any other change to them.
-- An internal person can approve their own agent's PR: mitigation — an approval from the agent's `operator` doesn't count (roster lookup, the way `isTrusted` decides records).
+- Triage reaches the labels that gate claims (`agent-eligible`, `human-only`; `lib/seats.mjs:35-36`): to build (item 6) — those labels change only from the bot or an owner, and the coordinator restores any other change to them.
+- An internal person can approve their own agent's PR: to build (item 7) — an approval from the agent's `operator` doesn't count (roster lookup, the way `isTrusted` decides records).
 - A same-repo PR runs `ai-review.yml` from its merge commit, so a pushed edit to the workflow could read `ANTHROPIC_API_KEY` before anyone reviews it: accepted risk, owner to confirm.
 
 ## Changes needed
@@ -73,6 +73,8 @@ Decided by the owner, 2026-10-02.
 3. **Improvement work as GitHub issues, not local cards** (needed once a second coder exists; until then the house coder's local queue works). The maintainer files improvement cards in the Hermes kanban on the owner's laptop, which other coders can't see. It files them as near-agencies issues labelled `agent-ready` instead; a coder takes one by commenting, as people do with `good first issue`. The maintainer also needs issue-write on near-agencies (open item since 2026-10-01).
 4. **Maintainer template.** The board-maintainer skill and `board-changes.py` exist only in `~/.hermes/profiles/maintainer/` on the owner's laptop, outside any repository. Move them into near-agencies (e.g. `agents/hermes-maintainer/`), so every internal maintainer runs the same reviewed version.
 5. **agency-builder stays the internal test agent on its Railway Claude worker** (branch PRs, board triage) instead of moving it to Hermes; the runbook's Hermes setup waits for a real internal contributor.
+6. **The coordinator restores gate labels and reopens job epics.** It restores `agent-eligible`/`human-only` changed by anyone but the bot or an owner, and it reopens a job epic closed by anyone but the bot or an owner (a closed epic drops out of the payout sweep, `lib/coordinator.mjs:443`).
+7. **A required check rejects an operator's approval of their own agent's PR.** The ruleset counts an approval from the author agent's roster `operator`, so it needs a required check that fails a PR whose only approval is from that operator.
 
 ## Out of scope
 
