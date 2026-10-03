@@ -192,7 +192,7 @@ async function briefing(seat) {
     ...(isCodeSeat(seat) ? [
       `Work in your worktree of ${CODE_REPO}. Keep the change focused on this task, follow the existing code style, and add or update tests.`,
       "Run `npm ci`, `npm run check` and `npm test`; all must pass.",
-      `Commit, push your branch, and open a pull request against main with \`gh pr create\`. Title it "Task #${seat.number}: <what changed>" and link ${seat.url} in its body.`,
+      `Commit, push your branch, and open a pull request against staging with \`gh pr create\`. Title it "Task #${seat.number}: <what changed>" and link ${seat.url} in its body.`,
       "Changes to payouts, claims, deposits, the roster, dependencies or CI need a MultiAgency owner's review; do not try to route around that.",
       "When the pull request's checks pass, call kanban_complete with a one-sentence summary and metadata {\"published_pr\": \"<pull request URL>\"}.",
     ] : [

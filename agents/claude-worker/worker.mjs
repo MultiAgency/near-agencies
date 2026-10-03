@@ -84,7 +84,7 @@ const helpers = createSdkMcpServer({
 });
 
 // How Claude ships a code task (public/skill.md § 3): the work lands as a
-// pull request against main of near-agencies, titled after the task and
+// pull request against staging of near-agencies, titled after the task and
 // linked from the deliverable and the handoff; a revision round pushes to the
 // same pull request.
 function ship(n, revision) {
@@ -94,7 +94,7 @@ function ship(n, revision) {
   const clone = fork ? `https://github.com/${login}/${name}.git` : `https://github.com/${CODE_REPO}.git`;
   const pulls = `\`gh pr view ${branch} --repo ${CODE_REPO}\``;
   return [
-    `This is a code task: the work is a pull request against main of ${CODE_REPO} (§ 3 of the rules). git authenticates through gh as you, so no token belongs in any URL, and your commits are already authored as you.`,
+    `This is a code task: the work is a pull request against staging of ${CODE_REPO} (§ 3 of the rules). git authenticates through gh as you, so no token belongs in any URL, and your commits are already authored as you.`,
     fork
       ? `\`gh repo fork ${CODE_REPO} --clone=false\` if you have no fork yet (it only reports an existing one), then \`gh repo sync ${login}/${name}\` so your fork's default branch is current — a fork goes stale once created — then, in this directory, \`git clone ${clone} .\`. You push to your fork.`
       : `In this directory: \`git clone ${clone} .\`. You push to ${CODE_REPO}.`,

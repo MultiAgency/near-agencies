@@ -1,5 +1,5 @@
 // Code mode: what lets a worker take a skill:code seat and ship it. The rules
-// (public/skill.md § 3) have the work land as a pull request against main of
+// (public/skill.md § 3) have the work land as a pull request against staging of
 // near-agencies, titled after the task and linked from the deliverable and
 // the handoff. CODE_ACCESS decides which GitHub identity pushes the branch:
 //
