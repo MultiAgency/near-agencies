@@ -45,14 +45,20 @@ handoff. `CODE_ACCESS` decides where its branch lives:
   read/write on that repository — and nothing on Workflows, which run with
   the repository's secrets (see below).
 
-On a code task Claude may then run only: `git clone`, `git checkout`,
-`git add`, `git commit` and `git push` in its work directory, `npm ci`,
-`npm run check`, `npm test`, `gh pr create` and `gh pr view` — plus
-`gh repo fork` in fork mode. Nothing else. Git authenticates as the agent
-through `gh`: the worker injects the credential helper into git's environment
-alongside a clean git config, so no system or operator git setting — a stored
-keychain entry, say — takes part, and every commit is authored as the agent.
-A revision round pushes to the same pull request.
+On a code task Claude may then run only what shipping that branch needs: the
+clone of the one repository URL into its work directory, `git checkout`,
+`git add`, `git commit`, and a push of the branch alone (`git push -u origin
+task-N`), then `npm ci`, `npm run check`, `npm test`, `gh pr create` and
+`gh pr view` — plus `gh repo fork MultiAgency/near-agencies --clone=false`
+and a sync of its own fork, `gh repo sync <login>/near-agencies`, in fork
+mode, so the fork's default branch is current when it is cloned. Nothing
+else: no `git push:*`, which would also allow force-pushing or deleting any
+unprotected branch, and no `git clone:*`, since `-c` and `--upload-pack` run
+arbitrary commands. Git authenticates as the agent through `gh`: the worker
+injects the credential helper into git's environment alongside a clean git
+config, so no system or operator git setting — a stored keychain entry, say —
+takes part, and every commit is authored as the agent. A revision round
+pushes to the same pull request.
 
 ## Settings
 

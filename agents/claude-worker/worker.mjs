@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 
-import { allowedTools, codeAccess, deliversCodeSeat, mayClaim, CODE_REPO } from "./code-mode.mjs";
+import { allowedTools, codeAccess, deliversCodeSeat, mayClaim, CODE_REPO, GIT_CREDENTIAL_HELPER } from "./code-mode.mjs";
 
 const env = name => {
   const value = process.env[name];
@@ -108,13 +108,13 @@ function ship(n, revision) {
   return [
     `This is a code task: the work is a pull request against main of ${CODE_REPO} (§ 3 of the rules). git authenticates through gh as you, so no token belongs in any URL, and your commits are already authored as you.`,
     fork
-      ? `\`gh repo fork ${CODE_REPO} --clone=false\` if you have no fork yet (it only reports an existing one), then, in this directory, \`git clone ${clone} .\`. You push to your fork.`
+      ? `\`gh repo fork ${CODE_REPO} --clone=false\` if you have no fork yet (it only reports an existing one), then \`gh repo sync ${login}/${name}\` so your fork's default branch is current — a fork goes stale once created — then, in this directory, \`git clone ${clone} .\`. You push to your fork.`
       : `In this directory: \`git clone ${clone} .\`. You push to ${CODE_REPO}.`,
     revision
       ? `\`git checkout ${branch}\`: the pull request exists; push your fixes to that same branch and never open a second pull request. ${pulls} shows it.`
       : `\`git checkout -b ${branch}\`.`,
     "Make the change there: keep it focused, add tests, and make `npm ci`, `npm run check` and `npm test` pass.",
-    `\`git add\` only the files you changed, \`git commit\`, and \`git push\` the branch${fork ? " to your fork" : ""}. If ${pulls} shows a pull request already, push to its branch instead of opening another.`,
+    `\`git add\` only the files you changed, \`git commit\`, and \`git push -u origin ${branch}\`${fork ? " — origin is your fork" : ""}. If ${pulls} shows a pull request already, push to its branch instead of opening another.`,
     ...(revision ? [] : [
       `Open the pull request: write its body to a file first, then \`gh pr create --repo ${CODE_REPO} --head ${fork ? `${login}:` : ""}${branch} --title "Task #${n}: <what changed>" --body-file <file>\`. The body links task #${n} and says what changed and how you verified it.`,
     ]),
@@ -163,7 +163,7 @@ async function run() {
         GIT_CONFIG_GLOBAL: "/dev/null",
         GIT_CONFIG_COUNT: "1",
         GIT_CONFIG_KEY_0: "credential.https://github.com.helper",
-        GIT_CONFIG_VALUE_0: "gh auth git-credential",
+        GIT_CONFIG_VALUE_0: GIT_CREDENTIAL_HELPER,
         GIT_AUTHOR_NAME: login,
         GIT_AUTHOR_EMAIL: `${login}@users.noreply.github.com`,
         GIT_COMMITTER_NAME: login,
@@ -183,7 +183,7 @@ async function run() {
         mcpServers: { multiagency: helpers },
         tools: ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch"],
         permissionMode: "dontAsk",
-        allowedTools: allowedTools(code ? codeMode : null),
+        allowedTools: allowedTools(code ? codeMode : null, task.seat.number, login),
       },
     })) {
       if (message.type === "assistant") {

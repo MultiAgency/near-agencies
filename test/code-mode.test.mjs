@@ -3,7 +3,10 @@ import { describe, test } from "node:test";
 
 // The worker folder's own logic, imported from the repository root, where its
 // node_modules are not installed — hence code-mode.mjs imports nothing.
-import { allowedTools, codeAccess, deliversCodeSeat, isCodeSeat, mayClaim } from "../agents/claude-worker/code-mode.mjs";
+import {
+  allowedTools, codeAccess, deliversCodeSeat, isCodeSeat, mayClaim,
+  GIT_CREDENTIAL_HELPER,
+} from "../agents/claude-worker/code-mode.mjs";
 
 const seat = (labels, assignees = []) => ({
   labels: labels.map(name => ({ name })),
@@ -59,35 +62,65 @@ describe("CODE_ACCESS", () => {
   });
 });
 
+describe("the git credential helper", () => {
+  // gitcredentials(7): git runs a helper that is neither '!'-prefixed nor an
+  // absolute path as `git credential-<value>`, and
+  // `git credential-gh auth git-credential` does not exist — so a bare
+  // "gh auth git-credential" makes every push fail.
+  test("git runs it as a shell command, not as git credential-<value>", () => {
+    assert.equal(GIT_CREDENTIAL_HELPER.startsWith("!"), true);
+  });
+});
+
 describe("allowed tools per CODE_ACCESS", () => {
+  const n = 14;
+  const login = "near-builder";
+  const base = [
+    "Read(./**)", "Write(./**)", "Edit(./**)", "Glob", "Grep", "WebSearch", "WebFetch",
+    "Bash(gh issue view:*)", "Bash(gh issue comment:*)", "Bash(gh api:*)",
+    "mcp__multiagency__deliverable_sha256",
+  ];
+
   test("without code mode: the board, the deliverable and research, nothing else", () => {
-    assert.deepEqual(allowedTools(null), [
-      "Read(./**)", "Write(./**)", "Edit(./**)", "Glob", "Grep", "WebSearch", "WebFetch",
-      "Bash(gh issue view:*)", "Bash(gh issue comment:*)", "Bash(gh api:*)",
-      "mcp__multiagency__deliverable_sha256",
-    ]);
+    assert.deepEqual(allowedTools(null, n, login), base);
   });
 
-  test("branch mode adds only what shipping a branch and its pull request needs", () => {
-    assert.deepEqual(allowedTools("branch"), [
-      "Read(./**)", "Write(./**)", "Edit(./**)", "Glob", "Grep", "WebSearch", "WebFetch",
-      "Bash(gh issue view:*)", "Bash(gh issue comment:*)", "Bash(gh api:*)",
-      "mcp__multiagency__deliverable_sha256",
-      "Bash(git clone:*)", "Bash(git checkout:*)", "Bash(git add:*)",
-      "Bash(git commit:*)", "Bash(git push:*)",
+  test("branch mode adds only the exact commands the instructions give task 14", () => {
+    assert.deepEqual(allowedTools("branch", n, login), [
+      ...base,
+      "Bash(git clone https://github.com/MultiAgency/near-agencies.git .)",
+      "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git commit:*)",
+      "Bash(git push -u origin task-14)",
       "Bash(npm ci)", "Bash(npm run check)", "Bash(npm test)",
       "Bash(gh pr create:*)", "Bash(gh pr view:*)",
     ]);
   });
 
-  test("fork mode is branch mode plus forking the repository", () => {
-    assert.deepEqual(allowedTools("fork"), [...allowedTools("branch"), "Bash(gh repo fork:*)"]);
+  test("fork mode clones, forks and syncs the agent's fork, not the repository", () => {
+    assert.deepEqual(allowedTools("fork", n, login), [
+      ...base,
+      "Bash(git clone https://github.com/near-builder/near-agencies.git .)",
+      "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git commit:*)",
+      "Bash(git push -u origin task-14)",
+      "Bash(npm ci)", "Bash(npm run check)", "Bash(npm test)",
+      "Bash(gh pr create:*)", "Bash(gh pr view:*)",
+      "Bash(gh repo fork MultiAgency/near-agencies --clone=false)",
+      "Bash(gh repo sync near-builder/near-agencies)",
+    ]);
   });
 
-  test("no mode hands Claude the whole shell", () => {
-    for (const tools of [allowedTools(null), allowedTools("fork"), allowedTools("branch")]) {
+  test("the push is the task's branch only: another task's branch is not pushable", () => {
+    const tools = allowedTools("branch", 15, login);
+    assert.equal(tools.includes("Bash(git push -u origin task-15)"), true);
+    assert.equal(tools.includes("Bash(git push -u origin task-14)"), false);
+  });
+
+  test("no mode hands Claude the whole shell, a force-push or an arbitrary clone", () => {
+    for (const tools of [allowedTools(null, n, login), allowedTools("fork", n, login), allowedTools("branch", n, login)]) {
       assert.equal(tools.includes("Bash(git status:*)"), false);
       assert.equal(tools.includes("Bash(git config:*)"), false);
+      assert.equal(tools.includes("Bash(git push:*)"), false, "push:* would also allow --force and --delete on any branch");
+      assert.equal(tools.includes("Bash(git clone:*)"), false, "clone:* accepts -c and --upload-pack, which run commands");
       assert.equal(tools.includes("Bash(npm install:*)"), false);
       assert.equal(tools.includes("Bash(npm publish:*)"), false);
       assert.equal(tools.includes("Bash(gh repo delete:*)"), false);

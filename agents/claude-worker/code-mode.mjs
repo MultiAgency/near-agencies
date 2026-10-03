@@ -13,6 +13,14 @@
 /** The repository a code task delivers against (public/skill.md). */
 export const CODE_REPO = "MultiAgency/near-agencies";
 
+/** The one credential helper a code run's git may use: gh, holding GH_TOKEN,
+ * acting as the agent (worker.mjs sets it as GIT_CONFIG_VALUE_0 beside a
+ * clean git config). The leading '!' matters: per gitcredentials(7), git runs
+ * a helper that is neither '!'-prefixed nor an absolute path as
+ * `git credential-<value>` — and `git credential-gh auth git-credential`
+ * does not exist, so without the '!' every push fails. */
+export const GIT_CREDENTIAL_HELPER = "!gh auth git-credential";
+
 const labelsOf = issue => issue.labels.map(label => label.name);
 
 /** Whether an agent with `skills` may claim `issue`: skill.md § 2's claim
@@ -47,21 +55,37 @@ export function codeAccess(skills, value) {
 }
 
 /** What Claude may run on a seat. Without code mode: read the board, post the
- * deliverable and handoff, and research the subject. With it: only what
- * shipping a branch and opening its pull request needs — forking the
- * repository in fork mode alone. */
-export function allowedTools(access) {
+ * deliverable and handoff, and research the subject. With it: shipping this
+ * task's branch and opening its pull request — and for git, only the exact
+ * commands the instructions give: the clone of the one URL into this
+ * directory, and a push of the task's branch alone. Prefix patterns would be
+ * far too wide here: `git push:*` also allows force-pushing or deleting any
+ * unprotected branch, including other agents' task branches, and
+ * `git clone:*` accepts `-c` and `--upload-pack`, which run arbitrary
+ * commands. Fork mode alone may fork the repository and sync the fork with it
+ * before the clone (a fork's default branch goes stale once created).
+ * `access` is fork or branch, `n` the task's number, `login` the agent's
+ * GitHub login, which names its fork. */
+export function allowedTools(access, n, login) {
   const tools = [
     "Read(./**)", "Write(./**)", "Edit(./**)", "Glob", "Grep", "WebSearch", "WebFetch",
     "Bash(gh issue view:*)", "Bash(gh issue comment:*)", "Bash(gh api:*)",
     "mcp__multiagency__deliverable_sha256",
   ];
   if (!access) return tools;
+  const name = CODE_REPO.split("/")[1];
+  const clone = access === "fork"
+    ? `https://github.com/${login}/${name}.git`
+    : `https://github.com/${CODE_REPO}.git`;
   return tools.concat(
-    "Bash(git clone:*)", "Bash(git checkout:*)", "Bash(git add:*)",
-    "Bash(git commit:*)", "Bash(git push:*)",
+    `Bash(git clone ${clone} .)`,
+    "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git commit:*)",
+    `Bash(git push -u origin task-${n})`,
     "Bash(npm ci)", "Bash(npm run check)", "Bash(npm test)",
     "Bash(gh pr create:*)", "Bash(gh pr view:*)",
-    ...(access === "fork" ? ["Bash(gh repo fork:*)"] : []),
+    ...(access === "fork" ? [
+      `Bash(gh repo fork ${CODE_REPO} --clone=false)`,
+      `Bash(gh repo sync ${login}/${name})`,
+    ] : []),
   );
 }
