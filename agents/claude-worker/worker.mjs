@@ -16,7 +16,8 @@ import { join } from "node:path";
 import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 
-import { allowedTools, codeAccess, deliversCodeSeat, isCodeSeat, mayClaim, CODE_REPO, GIT_CREDENTIAL_HELPER } from "./code-mode.mjs";
+import { allowedTools, codeAccess, deliversCodeSeat, CODE_REPO, GIT_CREDENTIAL_HELPER } from "./code-mode.mjs";
+import { nextTask as selectTask } from "./next-task.mjs";
 
 const env = name => {
   const value = process.env[name];
@@ -49,35 +50,22 @@ async function github(path) {
   return response.json();
 }
 
-const same = (a, b) => a.toLowerCase() === b.toLowerCase();
-const isSeat = issue => !issue.pull_request && /```terms\n/.test(issue.body ?? "");
-
-// When a task last became claimable: its latest `ready` label, or its creation.
-async function readySince(issue) {
-  const events = await github(`/issues/${issue.number}/events?per_page=100`);
-  const ready = events.filter(e => e.event === "labeled" && e.label?.name === "ready").at(-1);
-  return Date.parse(ready?.created_at ?? issue.created_at);
+// Posts a comment on a seat: the one board write the task selection makes,
+// the refusal a run without code mode leaves on an assigned skill:code seat.
+async function comment(number, body) {
+  const response = await fetch(`https://api.github.com/repos/${board}/issues/${number}/comments`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${process.env.GH_TOKEN}`, accept: "application/vnd.github+json" },
+    body: JSON.stringify({ body }),
+  });
+  if (!response.ok) throw new Error(`GitHub POST comment: ${response.status}`);
 }
 
-async function nextTask() {
-  const seats = (await github("/issues?state=open&per_page=100")).filter(isSeat);
-  for (const seat of seats.filter(s => s.assignees.some(a => same(a.login, login)))) {
-    const thread = await github(`/issues/${seat.number}/comments?per_page=100`);
-    const since = thread.findLastIndex(c => c.body.includes("```changes\n"));
-    const handedOff = thread.slice(since + 1).some(c => same(c.user.login, login) && c.body.includes("```handoff\n"));
-    if (!handedOff) return { action: "deliver", seat, revision: since !== -1 };
-  }
-  for (const seat of seats.filter(s => mayClaim(s, skills))) {
-    const wait = claimAfterMs - (Date.now() - await readySince(seat));
-    if (wait > 0) {
-      console.log(`worker: leaving #${seat.number} to others for ${Math.ceil(wait / 60_000)} more min`);
-      continue;
-    }
-    const thread = await github(`/issues/${seat.number}/comments?per_page=100`);
-    if (!thread.some(c => same(c.user.login, login) && c.body.trim().startsWith("/claim"))) return { action: "claim", seat };
-  }
-  return null;
-}
+// The selection itself lives in next-task.mjs, which imports nothing: it is
+// the one worker module beside code-mode.mjs that the repository's tests can
+// run from the root, where this folder's dependencies are not installed.
+const nextTask = () =>
+  selectTask({ github, comment, login, skills, codeMode, claimAfterMs, dryRun });
 
 // Hashing is the one step easy to get subtly wrong in a shell, so the worker
 // provides it as a tool: sha256 of the comment body exactly as GitHub stores it.
@@ -155,29 +143,12 @@ async function run() {
   if (!task) return console.log("worker: nothing to do");
   console.log(`worker: ${task.action} #${task.seat.number}${task.revision ? " (revision)" : ""}`);
   if (dryRun) return;
-  // The two code gates agree: only a run with code mode (the agent listed the
-  // code skill and chose a CODE_ACCESS) that is delivering a skill:code seat
-  // gets the git environment, the shipping instructions and the code tools.
+  // Only a run with code mode (the agent listed the code skill and chose a
+  // CODE_ACCESS) that is delivering a skill:code seat gets the git
+  // environment, the shipping instructions and the code tools. A run without
+  // code mode never gets here on a skill:code seat: nextTask() refused it
+  // once and moved on to what this run can deliver.
   const code = Boolean(codeMode) && deliversCodeSeat(task);
-  const assigned = task.action === "deliver" && isCodeSeat(task.seat) && !code;
-  if (assigned) {
-    // Native GitHub assignment counts as a claim without a skill check, so
-    // this happens: say so on the task instead of burning the run's budget
-    // on shipping instructions whose commands are not allowed.
-    console.log(`worker: #${task.seat.number} is a code task but this agent does not run code mode`);
-    const text = [
-      "I cannot take this task: it needs the `code` skill, which my roster entry does not have, so I have no git or npm on this run and cannot deliver a pull request.",
-      "",
-      "An agent with `code` among its skills should claim it instead.",
-    ].join("\n");
-    const response = await fetch(`https://api.github.com/repos/${board}/issues/${task.seat.number}/comments`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${process.env.GH_TOKEN}`, accept: "application/vnd.github+json" },
-      body: JSON.stringify({ body: text }),
-    });
-    if (!response.ok) throw new Error(`GitHub POST comment: ${response.status}`);
-    return;
-  }
   const skill = await (await fetch(skillUrl)).text();
   const cwd = await mkdtemp(join(tmpdir(), `seat-${task.seat.number}-`));
   try {

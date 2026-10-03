@@ -5,8 +5,9 @@ import { describe, test } from "node:test";
 // node_modules are not installed — hence code-mode.mjs imports nothing.
 import {
   allowedTools, codeAccess, deliversCodeSeat, isCodeSeat, mayClaim,
-  GIT_CREDENTIAL_HELPER,
+  CODE_REFUSAL, GIT_CREDENTIAL_HELPER,
 } from "../agents/claude-worker/code-mode.mjs";
+import { nextTask } from "../agents/claude-worker/next-task.mjs";
 
 const seat = (labels, assignees = []) => ({
   labels: labels.map(name => ({ name })),
@@ -160,5 +161,102 @@ describe("code tools only on a delivered code seat", () => {
     // The same gate, expressed the way worker.mjs runs it.
     assert.equal(allowedTools(withoutCodeMode ? "branch" : null, 14, "near-builder").includes("Bash(npm ci)"), false);
     assert.equal(allowedTools(withCodeMode ? "branch" : null, 14, "near-builder").includes("Bash(npm ci)"), true);
+  });
+});
+
+describe("an assigned code seat on a run without code mode", () => {
+  const login = "near-builder";
+  const skills = ["research", "writing"];
+  const c = (user, body) => ({ user: { login: user }, body });
+  const seatIssue = (number, labels, assignees = [], created_at = "2026-10-01T00:00:00Z") => ({
+    number,
+    created_at,
+    body: "Part of job #5.\n\n```terms\nengagement: job 5\n```",
+    assignees: assignees.map(l => ({ login: l })),
+    labels: labels.map(name => ({ name })),
+  });
+  // The board nextTask() reads: the open issues, then one thread or event
+  // list per seat number. Posts are recorded, not sent.
+  const board = (issues, threads = {}, events = {}) => async path => {
+    if (path === "/issues?state=open&per_page=100") return issues;
+    const on = path.match(/^\/issues\/(\d+)\/(comments|events)/);
+    if (!on) throw new Error(`unexpected GET ${path}`);
+    return (on[2] === "comments" ? threads : events)[on[1]] ?? [];
+  };
+  const harness = (issues, threads = {}, events = {}, extra = {}) => {
+    const posted = [];
+    return {
+      posted,
+      threads,
+      task: () => nextTask({
+        github: board(issues, threads, events),
+        comment: async (number, body) => { posted.push({ number, body }); },
+        login, skills, codeMode: null, ...extra,
+      }),
+    };
+  };
+
+  test("the refusal is posted once, not again on every cron run", async () => {
+    const { task, posted, threads } = harness([seatIssue(14, ["skill:code"], [login])], { 14: [] });
+    assert.deepEqual(await task(), null, "the run refuses the seat and has nothing else to take");
+    assert.deepEqual(posted, [{ number: 14, body: CODE_REFUSAL }]);
+    threads[14].push(c(login, CODE_REFUSAL));      // the comment the run left
+    assert.deepEqual(await task(), null);          // ten minutes later
+    assert.deepEqual(posted, [{ number: 14, body: CODE_REFUSAL }], "not refused a second time");
+  });
+
+  test("a new ```changes round asks anew", async () => {
+    const { task, posted } = harness(
+      [seatIssue(14, ["skill:code"], [login])],
+      { 14: [c("agency-owner", "Once more:\n```changes\naddress the review\n```"), c(login, CODE_REFUSAL)] },
+    );
+    assert.deepEqual(await task(), null);
+    assert.deepEqual(posted, [], "the refusal from the last round still stands");
+  });
+
+  test("the run moves on to the seats it can deliver", async () => {
+    const { task, posted } = harness(
+      [seatIssue(14, ["skill:code"], [login]), seatIssue(15, ["skill:writing"], [login])],
+      { 14: [], 15: [] },
+    );
+    const picked = await task();
+    assert.deepEqual(posted, [{ number: 14, body: CODE_REFUSAL }]);
+    assert.equal(picked.action, "deliver");
+    assert.equal(picked.seat.number, 15, "the code seat did not stop the writing seat");
+    assert.equal(picked.revision, false);
+  });
+
+  test("with code mode the assigned code seat is delivered as before", async () => {
+    const { task, posted } = harness(
+      [seatIssue(14, ["skill:code"], [login])],
+      { 14: [] },
+      {},
+      { codeMode: "branch" },
+    );
+    const picked = await task();
+    assert.deepEqual(posted, []);
+    assert.equal(picked.action, "deliver");
+    assert.equal(picked.seat.number, 14);
+  });
+
+  test("a dry run names the next task and posts nothing", async () => {
+    const { task, posted } = harness(
+      [seatIssue(14, ["skill:code"], [login]), seatIssue(15, ["skill:writing"], [login])],
+      { 14: [], 15: [] },
+      {},
+      { dryRun: true },
+    );
+    const picked = await task();
+    assert.deepEqual(posted, []);
+    assert.equal(picked.action, "deliver");
+    assert.equal(picked.seat.number, 15);
+  });
+
+  test("with nothing assigned it still claims the first ready seat it may", async () => {
+    const { task, posted } = harness([seatIssue(16, ["ready", "agent-eligible"])], { 16: [] });
+    const picked = await task();
+    assert.deepEqual(posted, []);
+    assert.equal(picked.action, "claim");
+    assert.equal(picked.seat.number, 16);
   });
 });

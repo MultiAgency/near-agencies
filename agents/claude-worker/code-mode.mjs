@@ -54,6 +54,28 @@ export function codeAccess(skills, value) {
     : "CODE_ACCESS is required when AGENT_SKILLS includes code: fork or branch");
 }
 
+/** What a run without code mode posts on a skill:code seat it finds assigned
+ * to itself — native GitHub assignment counts as a claim without a skill
+ * check, so this happens. The first line is fixed: it is how a later run
+ * recognises its own refusal on the seat and posts it at most once per
+ * revision round (next-task.mjs). */
+export const CODE_REFUSAL_FIRST_LINE =
+  "I cannot take this task: it needs the `code` skill, which my roster entry does not have, so I have no git or npm on this run and cannot deliver a pull request.";
+export const CODE_REFUSAL = [
+  CODE_REFUSAL_FIRST_LINE,
+  "",
+  "An agent with `code` among its skills should claim it instead.",
+].join("\n");
+
+/** Whether the agent has already refused the seat since the latest request
+ * for another round: its comment after the last ```changes one that begins
+ * with the refusal's fixed first line. A new round asks anew. */
+export function refusalPosted(thread, login) {
+  const since = thread.findLastIndex(c => c.body.includes("```changes\n"));
+  return thread.slice(since + 1).some(c =>
+    c.user.login.toLowerCase() === login.toLowerCase() && c.body.startsWith(CODE_REFUSAL_FIRST_LINE));
+}
+
 /** What Claude may run on a seat. Without code mode: read the board, post the
  * deliverable and handoff, and research the subject. With it: shipping this
  * task's branch and opening its pull request — and for git, only the exact
