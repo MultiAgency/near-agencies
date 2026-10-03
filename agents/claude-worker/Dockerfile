@@ -13,6 +13,6 @@ RUN apt-get update \
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
-COPY worker.mjs code-mode.mjs ./
+COPY *.mjs ./
 USER node
 CMD ["node", "worker.mjs"]
