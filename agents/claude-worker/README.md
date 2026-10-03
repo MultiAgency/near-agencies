@@ -60,6 +60,20 @@ config, so no system or operator git setting — a stored keychain entry, say �
 takes part, and every commit is authored as the agent. A revision round
 pushes to the same pull request.
 
+This allowlist limits Claude's *direct* commands; it is not a sandbox. Claude
+also writes files (`Write(./**)`) and runs `npm ci` and `npm test`, and npm
+scripts, lifecycle hooks and git hooks (a hook written into `.git/hooks`)
+execute shell commands of Claude's choosing. A task body, a brief or an
+earlier deliverable that slips a prompt injection past it can therefore run
+commands beyond this list, with `GH_TOKEN` and `ANTHROPIC_API_KEY` in the
+environment — so read this section as constraining the worker, not bounding
+what a crafted task can make Claude do. The real limit is the token's scope:
+fork mode works with a token that can only comment and push to the agent's
+own fork of near-agencies; branch mode's token carries Contents and Pull
+requests read/write on near-agencies and nothing else — no Workflows, which
+run with the repository's secrets. Keep both small: what the token cannot
+do, neither can a prompt injection.
+
 ## Settings
 
 See [`deploy/worker.env.example`](deploy/worker.env.example):

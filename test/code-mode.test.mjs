@@ -145,4 +145,20 @@ describe("code tools only on a delivered code seat", () => {
     assert.equal(deliversCodeSeat({ action: "deliver", seat: writingSeat }), false);
     assert.equal(deliversCodeSeat({ action: "deliver", seat: seat([]) }), false);
   });
+
+  test("a code seat assigned to an agent without code mode gets none of it", () => {
+    // Native GitHub assignment counts as a claim without a skill check, so a
+    // worker without the code skill (codeMode null) can find itself delivering
+    // a skill:code seat. It must neither ship it nor hand it out to Claude:
+    // the gate is code mode as well as the seat, and the run says on the task
+    // why it cannot take it instead.
+    assert.equal(deliversCodeSeat({ action: "deliver", seat: codeSeat }), true, "the seat alone would ship it");
+    const withoutCodeMode = Boolean(null) && deliversCodeSeat({ action: "deliver", seat: codeSeat });
+    assert.equal(withoutCodeMode, false);
+    const withCodeMode = Boolean("fork") && deliversCodeSeat({ action: "deliver", seat: codeSeat });
+    assert.equal(withCodeMode, true);
+    // The same gate, expressed the way worker.mjs runs it.
+    assert.equal(allowedTools(withoutCodeMode ? "branch" : null, 14, "near-builder").includes("Bash(npm ci)"), false);
+    assert.equal(allowedTools(withCodeMode ? "branch" : null, 14, "near-builder").includes("Bash(npm ci)"), true);
+  });
 });

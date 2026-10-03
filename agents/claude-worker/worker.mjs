@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 
-import { allowedTools, codeAccess, deliversCodeSeat, mayClaim, CODE_REPO, GIT_CREDENTIAL_HELPER } from "./code-mode.mjs";
+import { allowedTools, codeAccess, deliversCodeSeat, isCodeSeat, mayClaim, CODE_REPO, GIT_CREDENTIAL_HELPER } from "./code-mode.mjs";
 
 const env = name => {
   const value = process.env[name];
@@ -123,15 +123,23 @@ function ship(n, revision) {
 
 function instructions(task) {
   const n = task.seat.number;
-  const code = deliversCodeSeat(task);
+  // With code mode off, an assigned skill:code seat cannot be delivered:
+  // the shipping steps would name commands the run is not allowed to run.
+  const code = Boolean(codeMode) && deliversCodeSeat(task);
   const doing = task.action === "claim"
     ? `Claim task #${n}: comment exactly \`/claim\` on it, then stop. The coordinator assigns it; a later run does the work.`
-    : [
-      `Deliver task #${n}, which is assigned to you.${task.revision ? " The reviewer asked for another round (the latest ```changes comment): address every point in a new deliverable." : ""}`,
-      "Read the task, the job it names, and the deliverables of any tasks it depends on. Do the work, citing sources inline as links.",
-      ...(code ? ship(n, task.revision) : []),
-      `Then post the deliverable comment${code ? ", naming the pull request," : ""}, get its sha256 with the deliverable_sha256 tool, and post the handoff comment, exactly as the rules say. The coordinator closes the task once the handoff checks out.`,
-    ].join("\n");
+    : code
+      ? [
+          `Deliver task #${n}, which is assigned to you.${task.revision ? " The reviewer asked for another round (the latest ```changes comment): address every point in a new deliverable." : ""}`,
+          "Read the task, the job it names, and the deliverables of any tasks it depends on. Do the work, citing sources inline as links.",
+          ...ship(n, task.revision),
+          `Then post the deliverable comment, naming the pull request, get its sha256 with the deliverable_sha256 tool, and post the handoff comment, exactly as the rules say. The coordinator closes the task once the handoff checks out.`,
+        ].join("\n")
+      : [
+          `Deliver task #${n}, which is assigned to you.${task.revision ? " The reviewer asked for another round (the latest ```changes comment): address every point in a new deliverable." : ""}`,
+          "Read the task, the job it names, and the deliverables of any tasks it depends on. Do the work, citing sources inline as links.",
+          `Then post the deliverable comment, get its sha256 with the deliverable_sha256 tool, and post the handoff comment, exactly as the rules say. The coordinator closes the task once the handoff checks out.`,
+        ].join("\n");
   return [
     `You are @${login}, an AI agent on the MultiAgency roster with skills ${skills.join(", ")}. Your roster NEAR account, for payout.account_id, is ${nearAccount}.`,
     "",
@@ -147,7 +155,29 @@ async function run() {
   if (!task) return console.log("worker: nothing to do");
   console.log(`worker: ${task.action} #${task.seat.number}${task.revision ? " (revision)" : ""}`);
   if (dryRun) return;
-  const code = deliversCodeSeat(task);
+  // The two code gates agree: only a run with code mode (the agent listed the
+  // code skill and chose a CODE_ACCESS) that is delivering a skill:code seat
+  // gets the git environment, the shipping instructions and the code tools.
+  const code = Boolean(codeMode) && deliversCodeSeat(task);
+  const assigned = task.action === "deliver" && isCodeSeat(task.seat) && !code;
+  if (assigned) {
+    // Native GitHub assignment counts as a claim without a skill check, so
+    // this happens: say so on the task instead of burning the run's budget
+    // on shipping instructions whose commands are not allowed.
+    console.log(`worker: #${task.seat.number} is a code task but this agent does not run code mode`);
+    const text = [
+      "I cannot take this task: it needs the `code` skill, which my roster entry does not have, so I have no git or npm on this run and cannot deliver a pull request.",
+      "",
+      "An agent with `code` among its skills should claim it instead.",
+    ].join("\n");
+    const response = await fetch(`https://api.github.com/repos/${board}/issues/${task.seat.number}/comments`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${process.env.GH_TOKEN}`, accept: "application/vnd.github+json" },
+      body: JSON.stringify({ body: text }),
+    });
+    if (!response.ok) throw new Error(`GitHub POST comment: ${response.status}`);
+    return;
+  }
   const skill = await (await fetch(skillUrl)).text();
   const cwd = await mkdtemp(join(tmpdir(), `seat-${task.seat.number}-`));
   try {
