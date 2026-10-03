@@ -42,11 +42,11 @@ Decided by the owner, 2026-10-02.
 | Who must approve | a code owner: any internal **person** or the owner. Agents' approvals don't count | the owner |
 | Who may merge | any internal person, or an internal or house agent once a person approved, `test` passed and the AI review is clean | the owner only (the `update` rule) |
 | Money and permission files | internal review is enough on `staging`; the owner reviews them in the release PR | the owner |
-| `.github/` (workflows, CODEOWNERS, PR template) | **the owner only**, on both branches: workflows run with the repository's secrets, and CODEOWNERS decides who reviews everything else | the owner |
+| `.github/` (workflows, CODEOWNERS, PR template), plus what steers agents and reviews (`AGENTS.md`, `CLAUDE.md`, `REVIEW.md`, `.claude/`) | **the owner only**, on both branches: workflows run with the repository's secrets, and CODEOWNERS decides who reviews everything else | the owner |
 
 **One CODEOWNERS file for both branches.** A release carries `staging`'s file into `main`, so the two branches must not differ. The rulesets carry the differences:
-- CODEOWNERS: `* @MultiAgency/internal @jlwaugh`; today's money and permission paths `@jlwaugh @MultiAgency/internal`; `/.github/ @jlwaugh`.
-- `staging` ruleset: PR required, code-owner review, **dismiss stale approvals on push** (otherwise an agent could push after a person approved and then merge what nobody reviewed), `test` required, no force pushes or deletion.
+- CODEOWNERS: `* @MultiAgency/internal @jlwaugh`; today's money and permission paths `@jlwaugh @MultiAgency/internal`; what steers agents and reviews — `/AGENTS.md`, `/CLAUDE.md`, `/REVIEW.md`, `/.claude/` — `@jlwaugh` only, like `/.github/`.
+- `staging` ruleset: PR required, code-owner review, **dismiss stale approvals on push** (otherwise an agent could push after a person approved and then merge what nobody reviewed), `test` required, the operator-approval check (item 7) required once built, no force pushes or deletion.
 - `main` ruleset: as today, including `update`, so only an org admin merges.
 - Team `internal`: internal **people** only, with write (a CODEOWNERS team needs write). Agents go in a separate team, `internal-agents`, with write, so they can merge but never count as reviewers.
 
@@ -73,8 +73,8 @@ Decided by the owner, 2026-10-02.
 3. **Improvement work as GitHub issues, not local cards** (needed once a second coder exists; until then the house coder's local queue works). The maintainer files improvement cards in the Hermes kanban on the owner's laptop, which other coders can't see. It files them as near-agencies issues labelled `agent-ready` instead; a coder takes one by commenting, as people do with `good first issue`. The maintainer also needs issue-write on near-agencies (open item since 2026-10-01).
 4. **Maintainer template.** The board-maintainer skill and `board-changes.py` exist only in `~/.hermes/profiles/maintainer/` on the owner's laptop, outside any repository. Move them into near-agencies (e.g. `agents/hermes-maintainer/`), so every internal maintainer runs the same reviewed version.
 5. **agency-builder stays the internal test agent on its Railway Claude worker** (branch PRs, board triage) instead of moving it to Hermes; the runbook's Hermes setup waits for a real internal contributor.
-6. **The coordinator restores gate labels and reopens job epics.** It restores `agent-eligible`/`human-only` changed by anyone but the bot or an owner, and it reopens a job epic closed by anyone but the bot or an owner (a closed epic drops out of the payout sweep, `lib/coordinator.mjs:443`).
-7. **A required check rejects an operator's approval of their own agent's PR.** The ruleset counts an approval from the author agent's roster `operator`, so it needs a required check that fails a PR whose only approval is from that operator.
+6. **The coordinator restores gate labels and reopens job epics.** It restores `agent-eligible`/`human-only` changed by anyone but the bot or an owner, and it reopens a job epic closed by anyone but the bot or an owner (a closed epic drops out of the payout sweep, `lib/coordinator.mjs:443`). Restoring a gate label after the fact races `/claim`, so the coordinator must also refuse a claim made while the label was set by anyone but the bot or an owner (check the label's latest `labeled` event actor), not only restore it.
+7. **A required check rejects an operator's approval of their own agent's PR.** The ruleset counts an approval from the author agent's roster `operator`, so it needs a required check that fails a PR whose only approval is from that operator. The check must run on `pull_request_review` events too (`submitted` and `dismissed`), not only on `push` — on `push` alone it passes before any approval exists.
 
 ## Out of scope
 
