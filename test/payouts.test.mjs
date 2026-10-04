@@ -205,10 +205,10 @@ describe("filing proposals and closing a job", async () => {
 
   // Serves `issues` by number (PATCHes apply, so a close is visible to settle),
   // `threads` by issue number (and single comments within them, by id, as
-  // commentAt reads a deliverable), open `jobs` for the sweep's listing, and
-  // the treasury's reads from `proposals`, one proposal from `proposal`, and
-  // the indexed vote transactions in `txs`.
-  const serve = ({ issues = {}, threads = {}, proposals = [], jobs = [], proposal = null, txs = [] } = {}) => {
+  // commentAt reads a deliverable), pull requests from `pulls`, open `jobs`
+  // for the sweep's listing, and the treasury's reads from `proposals`, one
+  // proposal from `proposal`, and the indexed vote transactions in `txs`.
+  const serve = ({ issues = {}, threads = {}, proposals = [], jobs = [], proposal = null, txs = [], pulls = {} } = {}) => {
     const reads = [];
     const writes = [];
     globalThis.fetch = async (url, options = {}) => {
@@ -229,6 +229,11 @@ describe("filing proposals and closing a job", async () => {
       if (method === "GET" && u.pathname === "/user") return json({ login: "multi-agency" });
       if (method === "GET" && u.pathname.endsWith("/issues") && u.searchParams.get("labels") === "engagement" && u.searchParams.get("state") === "open") return json(jobs);
       if (method === "GET" && /\/collaborators\/[^/]+\/permission$/.test(u.pathname)) return json({ role_name: "admin" });
+      if ((m = /^\/repos\/[^/]+\/[^/]+\/pulls\/(\d+)$/.exec(u.pathname)) && method === "GET") {
+        const found = pulls[Number(m[1])];
+        if (!found) throw new Error(`unexpected pull read: ${u.pathname}`);
+        return json({ number: Number(m[1]), user: { login: "multi-agency" }, merged: true, ...found });
+      }
       if ((m = /^\/repos\/[^/]+\/[^/]+\/issues\/comments\/(\d+)$/.exec(u.pathname)) && method === "GET") {
         const found = Object.values(threads).flat().find(c => c.id === Number(m[1]));
         if (!found) throw new Error(`unexpected comment read: ${u.pathname}`);
@@ -393,6 +398,28 @@ describe("filing proposals and closing a job", async () => {
     assert.equal(writes.length, 0, "the deliverable no longer matches its pin, so the job stays open");
   });
 
+  // Whatever the payout, a code task owes the merged pull request it delivers:
+  // a volunteer's too, matched to its claimant rather than to a payee.
+  test("a volunteer code task owes its merged pull request before the job closes", async () => {
+    const right = "https://github.com/MultiAgency/near-agencies/pull/50";
+    const code = (pins, pulls = {}) => serve({
+      issues: { 28: epic([terms(29, "0")]), 29: { ...closed(29), labels: [{ name: "skill:code" }] } },
+      threads: { 28: [], 29: [handoff(29, pins)] },
+      pulls,
+    });
+    const unmerged = code({ links: [right] }, { 50: { merged: false } });
+    await closeIfPaid(28, () => {});
+    assert.equal(unmerged.writes.length, 0, "an unmerged pull request holds the job open");
+    const bare = code({ links: [] });
+    await closeIfPaid(28, () => {});
+    assert.equal(bare.writes.length, 0, "a handoff that links no pull request holds the job open");
+    const merged = code({ links: [right] }, { 50: {} });
+    await closeIfPaid(28, () => {});
+    const complete = merged.writes.filter(w => w.path.endsWith("/issues/28/comments"));
+    assert.equal(complete.length, 1, "merged by its claimant, the volunteer code task delivers");
+    assert.match(complete[0].body.body, /^\*\*Job complete\.\*\* 0 payouts executed/);
+  });
+
   // One mixed job on the sweep: task 29 is a volunteer whose signed-off
   // deliverable was edited after task 30's proposal was filed and voted
   // through. The edit holds proposing (payoutProblem covers every member),
@@ -433,7 +460,9 @@ describe("filing proposals and closing a job", async () => {
     const paid = held.writes.filter(w => w.path.endsWith("/issues/30/comments"));
     assert.equal(paid.length, 1, "the paid task's payout is recorded despite the volunteer's edit");
     assert.match(paid[0].body.body, /^\*\*Paid:\*\*/);
-    assert.equal(held.writes.filter(w => w.path.endsWith("/issues/28/comments")).length, 0, "no hold is posted once every proposal is filed");
+    const holds = held.writes.filter(w => w.path.endsWith("/issues/28/comments"));
+    assert.equal(holds.length, 1, "the job says once why it is not completing");
+    assert.match(holds[0].body.body, /^\*\*Delivery on hold:\*\* #29's deliverable was edited after its handoff/);
     assert.equal(held.writes.some(w => w.path.endsWith("/issues/28") && w.body.state === "closed"), false, "the job stays open while the volunteer's delivery is out of order");
 
     // The volunteer re-pins the deliverable as it now reads; the next sweep
