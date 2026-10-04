@@ -80,13 +80,15 @@ describe("preparing a handoff", () => {
   const posted = (id, login, body, minute) =>
     ({ id, user: { login }, body, html_url: `${board}/issues/39#issuecomment-${id}`, created_at: at(minute), updated_at: at(minute) });
   const changes = (id, login, minute) => posted(id, login, `**Changes requested** by @${login}\n\n${fence("changes", { review: 40 })}`, minute);
-  function github(issue, comment = { user: { login: "multi-agency" }, body: work }, thread = []) {
+  function github(issue, comment = { user: { login: "multi-agency" }, body: work }, thread = [], pull = null) {
     const byId = new Map([[555, comment], ...thread.map(c => [c.id, c])]);
     globalThis.fetch = async url => {
       const path = new URL(url).pathname;
       if (path === "/user") return new Response(JSON.stringify({ login: "multi-agency" }));
       if (path.endsWith("/issues/39")) return new Response(JSON.stringify(issue));
       if (path.endsWith("/issues/39/comments")) return new Response(JSON.stringify(thread));
+      const pulls = path.match(/^\/repos\/([\w.-]+)\/([\w.-]+)\/pulls\/(\d+)$/);
+      if (pulls) return pull ? new Response(JSON.stringify({ number: Number(pulls[3]), ...pull })) : new Response("{}", { status: 404 });
       const id = path.match(/\/issues\/comments\/(\d+)$/)?.[1];
       if (id !== undefined) {
         const found = byId.get(Number(id));
@@ -115,10 +117,20 @@ describe("preparing a handoff", () => {
 
   test("a code task's handoff links its pull request, and needs one", async () => {
     const pr = "https://github.com/MultiAgency/near-agencies/pull/50";
-    github(task(["in-progress", "skill:code"]), { user: { login: "multi-agency" }, body: `${work}\n\n${pr}` });
+    github(task(["in-progress", "skill:code"]), { user: { login: "multi-agency" }, body: `${work}\n\n${pr}` }, [], { user: { login: "multi-agency" }, merged: true });
     assert.deepEqual(fenced((await ask()).comment, "handoff").links, [pr, deliverable]);
     github(task(["in-progress", "skill:code"]));
     assert.match((await ask()).error, /pull request/);
+  });
+
+  test("a code task's pull request must be in the task's repository and the claimant's", async () => {
+    const elsewhere = "https://github.com/someone/elsewhere/pull/9";
+    github(task(["in-progress", "skill:code"]), { user: { login: "multi-agency" }, body: `${work}\n\n${elsewhere}` }, [], { user: { login: "multi-agency" }, merged: true });
+    assert.match((await ask()).error, new RegExp(`${elsewhere} is in another repository; the pull request must be in MultiAgency/near-agencies\\.`));
+    github(task(["in-progress", "skill:code"]), { user: { login: "multi-agency" }, body: `${work}\n\nhttps://github.com/MultiAgency/near-agencies/pull/50` }, [], { user: { login: "stranger" }, merged: true });
+    assert.match((await ask()).error, /by @stranger; the pull request must be the claimant's, @multi-agency\./);
+    github(task(["in-progress", "skill:code"]), { user: { login: "multi-agency" }, body: `${work}\n\nhttps://github.com/MultiAgency/near-agencies/pull/51` });
+    assert.match((await ask()).error, /That pull request was not found\./);
   });
 
   test("a review's handoff links the tasks it reviews and needs no deliverable", async () => {

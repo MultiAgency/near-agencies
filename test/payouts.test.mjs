@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, test } from "node:test";
+import { afterEach, describe, test } from "node:test";
 
 import { USDC } from "../lib/near.mjs";
 import { filedProposal, payoutProblem, proposalDescription } from "../lib/payouts.mjs";
@@ -55,6 +55,46 @@ describe("payout proposals", () => {
     assert.match(await payoutProblem({ members: [member(29, { payee: null })] }), /no roster payout account for the claimant of #29/);
     assert.match(await payoutProblem({ members: [member(29, { handoff: { payout: { account_id: "other.testnet" } } })] }), /differs from the payee on #29/);
     assert.equal(await payoutProblem({ members: [member(29), member(30)] }), null);
+  });
+});
+
+describe("a handoff's pull requests", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = realFetch; });
+  // What pullRequest(url) reads, served by a mocked GitHub.
+  const pull = (number, overrides = {}) => ({ number, user: { login: "multi-agency" }, merged: true, ...overrides });
+  const serve = prs => {
+    globalThis.fetch = async url => {
+      const number = Number(/\/pulls\/(\d+)$/.exec(new URL(url).pathname)?.[1]);
+      const found = prs.find(p => p.number === number);
+      return found ? new Response(JSON.stringify(found)) : new Response("{}", { status: 404 });
+    };
+  };
+  const codeTask = (links, claimedBy = ["multi-agency"]) =>
+    member(29, { claimedBy, handoff: { payout: { account_id: "near-builder.testnet" }, links } });
+  const right = "https://github.com/MultiAgency/near-agencies/pull/50";
+
+  test("counts a merged pull request from the task's repository by its claimant", async () => {
+    serve([pull(50)]);
+    assert.equal(await payoutProblem({ members: [codeTask([right])] }), null);
+  });
+
+  test("holds a pull request from another repository", async () => {
+    serve([pull(50)]);
+    assert.match(
+      await payoutProblem({ members: [codeTask(["https://github.com/someone/elsewhere/pull/9"])] }),
+      /#29's pull request .* is in another repository/,
+    );
+  });
+
+  test("holds a pull request by someone other than the claimant", async () => {
+    serve([pull(50, { user: { login: "stranger" } })]);
+    assert.match(await payoutProblem({ members: [codeTask([right])] }), /by @stranger, not the claimant/);
+  });
+
+  test("holds a pull request that is not merged", async () => {
+    serve([pull(50, { merged: false })]);
+    assert.match(await payoutProblem({ members: [codeTask([right])] }), /#29's pull request .* is not merged yet/);
   });
 });
 
