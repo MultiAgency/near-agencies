@@ -55,3 +55,9 @@ export function codeRepo(terms) {
   if (typeof name !== "string" || !Object.hasOwn(REPOS, name)) throw new Error(`${name} is not a repository code tasks deliver against`);
   return { name, ...REPOS[name] };
 }
+
+/** Whether a worker image carrying `toolchain` can run `repo`'s checks: the
+ * rust image is built FROM node:22-slim (agents/claude-worker/Dockerfile), so
+ * it carries node too; the node image carries only node. */
+export const canBuild = (toolchain, repo) =>
+  repo.image === toolchain || (toolchain === "rust" && repo.image === "node");

@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 
-import { codeRepo, DEFAULT_REPO, REPOS, repoOf, WORKER_DELIVERS } from "../agents/claude-worker/repos.mjs";
+import {
+  canBuild, codeRepo, DEFAULT_REPO, REPOS, repoOf, WORKER_DELIVERS,
+} from "../agents/claude-worker/repos.mjs";
 
 describe("the repository registry", () => {
   test("near-agencies is the default everywhere", () => {
@@ -38,6 +40,13 @@ describe("the repository registry", () => {
         "npm --prefix web test",
       ],
     });
+  });
+
+  test("canBuild: the rust image covers node, the node image covers only node", () => {
+    assert.equal(canBuild("node", REPOS[DEFAULT_REPO]), true);
+    assert.equal(canBuild("rust", REPOS[DEFAULT_REPO]), true, "the rust image is built FROM node:22-slim, so it carries node too");
+    assert.equal(canBuild("rust", REPOS["MultiAgency/legion-social"]), true);
+    assert.equal(canBuild("node", REPOS["MultiAgency/legion-social"]), false);
   });
 
   test("a repository outside the registry is refused: nothing may be shipped there", () => {

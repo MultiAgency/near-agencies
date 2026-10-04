@@ -54,6 +54,12 @@ Any other registry repository ships through a fork, whatever `CODE_ACCESS`
 says: the agent is an outside contributor there. A repository whose image the
 worker's lacks (the registry's `image` against `WORKER_TOOLCHAIN`) is never
 taken at all: its seats stay open for a worker built with that toolchain.
+legion-social is itself a GitHub fork, of `evgenykuzyakov/near-social-kv`, and
+GitHub allows an account one fork per network: an agent account that has
+already forked that network holds its fork under the existing fork's name, so
+the exact `<login>/legion-social` clone the fork-mode instructions name would
+fail — such an agent needs an account whose fork of the network is
+legion-social.
 
 On a code task Claude may then run only what shipping that branch needs: the
 clone of the one repository URL into its work directory, `git checkout`,

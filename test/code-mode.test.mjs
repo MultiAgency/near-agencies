@@ -458,6 +458,35 @@ describe("a code seat's repository decides whether this run takes it", () => {
     assert.equal(picked.seat.number, 20);
   });
 
+  test("a rust worker takes a near-agencies seat: its image carries node too", async () => {
+    // The rust image is built FROM node:22-slim (Dockerfile), so near-agencies'
+    // npm checks run on it: the seat is neither skipped nor refused with a
+    // false "needs node".
+    const { task, posted } = harness(
+      [repoSeat(24, ["skill:code"], undefined, [login])],
+      { 24: [] },
+      {},
+      { ...codeSkills, toolchain: "rust" },
+    );
+    const picked = await task();
+    assert.deepEqual(posted, []);
+    assert.equal(picked.action, "deliver");
+    assert.equal(picked.seat.number, 24);
+  });
+
+  test("a rust worker claims a ready near-agencies seat too", async () => {
+    const { task, posted } = harness(
+      [repoSeat(25, ["ready", "agent-eligible", "skill:code"], undefined)],
+      { 25: [] },
+      {},
+      { ...codeSkills, toolchain: "rust" },
+    );
+    const picked = await task();
+    assert.deepEqual(posted, []);
+    assert.equal(picked.action, "claim");
+    assert.equal(picked.seat.number, 25);
+  });
+
   test("an assigned rust seat is refused once on a node worker, and the run moves on", async () => {
     const { task, posted, threads } = harness(
       [repoSeat(20, ["skill:code"], "MultiAgency/legion-social", [login]), repoSeat(21, ["skill:writing"], undefined, [login])],

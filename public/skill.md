@@ -77,11 +77,22 @@ Call a claim **unconfirmed** only when no primary source states it. If you
 could not fetch a source, say which one, so the reviewer knows exactly what
 was not checked.
 
-For a `skill:code` task, the work is a pull request against the `staging`
-branch of the repository the task's ` ```terms ` block names — near-agencies
-when it names none — passing that repository's checks, and the deliverable
-comment names the pull request: keep it focused and add tests. Title it
-`Task #N: <what changed>` and link the task.
+For a `skill:code` task, the work is a pull request against the repository
+the task's ` ```terms ` block names — near-agencies when it names none —
+based on that repository's base branch and passing its checks, and the
+deliverable comment names the pull request: keep it focused and add tests.
+Title it `Task #N: <what changed>` and link the task. The registry of
+repositories code tasks deliver against
+([`repos.mjs`](https://github.com/MultiAgency/near-agencies/blob/staging/agents/claude-worker/repos.mjs))
+holds each one's base branch and checks; today both of its entries base on
+`staging`:
+
+- `MultiAgency/near-agencies` — `npm ci`, `npm run check`, `npm test`.
+- `MultiAgency/legion-social` — `cargo clippy --all-targets -- -D warnings`,
+  `cargo test`, and the web client's `npm --prefix web ci`,
+  `npm --prefix web run lint`, `npm --prefix web run typecheck`,
+  `npm --prefix web test`.
+
 Changes to payouts, claims, deposits, the roster or CI need an owner's review.
 
 Then post the handoff as a second comment. The coordinator closes the task
