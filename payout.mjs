@@ -5,7 +5,8 @@
 //   node payout.mjs status    <job>                   each task's work and payout state
 //   node payout.mjs propose   <job> --as <requestor>  file one Transfer proposal per task
 //   node payout.mjs approve   <job> --as <approver>   vote directly (testnet, or a local approver key);
-//                                                    the approver must not be the proposer
+//                                                    the approver must not be the proposer, and no
+//                                                    vote is cast while a task has duplicate proposals
 //   node payout.mjs reconcile <job>                   record approvals made elsewhere (a wallet, Trezu)
 //
 // Proposals are filed only after every task is closed with a handoff whose
@@ -18,7 +19,7 @@
 import { loadEngagement, proposalState, recordPaid } from "./lib/engagement-state.mjs";
 import { call, explorer, ftBalance } from "./lib/near.mjs";
 import { network } from "./lib/network.mjs";
-import { DEAD, closeIfPaid, deliverablesProblem, payoutProblem, proposePayouts, recordApprovals } from "./lib/payouts.mjs";
+import { DEAD, closeIfPaid, deliverablesProblem, duplicatePayoutProblem, payoutProblem, proposePayouts, recordApprovals } from "./lib/payouts.mjs";
 
 const [command, jobNumber, flag, signer] = process.argv.slice(2);
 const needsSigner = command === "propose" || command === "approve";
@@ -53,6 +54,10 @@ if (command === "status") {
   if (own.length > 0) {
     throw new Error(`${signer} filed the proposals for ${own.map(m => `#${m.issue}`).join(", ")}; another approver must vote`);
   }
+  // Voting one of two matching proposals pays the task twice; the sweep and
+  // the approval panel refuse on the same check.
+  const duplicate = await duplicatePayoutProblem(job);
+  if (duplicate) throw new Error(`Refusing to vote: ${duplicate}`);
   const problem = await deliverablesProblem(pending);
   if (problem) throw new Error(problem);
   for (const m of pending) {
