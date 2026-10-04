@@ -30,15 +30,22 @@ export const boardRole = (github, login) =>
  * login arrives from a human-edited setting, not from the API. A failed role
  * lookup reads as not trusted — it can only lose an owner's round, never the
  * bot's, and the harm this check exists to prevent is acting on a round
- * twice, not missing one. */
+ * twice, not missing one. A lookup refused with 403 — a token that cannot
+ * read board roles at all, as an Issues-only one cannot — is the exception:
+ * fail-closed there strands an owner's direct round, which the coordinator
+ * counts and waits on, with the worker skipping the seat on every run. So
+ * the 403 reads as trusted — the rule this check replaced, whose cost (a
+ * stranger's block counts too) the README and the run log state. */
 export function trustCheck({ github, bot }) {
   if (!bot) throw new Error("trustCheck: the board bot's login (BOARD_BOT) is required");
   // Roles are kept for the run's life; a failed lookup is not kept, so the
-  // next comment asks again. The failure is logged once per login: a token
-  // that cannot read board roles would otherwise silently ignore every
-  // owner's ```changes round, and only the bot's would count.
+  // next comment asks again. A non-403 failure is logged once per login: a
+  // board outage would otherwise silently unseat every owner's round. The
+  // 403 is the token's own defect, the same for every login, so it is
+  // logged once for the run.
   const roles = new Map();
   const warned = new Set();
+  let unscoped = false;
   const roleOf = login => boardRole(github, login);
   return async login => {
     if (login.toLowerCase() === bot.toLowerCase()) return true;
@@ -47,13 +54,20 @@ export function trustCheck({ github, bot }) {
       roles.set(login, role.then(r => OWNER_ROLES.includes(r)));
       role.catch(error => {
         roles.delete(login);
+        if (String(error.message).endsWith(": 403")) {
+          if (!unscoped) {
+            unscoped = true;
+            console.error(`worker: this token cannot read board roles (403): ${"```"}changes rounds count from any author, not just the bot's and an owner's — see agents/claude-worker/README.md`);
+          }
+          return;
+        }
         if (!warned.has(login)) {
           warned.add(login);
           console.error(`worker: cannot read @${login}'s role on the board (${error.message}) — until this works, only the bot's ${"```"}changes rounds count`);
         }
       });
     }
-    return roles.get(login).catch(() => false);
+    return roles.get(login).catch(error => String(error.message).endsWith(": 403"));
   };
 }
 

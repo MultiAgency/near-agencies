@@ -434,4 +434,35 @@ describe("the trust check", () => {
       console.error = realError;
     }
   });
+
+  test("a 403 lookup counts the round, logged once for the run, and is not kept", async () => {
+    // A token that cannot read board roles (an Issues-only fine-grained one
+    // cannot; GitHub answers 403) must not fail closed: the coordinator
+    // counts an owner's direct round and waits for the revision handoff,
+    // and a fail-closed worker never delivers it — the seat stalls. So the
+    // lookup's 403 reads as trusted, the rule this check replaced, at the
+    // documented cost that a stranger's block counts too.
+    let up = false;
+    let calls = 0;
+    const scoped = async path => {
+      calls++;
+      if (!/^\/collaborators\/[^/]+\/permission$/.test(path) || !up) throw new Error(`GitHub GET ${path}: 403`);
+      return { role_name: "admin" };
+    };
+    const errors = [];
+    const realError = console.error;
+    console.error = (...parts) => errors.push(parts.join(" "));
+    try {
+      const trusted = trustCheck({ github: scoped, bot });
+      assert.equal(await trusted("jlwaugh"), true, "the owner's round counts while the lookup cannot answer");
+      assert.equal(await trusted("jlwaugh"), true);
+      assert.equal(await trusted("second"), true);
+      assert.equal(errors.filter(e => e.includes("403")).length, 1, "the missing scope is logged once for the run, not per comment or per login");
+      up = true;
+      assert.equal(await trusted("jlwaugh"), true, "the fallback was not kept: the working lookup answers for itself");
+    } finally {
+      console.error = realError;
+    }
+    assert.equal(calls, 4, "failed lookups are asked again, not cached");
+  });
 });
