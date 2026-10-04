@@ -117,6 +117,16 @@ describe("a duplicated payout proposal", () => {
     assert.match(problem, /reject 41/);
   });
 
+  test("a dead recorded proposal makes a live one the payment to approve", async () => {
+    const m = recorded(29, {}, "Expired");
+    const { pending, problem } = await pendingPayouts({ members: [m] }, approvers, [proposal(40, m, { status: "Expired" }), proposal(41, m), proposal(42, m)]);
+    assert.equal(pending.length, 0, "a dead recorded proposal waits for no vote");
+    assert.match(problem, /\b40\b/, "the dead recorded proposal is named");
+    assert.match(problem, /approve 41/, "a live proposal is what an approver is told to approve");
+    assert.match(problem, /reject 42/);
+    assert.doesNotMatch(problem, /approve 40\b/, "the dead proposal is not the payment the advice names");
+  });
+
   test("one live proposal behaves as today", async () => {
     const m = recorded(29);
     const { problem } = await pendingPayouts({ members: [m] }, approvers, [proposal(40, m)]);
@@ -747,6 +757,21 @@ describe("filing proposals and closing a job", async () => {
     assert.equal(paidOn(restarted.writes).length, 0, "still nothing records once nothing is memoized");
     assert.equal(doublesOn(restarted.writes).length, 1, "paid_twice is found again after a restart");
     assert.equal(closesJob(restarted.writes), false);
+  });
+
+  // The recorded proposal can die beside live extras — expired while an
+  // approver sorts the duplicates out. The flag must not send an approver to
+  // the dead one: proposePayouts never files again for a task with a recorded
+  // payout, so the payment has to land on a live proposal.
+  test("a dead recorded proposal hands its payment to a live one", async () => {
+    const run = serve(dupBoard([onChain(41, "Expired"), onChain(42), onChain(43)], { proposalStatus: "Expired" }));
+    await settlePayouts("multi-agency", { now: 9_000_000 });
+    const flags = flagsOn(run.writes);
+    assert.equal(flags.length, 1);
+    assert.match(flags[0].body.body, /approve 42 and reject 43/, "a live proposal is named as the payment");
+    assert.doesNotMatch(flags[0].body.body, /approve 41\b/, "the dead recorded proposal is not what an approver is told to approve");
+    assert.equal(paidOn(run.writes).length, 0);
+    assert.equal(closesJob(run.writes), false);
   });
 
   // payout.mjs approve — the terminal path — refuses to vote while a
