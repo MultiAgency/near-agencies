@@ -150,6 +150,16 @@ describe("the registry write (putMember)", () => {
     }
   });
 
+  test("another member's successful write does not retire a failure; the same login's does", async () => {
+    globalThis.fetch = async () => new Response(JSON.stringify({ json: { data: {} } }), { status: 200, headers: { "content-type": "application/json" } });
+    // The previous test left newcomer's failure as the last write error.
+    await withLogs(() => putMember(builder({ links: { github: "https://github.com/other" } }), { proof: "u" }));
+    assert.match(registryHealth().last_write_error.message, /the account belongs to another member|an identity change/, "another login's success retires nothing");
+    assert.equal(registryHealth().last_write_error.login, "newcomer");
+    await withLogs(() => putMember(builder(), { proof: "u" }));
+    assert.equal(registryHealth().last_write_error, null, "the same login's successful write does retire it");
+  });
+
   test("the token appears in no output: not in logs, not in a problem, not in health", async () => {
     globalThis.fetch = async () => new Response(JSON.stringify({ json: { code: "X", status: 500, message: "boom" } }), { status: 500, headers: { "content-type": "application/json" } });
     const { value, logs } = await withLogs(() => putMember(builder(), { proof: "u" }));
@@ -370,15 +380,19 @@ describe("the registry backfill", () => {
       rosterRecord("no-kind", { kind: undefined }),
       rosterRecord("lonely-agent", { kind: "agent", operator: "nobody-here", nearAccount: "lonely.testnet" }),
       rosterRecord("ghost-agent", { kind: "agent", operator: "no-kind", nearAccount: "ghost.testnet" }),
+      rosterRecord("grounded", { nearAccount: undefined }),
+      rosterRecord("orphan-agent", { kind: "agent", operator: "grounded", nearAccount: "orphan.testnet", proof: "https://github.com/MultiAgency/kanban-sandbox/issues/9", admittedAt: "2026-09-30T00:00:00.000Z" }),
     ];
     const { writes, problems } = planWrites(members, { commitFor: () => null });
     assert.deepEqual(writes.map(w => w.login), ["joined"]);
     assert.equal(writes[0].proof.from, "record");
     assert.equal(writes[0].admittedAt.from, "record");
-    assert.equal(problems.length, 3);
+    assert.equal(problems.length, 5);
     assert.match(problems[0], /no-kind.*kind must be one of/);
     assert.match(problems[1], /lonely-agent.*not among the members/);
     assert.match(problems[2], /ghost-agent.*not a human member/);
+    assert.match(problems[3], /grounded.*no testnet account/);
+    assert.match(problems[4], /orphan-agent.*grounded has no writable record/, "an agent whose operator will not be written is a problem, not a clean write");
     // Nothing can prove an entry with no join issue and no commit history.
     const unprovable = planWrites([rosterRecord("mystery")], { commitFor: () => null });
     assert.deepEqual(unprovable.writes, []);

@@ -210,7 +210,19 @@ export function planWrites(members, { commitFor }) {
     stamps.set(login, stamp);
   }
 
-  const writable = members.filter(m => proofs.has(loginOf(m)));
+  // An agent whose operator exists and is human but will not be written (no
+  // account, or nothing proves it) would still fail at the registry, so the
+  // plan refuses it here rather than presenting the dry run as clean.
+  const unwritable = new Set();
+  for (const member of members) {
+    if (member.kind !== "agent" || !proofs.has(loginOf(member))) continue;
+    const operator = String(member.operator).toLowerCase();
+    if (!proofs.has(operator)) {
+      problems.push(`${loginOf(member)}: its operator ${operator} has no writable record, so the registry would refuse it`);
+      unwritable.add(loginOf(member));
+    }
+  }
+  const writable = members.filter(m => proofs.has(loginOf(m)) && !unwritable.has(loginOf(m)));
   const agents = writable.filter(m => m.kind === "agent");
   // An agent's write needs its operator admitted already: operators go first
   // among the people, the rest of the people follow, agents come last. Sort
