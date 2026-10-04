@@ -8,9 +8,14 @@ name: private-review
 #
 # Same triggers as ai-review: pull requests from branches in this repository
 # on open and push, and fork pull requests when someone with write access
-# comments `/review` (the action checks the commenter's role). The review reads
-# REVIEW.md and AGENTS.md from the base commit through the API and never runs
-# code from the pull request.
+# comments `/review`. The review reads REVIEW.md and AGENTS.md from the base
+# commit through the API and never runs code from the pull request.
+#
+# Two jobs, so a `/review` that isn't allowed never reaches the review job:
+# - gate: no secrets and no concurrency group. Its if: turns strangers away
+#   before a runner starts, and review/gate checks the commenter has write access.
+# - review: holds NEARAI_API_KEY and the concurrency group, and runs only when
+#   the gate allows, so a refused comment can't load the key or cancel a review.
 
 on:
   pull_request:
@@ -19,16 +24,28 @@ on:
     types: [created]
 
 jobs:
-  review:
+  gate:
     if: >-
       (github.event_name == 'pull_request'
         && github.event.pull_request.head.repo.full_name == github.repository
         && !github.event.pull_request.draft)
       || (github.event_name == 'issue_comment'
         && github.event.issue.pull_request
-        && startsWith(github.event.comment.body, '/review'))
+        && startsWith(github.event.comment.body, '/review')
+        && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ubuntu-latest
-    # Job-level, so a comment that doesn't start a review can't cancel one.
+    permissions:
+      contents: read
+    outputs:
+      allowed: ${{ steps.gate.outputs.allowed }}
+    steps:
+      - id: gate
+        uses: MultiAgency/private-ai/review/gate@68b2de10ae41d19d10ea5e4eb91ec30f5f6f6018 # 68b2de1
+
+  review:
+    needs: gate
+    if: needs.gate.outputs.allowed == 'true'
+    runs-on: ubuntu-latest
     concurrency:
       group: private-review-${{ github.event.pull_request.number || github.event.issue.number }}
       cancel-in-progress: true
@@ -43,7 +60,7 @@ jobs:
         if: env.HAS_KEY != 'true'
         run: echo "::notice::Skipping the private review until the NEARAI_API_KEY repository secret is set."
 
-      - uses: MultiAgency/private-ai/review@0a92ca27e06707c88b210458552ccc0309f3a699 # 0a92ca2
+      - uses: MultiAgency/private-ai/review@68b2de10ae41d19d10ea5e4eb91ec30f5f6f6018 # 68b2de1
         if: env.HAS_KEY == 'true'
         with:
           nearai-api-key: ${{ secrets.NEARAI_API_KEY }}
