@@ -6,7 +6,7 @@
 import { readFile } from "node:fs/promises";
 
 import { issue } from "./lib/github.mjs";
-import { assembleTeam, teamProblem } from "./lib/team.mjs";
+import { assembleTeam, isVolunteer, teamProblem } from "./lib/team.mjs";
 
 const [jobNumber, teamFile] = process.argv.slice(2);
 if (!jobNumber || !teamFile) {
@@ -20,5 +20,5 @@ const problem = teamProblem(job, issues);
 if (problem) throw new Error(problem);
 
 const { team, committed } = await assembleTeam(job, issues);
-for (const { issue: n, title, amount } of team) console.log(`#${n} ${title} (${Number(amount) / 1e6} USDC)`);
+for (const t of team) console.log(`#${t.issue} ${t.title} (${isVolunteer(t) ? "volunteer" : `${Number(t.amount) / 1e6} USDC`})`);
 console.log(`#${job.number}: ${committed} committed; job blocked on ${team.length} tasks`);
