@@ -397,15 +397,24 @@ describe("the trust check", () => {
     assert.equal(await trusted("reader"), false);
   });
 
-  test("a failed lookup is not trusted, and is not kept as an answer", async () => {
+  test("a failed lookup is not trusted, logged once, and not kept as an answer", async () => {
     let up = false;
     const flaky = async path => {
       if (!/^\/collaborators\/[^/]+\/permission$/.test(path) || !up) throw new Error(`GitHub GET ${path}: 503`);
       return { role_name: "admin" };
     };
-    const trusted = trustCheck({ github: flaky, bot });
-    assert.equal(await trusted("jlwaugh"), false, "while the lookup fails, the round is not one");
-    up = true;
-    assert.equal(await trusted("jlwaugh"), true, "the failed lookup was not kept");
+    const errors = [];
+    const realError = console.error;
+    console.error = (...parts) => errors.push(parts.join(" "));
+    try {
+      const trusted = trustCheck({ github: flaky, bot });
+      assert.equal(await trusted("jlwaugh"), false, "while the lookup fails, the round is not one");
+      assert.equal(await trusted("jlwaugh"), false);
+      assert.equal(errors.filter(e => e.includes("jlwaugh")).length, 1, "the failure is logged once per login, not per comment");
+      up = true;
+      assert.equal(await trusted("jlwaugh"), true, "the failed lookup was not kept");
+    } finally {
+      console.error = realError;
+    }
   });
 });

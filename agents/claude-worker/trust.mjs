@@ -18,8 +18,11 @@ export const OWNER_ROLES = ["admin", "maintain"];
  * twice, not missing one. */
 export function trustCheck({ github, bot }) {
   // Roles are kept for the run's life; a failed lookup is not kept, so the
-  // next comment asks again.
+  // next comment asks again. The failure is logged once per login: a token
+  // that cannot read board roles would otherwise silently ignore every
+  // owner's ```changes round, and only the bot's would count.
   const roles = new Map();
+  const warned = new Set();
   const roleOf = login =>
     github(`/collaborators/${encodeURIComponent(login)}/permission`).then(
       p => p.role_name,
@@ -34,7 +37,13 @@ export function trustCheck({ github, bot }) {
     if (!roles.has(login)) {
       const role = roleOf(login);
       roles.set(login, role.then(r => OWNER_ROLES.includes(r)));
-      role.catch(() => roles.delete(login));
+      role.catch(error => {
+        roles.delete(login);
+        if (!warned.has(login)) {
+          warned.add(login);
+          console.error(`worker: cannot read @${login}'s role on the board (${error.message}) — until this works, only the bot's ${"```"}changes rounds count`);
+        }
+      });
     }
     return roles.get(login).catch(() => false);
   };
