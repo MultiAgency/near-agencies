@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 
-import { allowedTools, codeAccess, deliversCodeSeat, CODE_REPO, GIT_CREDENTIAL_HELPER } from "./code-mode.mjs";
+import { allowedTools, codeAccess, deliversCodeSeat, ship, GIT_CREDENTIAL_HELPER } from "./code-mode.mjs";
 import { nextTask as selectTask } from "./next-task.mjs";
 
 const env = name => {
@@ -83,35 +83,6 @@ const helpers = createSdkMcpServer({
   ],
 });
 
-// How Claude ships a code task (public/skill.md § 3): the work lands as a
-// pull request against staging of near-agencies, titled after the task and
-// linked from the deliverable and the handoff; a revision round pushes to the
-// same pull request.
-function ship(n, revision) {
-  const fork = codeMode === "fork";
-  const branch = `task-${n}`;
-  const name = CODE_REPO.split("/")[1];
-  const upstream = `https://github.com/${CODE_REPO}.git`;
-  const clone = fork ? `https://github.com/${login}/${name}.git` : upstream;
-  const pulls = `\`gh pr view ${branch} --repo ${CODE_REPO}\``;
-  return [
-    `This is a code task: the work is a pull request against staging of ${CODE_REPO} (§ 3 of the rules). git authenticates through gh as you, so no token belongs in any URL, and your commits are already authored as you.`,
-    fork
-      ? `\`gh repo fork ${CODE_REPO} --clone=false\` if you have no fork yet (it only reports an existing one), then, in this directory, \`git clone ${clone} .\` — origin is your fork, you push there — and \`git fetch ${upstream} staging\`. Branch from that fetch, never from what the clone checked out: a fork goes stale once created, and one from before staging became the default branch does not even have staging.`
-      : `In this directory: \`git clone --branch staging ${clone} .\`. You push to ${CODE_REPO}.`,
-    revision
-      ? `\`git checkout ${branch}\`: the pull request exists; push your fixes to that same branch and never open a second pull request. ${pulls} shows it.`
-      : fork
-        ? `\`git checkout -b ${branch} FETCH_HEAD\`: the fetch left staging's tip in FETCH_HEAD, and the task branch starts there.`
-        : `\`git checkout -b ${branch}\`: it starts at staging, which the clone checked out.`,
-    "Make the change there: keep it focused, add tests, and make `npm ci`, `npm run check` and `npm test` pass.",
-    `\`git add\` only the files you changed, \`git commit\`, and \`git push -u origin ${branch}\`${fork ? " — origin is your fork" : ""}. If ${pulls} shows a pull request already, push to its branch instead of opening another.`,
-    ...(revision ? [] : [
-      `Open the pull request: write its body to a file first, then \`gh pr create --repo ${CODE_REPO} --head ${fork ? `${login}:` : ""}${branch} --base staging --title "Task #${n}: <what changed>" --body-file <file>\`. The body links task #${n} and says what changed and how you verified it.`,
-    ]),
-  ];
-}
-
 function instructions(task) {
   const n = task.seat.number;
   // With code mode off, an assigned skill:code seat cannot be delivered:
@@ -123,7 +94,7 @@ function instructions(task) {
       ? [
           `Deliver task #${n}, which is assigned to you.${task.revision ? " The reviewer asked for another round (the latest ```changes comment): address every point in a new deliverable." : ""}`,
           "Read the task, the job it names, and the deliverables of any tasks it depends on. Do the work, citing sources inline as links.",
-          ...ship(n, task.revision),
+          ...ship(codeMode, n, login, task.revision),
           `Then post the deliverable comment, naming the pull request, get its sha256 with the deliverable_sha256 tool, and post the handoff comment, exactly as the rules say. The coordinator closes the task once the handoff checks out.`,
         ].join("\n")
       : [
