@@ -50,8 +50,8 @@ describe("the repository registry", () => {
     assert.deepEqual(Object.keys(REPOS).sort(), ["MultiAgency/legion-social", "MultiAgency/near-agencies"]);
   });
 
-  test("until workers read a task's repository (#82), a job may name only what they deliver to", () => {
-    assert.deepEqual([...WORKER_DELIVERS], [DEFAULT_REPO]);
+  test("workers deliver to every registry repository (#82)", () => {
+    assert.deepEqual([...WORKER_DELIVERS].sort(), ["MultiAgency/legion-social", DEFAULT_REPO]);
   });
 
   test("the module imports nothing, so the worker image can copy it", () => {

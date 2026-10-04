@@ -1,14 +1,29 @@
 // Which task this worker's run takes from the board: the first seat assigned
 // to the agent with no handoff since the last change request (deliver it), or
 // otherwise the first ready seat it may claim (/claim it). It imports nothing
-// but code-mode.mjs and trust.mjs, and its GitHub access arrives injected, so
-// the repository's tests can run whole cron runs from the root, where this
-// folder's dependencies (the Claude SDK) are not installed.
-import { CODE_REFUSAL, isCodeSeat, mayClaim, refusalPosted } from "./code-mode.mjs";
+// but code-mode.mjs, repos.mjs and trust.mjs, and its GitHub access arrives
+// injected, so the repository's tests can run whole cron runs from the root,
+// where this folder's dependencies (the Claude SDK) are not installed.
+import {
+  CODE_IMAGE_REFUSAL_FIRST_LINE, CODE_REPO_REFUSAL_FIRST_LINE, CODE_REFUSAL,
+  codeImageRefusal, codeRepoRefusal, isCodeSeat, mayClaim, refusalPosted, termsOf,
+} from "./code-mode.mjs";
+import { codeRepo } from "./repos.mjs";
 import { latestChangesRound, trustCheck } from "./trust.mjs";
 
 const same = (a, b) => a.toLowerCase() === b.toLowerCase();
 const isSeat = issue => !issue.pull_request && /```terms\n/.test(issue.body ?? "");
+
+// The registry entry for a seat's repository, or null when its terms name one
+// outside the registry: codeRepo throws there, and a refusal — not a crash —
+// is how an assigned seat meets that.
+const seatRepo = seat => {
+  try {
+    return codeRepo(termsOf(seat));
+  } catch {
+    return null;
+  }
+};
 
 // When a task last became claimable: its latest `ready` label, or its creation.
 async function readySince(github, issue) {
@@ -23,8 +38,11 @@ async function readySince(github, issue) {
  * (trust.mjs). A deliver result carries `round`, the credited ```changes
  * comment a revision is to address, so the delivery prompt can name it
  * instead of "the latest", which a stranger's later block would be. With
- * dryRun nothing is posted: --dry-run only names the task. */
-export async function nextTask({ github, comment, login, skills, codeMode, bot, claimAfterMs = 0, dryRun = false }) {
+ * dryRun nothing is posted: --dry-run only names the task. `toolchain` is
+ * what this worker's image carries (WORKER_TOOLCHAIN, the Dockerfile's
+ * TOOLCHAIN): a code seat whose repository's image differs — or whose terms
+ * name a repository outside the registry — is never taken. */
+export async function nextTask({ github, comment, login, skills, codeMode, bot, claimAfterMs = 0, dryRun = false, toolchain = "node" }) {
   const trusted = trustCheck({ bot });
   const seats = (await github("/issues?state=open&per_page=100")).filter(isSeat);
   for (const seat of seats.filter(s => s.assignees.some(a => same(a.login, login)))) {
@@ -47,9 +65,37 @@ export async function nextTask({ github, comment, login, skills, codeMode, bot, 
       if (!dryRun && !(await refusalPosted(thread, login, trusted))) await comment(seat.number, CODE_REFUSAL);
       continue;
     }
+    // With code mode, the seat's repository decides whether this run can
+    // ship it at all: one outside the registry is refused, not attempted,
+    // and one whose toolchain this image lacks cannot run its checks (#82).
+    // Either refusal is posted on the seat — once per revision round, on its
+    // own fixed first line — and the run moves on to what it can deliver.
+    if (isCodeSeat(seat) && codeMode) {
+      const repo = seatRepo(seat);
+      if (!repo || repo.image !== toolchain) {
+        if (!dryRun) {
+          const [first, body] = repo
+            ? [CODE_IMAGE_REFUSAL_FIRST_LINE, codeImageRefusal(repo.image, toolchain)]
+            : [CODE_REPO_REFUSAL_FIRST_LINE, codeRepoRefusal(termsOf(seat)?.repo)];
+          if (!(await refusalPosted(thread, login, trusted, first))) await comment(seat.number, body);
+        }
+        continue;
+      }
+    }
     return { action: "deliver", seat, revision: since !== -1, round: since === -1 ? null : thread[since] };
   }
   for (const seat of seats.filter(s => mayClaim(s, skills))) {
+    // A repository this run cannot ship is never claimed: outside the
+    // registry nothing may be shipped there, and a toolchain this image
+    // lacks cannot run its checks (#82). Both stay open — unclaimed — for a
+    // worker whose image has what they need.
+    if (isCodeSeat(seat)) {
+      const repo = seatRepo(seat);
+      if (!repo || repo.image !== toolchain) {
+        console.log(`worker: leaving #${seat.number} alone: ${repo ? `${repo.name} needs the ${repo.image} image` : "its terms name a repository outside the registry"}`);
+        continue;
+      }
+    }
     const wait = claimAfterMs - (Date.now() - await readySince(github, seat));
     if (wait > 0) {
       console.log(`worker: leaving #${seat.number} to others for ${Math.ceil(wait / 60_000)} more min`);

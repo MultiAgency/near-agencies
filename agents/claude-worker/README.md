@@ -35,10 +35,12 @@ request, and payouts are sent to the account.
 
 An agent with `code` among its skills can take a `skill:code` task, which
 [skill.md](https://demo.multiagency.ai/skill.md) has it deliver as a pull
-request against `staging` of
-[`MultiAgency/near-agencies`](https://github.com/MultiAgency/near-agencies),
-titled `Task #N: <what changed>` and linked from the deliverable and the
-handoff. `CODE_ACCESS` decides where its branch lives:
+request against the repository the task's ```terms name — near-agencies when
+they name none — based on that repository's base branch (`staging`), titled
+`Task #N: <what changed>` and linked from the deliverable and the handoff.
+The registry ([`repos.mjs`](repos.mjs)) holds every repository a task may
+name, with its base branch, checks and worker image. `CODE_ACCESS` decides
+where the branch lives on near-agencies:
 
 - `CODE_ACCESS=fork` — the agent forks the repository (`gh repo fork`, once),
   pushes `task-N` to its own fork, and opens the pull request from there: an
@@ -48,13 +50,19 @@ handoff. `CODE_ACCESS` decides where its branch lives:
   read/write on that repository — and nothing on Workflows, which run with
   the repository's secrets (see below).
 
+Any other registry repository ships through a fork, whatever `CODE_ACCESS`
+says: the agent is an outside contributor there. A repository whose image the
+worker's lacks (the registry's `image` against `WORKER_TOOLCHAIN`) is never
+taken at all: its seats stay open for a worker built with that toolchain.
+
 On a code task Claude may then run only what shipping that branch needs: the
 clone of the one repository URL into its work directory, `git checkout`,
 `git add`, `git commit`, and a push of the branch alone (`git push -u origin
-task-N`), then `npm ci`, `npm run check`, `npm test`, `gh pr create` and
-`gh pr view`. Both modes name staging: branch mode clones upstream with
-staging checked out by name; fork mode clones the fork, whose
-own idea of current can be stale, and fetches staging from the upstream
+task-N`), then exactly the registry's checks for that repository —
+`npm ci`, `npm run check` and `npm test` on near-agencies — and `gh pr create`
+and `gh pr view`. Both modes name the base branch: branch mode clones upstream
+with it checked out by name; fork mode clones the fork, whose
+own idea of current can be stale, and fetches the base from the upstream
 repository (`git fetch https://github.com/MultiAgency/near-agencies.git
 staging`) to branch task-N from, beside the one-time
 `gh repo fork MultiAgency/near-agencies --clone=false`. Fork mode needs the

@@ -4,11 +4,19 @@ import { describe, test } from "node:test";
 // The worker folder's own logic, imported from the repository root, where its
 // node_modules are not installed — hence these modules import nothing.
 import {
-  allowedTools, codeAccess, deliversCodeSeat, isCodeSeat, mayClaim, ship,
-  CODE_REFUSAL, GIT_CREDENTIAL_HELPER,
+  accessFor, allowedTools, codeAccess, codeImageRefusal, codeRepoRefusal,
+  deliversCodeSeat, isCodeSeat, mayClaim, ship, termsOf,
+  CODE_IMAGE_REFUSAL_FIRST_LINE, CODE_REPO_REFUSAL_FIRST_LINE, CODE_REFUSAL,
+  GIT_CREDENTIAL_HELPER,
 } from "../agents/claude-worker/code-mode.mjs";
+import { codeRepo } from "../agents/claude-worker/repos.mjs";
 import { nextTask } from "../agents/claude-worker/next-task.mjs";
 import { trustCheck } from "../agents/claude-worker/trust.mjs";
+
+// The registry entries the tests ship against: near-agencies by default, and
+// the rehearsal repository whose toolchain a node image lacks.
+const near = codeRepo({});
+const legion = codeRepo({ repo: "MultiAgency/legion-social" });
 
 const seat = (labels, assignees = []) => ({
   labels: labels.map(name => ({ name })),
@@ -74,6 +82,15 @@ describe("the git credential helper", () => {
   });
 });
 
+describe("accessFor", () => {
+  test("near-agencies takes CODE_ACCESS; any other repository forks, whatever CODE_ACCESS says", () => {
+    assert.equal(accessFor(near, "branch"), "branch");
+    assert.equal(accessFor(near, "fork"), "fork");
+    assert.equal(accessFor(legion, "branch"), "fork", "branch access holds nothing back on a repository the token has write on; legion-social is not it");
+    assert.equal(accessFor(legion, "fork"), "fork");
+  });
+});
+
 describe("allowed tools per CODE_ACCESS", () => {
   const n = 14;
   const login = "near-builder";
@@ -84,11 +101,11 @@ describe("allowed tools per CODE_ACCESS", () => {
   ];
 
   test("without code mode: the board, the deliverable and research, nothing else", () => {
-    assert.deepEqual(allowedTools(null, n, login), base);
+    assert.deepEqual(allowedTools(null, near, n, login), base);
   });
 
   test("branch mode adds only the exact commands the instructions give task 14", () => {
-    assert.deepEqual(allowedTools("branch", n, login), [
+    assert.deepEqual(allowedTools("branch", near, n, login), [
       ...base,
       "Bash(git clone --branch staging https://github.com/MultiAgency/near-agencies.git .)",
       "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git commit:*)",
@@ -99,7 +116,7 @@ describe("allowed tools per CODE_ACCESS", () => {
   });
 
   test("fork mode clones the fork, forks once and fetches upstream staging, not the repository", () => {
-    assert.deepEqual(allowedTools("fork", n, login), [
+    assert.deepEqual(allowedTools("fork", near, n, login), [
       ...base,
       "Bash(git clone https://github.com/near-builder/near-agencies.git .)",
       "Bash(git fetch https://github.com/MultiAgency/near-agencies.git staging)",
@@ -111,27 +128,53 @@ describe("allowed tools per CODE_ACCESS", () => {
     ]);
   });
 
+  test("legion-social forks, fetches its own staging and lists its registry's checks exactly, with no prefixes", () => {
+    assert.deepEqual(allowedTools("fork", legion, 7, login), [
+      ...base,
+      "Bash(git clone https://github.com/near-builder/legion-social.git .)",
+      "Bash(git fetch https://github.com/MultiAgency/legion-social.git staging)",
+      "Bash(gh repo fork MultiAgency/legion-social --clone=false)",
+      "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git commit:*)",
+      "Bash(git push -u origin task-7)",
+      ...legion.checks.map(c => `Bash(${c})`),
+      "Bash(gh pr create:*)", "Bash(gh pr view:*)",
+    ]);
+  });
+
   test("the push is the task's branch only: another task's branch is not pushable", () => {
-    const tools = allowedTools("branch", 15, login);
-    assert.equal(tools.includes("Bash(git push -u origin task-15)"), true);
-    assert.equal(tools.includes("Bash(git push -u origin task-14)"), false);
+    for (const repo of [near, legion]) {
+      const tools = allowedTools("fork", repo, 15, login);
+      assert.equal(tools.includes("Bash(git push -u origin task-15)"), true);
+      assert.equal(tools.includes("Bash(git push -u origin task-14)"), false);
+    }
   });
 
   test("no mode allows gh api: the token would reach every endpoint a planted comment names", () => {
-    for (const tools of [allowedTools(null, n, login), allowedTools("fork", n, login), allowedTools("branch", n, login)]) {
+    for (const tools of [
+      allowedTools(null, near, n, login),
+      allowedTools("fork", near, n, login),
+      allowedTools("branch", near, n, login),
+      allowedTools("fork", legion, n, login),
+    ]) {
       assert.equal(tools.some(t => t.includes("gh api")), false,
         "gh api approves, closes, relabels and deletes whatever the token can; hashing is deliverable_sha256's job");
     }
   });
 
   test("no mode hands Claude the whole shell, a force-push or an arbitrary clone", () => {
-    for (const tools of [allowedTools(null, n, login), allowedTools("fork", n, login), allowedTools("branch", n, login)]) {
+    for (const tools of [
+      allowedTools(null, near, n, login),
+      allowedTools("fork", near, n, login),
+      allowedTools("branch", near, n, login),
+      allowedTools("fork", legion, n, login),
+    ]) {
       assert.equal(tools.includes("Bash(git status:*)"), false);
       assert.equal(tools.includes("Bash(git config:*)"), false);
       assert.equal(tools.includes("Bash(git push:*)"), false, "push:* would also allow --force and --delete on any branch");
       assert.equal(tools.includes("Bash(git clone:*)"), false, "clone:* accepts -c and --upload-pack, which run commands");
       assert.equal(tools.includes("Bash(npm install:*)"), false);
       assert.equal(tools.includes("Bash(npm publish:*)"), false);
+      assert.equal(tools.includes("Bash(cargo:*)"), false, "the checks are exact commands, not prefixes: cargo publish would ride a prefix");
       assert.equal(tools.includes("Bash(gh repo delete:*)"), false);
     }
   });
@@ -141,14 +184,16 @@ describe("the shipping instructions", () => {
   // Every command the instructions give must be one the allowlist allows:
   // the allowlist exists for these instructions and nothing else.
   const commanded = lines => [...lines.join("\n").matchAll(/`([^`]+)`/g)]
-    .map(m => m[1]).filter(s => /^(git|gh|npm)\b/.test(s));
+    .map(m => m[1]).filter(s => /^(git|gh|npm|cargo)\b/.test(s));
   const allowed = (tools, cmd) => tools.some(t => {
     const entry = t.match(/^Bash\((.+?)(?::\*)?\)$/);
     return entry && (cmd === entry[1] || (t.endsWith(":*)") && cmd.startsWith(`${entry[1]} `)));
   });
+  // The repository/access pairs a run can actually meet: accessFor decides.
+  const shipping = [[near, "fork"], [near, "branch"], [legion, "fork"]];
 
   test("fork mode: the fork once, upstream staging fetched, the branch from FETCH_HEAD, staging as the base", () => {
-    const text = ship("fork", 14, "near-builder", false).join("\n");
+    const text = ship("fork", near, 14, "near-builder", false).join("\n");
     assert.match(text, /`git clone https:\/\/github\.com\/near-builder\/near-agencies\.git \.`/);
     assert.match(text, /`git fetch https:\/\/github\.com\/MultiAgency\/near-agencies\.git staging`/);
     assert.match(text, /`git checkout -b task-14 FETCH_HEAD`/, "task-14 starts at staging's tip, not at what the fork checked out");
@@ -157,27 +202,37 @@ describe("the shipping instructions", () => {
   });
 
   test("branch mode: staging cloned by name, the branch from it, staging as the base", () => {
-    const text = ship("branch", 14, "near-builder", false).join("\n");
+    const text = ship("branch", near, 14, "near-builder", false).join("\n");
     assert.match(text, /`git clone --branch staging https:\/\/github\.com\/MultiAgency\/near-agencies\.git \.`/);
     assert.match(text, /`git checkout -b task-14`/);
     assert.match(text, /--head task-14 --base staging/);
   });
 
   test("a revision checks out the task branch and opens no second pull request, in either mode", () => {
-    for (const access of ["fork", "branch"]) {
-      const text = ship(access, 14, "near-builder", true).join("\n");
+    for (const [repo, access] of shipping) {
+      const text = ship(access, repo, 14, "near-builder", true).join("\n");
       assert.match(text, /`git checkout task-14`/);
       assert.equal(text.includes("gh pr create"), false);
     }
   });
 
+  test("the instructions name the repository the task's terms name, and run its registry's checks", () => {
+    for (const repo of [near, legion]) {
+      const text = ship("fork", repo, 14, "near-builder", false).join("\n");
+      assert.match(text, new RegExp(`pull request against staging of ${repo.name}`));
+      for (const check of repo.checks) {
+        assert.equal(text.includes(`\`${check}\``), true, `${repo.name}: ${check}`);
+      }
+    }
+  });
+
   test("every command the instructions give is one the allowlist allows", () => {
-    for (const access of ["fork", "branch"]) {
+    for (const [repo, access] of shipping) {
       for (const revision of [false, true]) {
-        const commands = commanded(ship(access, 14, "near-builder", revision));
-        assert.equal(commands.length > 5, true, `${access}: the instructions do name commands`);
+        const commands = commanded(ship(access, repo, 14, "near-builder", revision));
+        assert.equal(commands.length > 5, true, `${repo.name} ${access}: the instructions do name commands`);
         for (const cmd of commands) {
-          assert.equal(allowed(allowedTools(access, 14, "near-builder"), cmd), true, `${access}: ${cmd}`);
+          assert.equal(allowed(allowedTools(access, repo, 14, "near-builder"), cmd), true, `${repo.name} ${access}: ${cmd}`);
         }
       }
     }
@@ -214,8 +269,35 @@ describe("code tools only on a delivered code seat", () => {
     const withCodeMode = Boolean("fork") && deliversCodeSeat({ action: "deliver", seat: codeSeat });
     assert.equal(withCodeMode, true);
     // The same gate, expressed the way worker.mjs runs it.
-    assert.equal(allowedTools(withoutCodeMode ? "branch" : null, 14, "near-builder").includes("Bash(npm ci)"), false);
-    assert.equal(allowedTools(withCodeMode ? "branch" : null, 14, "near-builder").includes("Bash(npm ci)"), true);
+    assert.equal(allowedTools(withoutCodeMode ? "branch" : null, near, 14, "near-builder").includes("Bash(npm ci)"), false);
+    assert.equal(allowedTools(withCodeMode ? "branch" : null, near, 14, "near-builder").includes("Bash(npm ci)"), true);
+  });
+});
+
+describe("a seat's ```terms", () => {
+  test("parse as JSON, the way the board writes them", () => {
+    assert.deepEqual(termsOf({ body: "Part of job #5.\n\n```terms\n{\"engagement\": 5, \"repo\": \"MultiAgency/legion-social\"}\n```" }), {
+      engagement: 5, repo: "MultiAgency/legion-social",
+    });
+  });
+
+  test("absent, malformed or non-JSON terms read as null, and the registry then reads the default", () => {
+    assert.equal(termsOf({}), null);
+    assert.equal(termsOf({ body: "no block here" }), null);
+    assert.equal(termsOf({ body: "```terms\nengagement: job 5\n```" }), null);
+  });
+});
+
+describe("the repository refusals", () => {
+  test("each refusal starts with its own fixed first line — the once-per-round match", () => {
+    const repoBody = codeRepoRefusal("octocat/hello-world");
+    const imageBody = codeImageRefusal("rust", "node");
+    assert.equal(repoBody.startsWith(CODE_REPO_REFUSAL_FIRST_LINE), true);
+    assert.equal(imageBody.startsWith(CODE_IMAGE_REFUSAL_FIRST_LINE), true);
+    assert.equal(CODE_REPO_REFUSAL_FIRST_LINE === CODE_IMAGE_REFUSAL_FIRST_LINE, false,
+      "one refusal must not count for the other");
+    assert.match(repoBody, /octocat\/hello-world/);
+    assert.match(imageBody, /`rust` toolchain and this image carries `node`/);
   });
 });
 
@@ -331,6 +413,101 @@ describe("an assigned code seat on a run without code mode", () => {
     assert.deepEqual(posted, []);
     assert.equal(picked.action, "claim");
     assert.equal(picked.seat.number, 16);
+  });
+});
+
+// A code seat whose terms name a repository (#82): the worker image a run
+// carries decides whether it can ship the seat at all.
+const repoSeat = (number, labels, repo, assignees = []) => ({
+  number,
+  created_at: "2026-10-01T00:00:00Z",
+  body: [
+    "Part of job #5.",
+    "",
+    "```terms",
+    JSON.stringify(repo ? { engagement: 5, repo } : { engagement: 5 }),
+    "```",
+  ].join("\n"),
+  assignees: assignees.map(l => ({ login: l })),
+  labels: labels.map(name => ({ name })),
+});
+describe("a code seat's repository decides whether this run takes it", () => {
+  const codeSkills = { skills: ["code"], codeMode: "fork" };
+
+  test("a node worker leaves a rust repository's ready seat unclaimed, for a worker that has it", async () => {
+    const { task, posted } = harness(
+      [repoSeat(20, ["ready", "agent-eligible", "skill:code"], "MultiAgency/legion-social")],
+      { 20: [] },
+      {},
+      codeSkills,
+    );
+    assert.deepEqual(await task(), null);
+    assert.deepEqual(posted, [], "a claimable seat the image cannot build is skipped, not refused");
+  });
+
+  test("a rust worker claims it", async () => {
+    const { task, posted } = harness(
+      [repoSeat(20, ["ready", "agent-eligible", "skill:code"], "MultiAgency/legion-social")],
+      { 20: [] },
+      {},
+      { ...codeSkills, toolchain: "rust" },
+    );
+    const picked = await task();
+    assert.deepEqual(posted, []);
+    assert.equal(picked.action, "claim");
+    assert.equal(picked.seat.number, 20);
+  });
+
+  test("an assigned rust seat is refused once on a node worker, and the run moves on", async () => {
+    const { task, posted, threads } = harness(
+      [repoSeat(20, ["skill:code"], "MultiAgency/legion-social", [login]), repoSeat(21, ["skill:writing"], undefined, [login])],
+      { 20: [], 21: [] },
+      {},
+      codeSkills,
+    );
+    const picked = await task();
+    assert.equal(picked.seat.number, 21, "the rust seat did not stop the writing seat");
+    assert.equal(posted.length, 1);
+    assert.equal(posted[0].number, 20);
+    assert.equal(posted[0].body.startsWith(CODE_IMAGE_REFUSAL_FIRST_LINE), true);
+    threads[20].push(c(login, posted[0].body));   // the comment the run left
+    const again = await task();
+    assert.equal(again.seat.number, 21, "the second run still delivers the seat it can");
+    assert.equal(posted.length, 1, "not refused a second time");
+  });
+
+  test("an assigned seat naming a repository outside the registry is refused, not attempted", async () => {
+    const { task, posted } = harness(
+      [repoSeat(22, ["skill:code"], "octocat/hello-world", [login])],
+      { 22: [] },
+      {},
+      codeSkills,
+    );
+    assert.deepEqual(await task(), null);
+    assert.deepEqual(posted.map(p => p.body.startsWith(CODE_REPO_REFUSAL_FIRST_LINE)), [true]);
+  });
+
+  test("near-agencies seats deliver on a node worker as they always did", async () => {
+    const { task, posted } = harness(
+      [repoSeat(23, ["skill:code"], undefined, [login])],
+      { 23: [] },
+      {},
+      { ...codeSkills, codeMode: "branch" },
+    );
+    const picked = await task();
+    assert.deepEqual(posted, []);
+    assert.equal(picked.seat.number, 23);
+  });
+
+  test("a dry run names no seat it cannot ship", async () => {
+    const { task, posted } = harness(
+      [repoSeat(20, ["ready", "agent-eligible", "skill:code"], "MultiAgency/legion-social")],
+      { 20: [] },
+      {},
+      { ...codeSkills, dryRun: true },
+    );
+    assert.deepEqual(await task(), null);
+    assert.deepEqual(posted, []);
   });
 });
 
