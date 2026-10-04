@@ -637,6 +637,18 @@ describe("verifying a close", () => {
     assert.equal(log.patches, 0, "nothing was reopened");
   });
 
+  test("an earlier trusted close does not vouch for a close made since", async () => {
+    // The bot closed round 1; a change request reopened the task; the claimant
+    // closes round 2 by hand. Until that close's event is indexed, the latest
+    // `closed` event is the bot's — and it is not this close.
+    const earlier = new Date(Date.parse(NOW()) - 60000).toISOString();
+    const at = NOW();
+    const log = serve([closedEvt("multi-agency", earlier)], { closedAt: at, closedBy: "tamperer" });
+    assert.equal(await closeVerified(37, at), false, "the bot's round-1 close is not this one");
+    assert.equal(log.patches, 1, "the stranger's fresh close is reopened");
+    assert.equal(log.comments, 1, "said so once");
+  });
+
   test("a proper close made since the events were read is not undone", async () => {
     const at = NOW();
     const log = serve([closedEvt("tamperer")], { state: "closed", closedAt: new Date(Date.parse(at) + 5000).toISOString() });
