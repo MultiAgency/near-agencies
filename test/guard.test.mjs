@@ -500,11 +500,50 @@ describe("tasks closed by hand", () => {
     assert.deepEqual(reopened(fake, 99), []);
     assert.deepEqual(commentsOn(fake, 98), [], "no hold is posted without a proposer");
   });
+
+  // Tidy strips a closed seat's status label, so the reopened task must take
+  // up the one its state calls for, or the coordinator never acts on it again.
+  test("a reopened claimed task resumes in progress", async () => {
+    const claimed = { ...seatIssue(140, [], [], ["multi-agency"]), state: "closed", closed_at: NOW() };
+    const seat = seatIssue(141, ["blocked", "skill:writing"], [140]);
+    const fake = await runCycle(board({
+      open: [seat],
+      issues: { 140: claimed, 141: seat },
+      events: { 140: [closedEvt("tamperer")] },
+    }));
+
+    assert.equal(reopened(fake, 140).length, 1);
+    assert.deepEqual(fake.labelPosts.find(w => w.number === 140)?.labels, ["in-progress"], "the claimant keeps working");
+  });
+
+  test("a reopened unclaimed task with its dependencies done is ready to claim", async () => {
+    const done = { ...seatIssue(142, []), state: "closed", closed_at: NOW() };
+    const seat = seatIssue(143, ["blocked", "skill:writing"], [142]);
+    const fake = await runCycle(board({
+      open: [seat],
+      issues: { 142: done, 143: seat },
+      events: { 142: [closedEvt("tamperer")] },
+    }));
+
+    assert.deepEqual(fake.labelPosts.find(w => w.number === 142)?.labels, ["ready"]);
+  });
+
+  test("a reopened unclaimed task with an open dependency is blocked again", async () => {
+    const handClosed = { ...seatIssue(144, [], [146]), state: "closed", closed_at: NOW() };
+    const seat = seatIssue(145, ["blocked", "skill:writing"], [144]);
+    const fake = await runCycle(board({
+      open: [seat],
+      issues: { 144: handClosed, 145: seat, 146: seatIssue(146, ["in-progress"]) },
+      events: { 144: [closedEvt("tamperer")] },
+    }));
+
+    assert.deepEqual(fake.labelPosts.find(w => w.number === 144)?.labels, ["blocked"]);
+  });
 });
 
 describe("verifying a close", () => {
   // state/closedAt describe the issue a re-read before reopening would see.
-  const serve = (events, { state = "closed", closedAt = null } = {}, log = { eventReads: 0, issueReads: 0, comments: 0, patches: 0 }) => {
+  const serve = (events, { state = "closed", closedAt = null } = {}, log = { eventReads: 0, issueReads: 0, comments: 0, patches: 0, labels: 0 }) => {
     globalThis.fetch = async (url, options = {}) => {
       const u = new URL(url);
       const method = options.method ?? "GET";
@@ -514,6 +553,7 @@ describe("verifying a close", () => {
       if (u.pathname.match(/\/issues\/\d+$/) && method === "GET") { log.issueReads += 1; return json({ state, ...(closedAt ? { closed_at: closedAt } : {}) }); }
       if (u.pathname.match(/\/collaborators\/[^/]+\/permission$/)) return json({ role_name: "read" });
       if (u.pathname.endsWith("/comments") && method === "POST") { log.comments += 1; return json({}); }
+      if (u.pathname.endsWith("/labels") && method === "POST") { log.labels += 1; return json({}); }
       if (method === "PATCH") { log.patches += 1; return json({}); }
       throw new Error(`unexpected request: ${method} ${u.pathname}`);
     };
@@ -522,7 +562,10 @@ describe("verifying a close", () => {
 
   test("counts a close whose event is not indexed yet, rather than reopening it", async () => {
     const log = serve([]);
-    assert.equal(await closeVerified(30, NOW()), true, "no event yet reads as the coordinator's own close");
+    const at = NOW();
+    assert.equal(await closeVerified(30, at), true, "no event yet reads as the coordinator's own close");
+    assert.equal(await closeVerified(30, at), true, "and it is checked again rather than trusted");
+    assert.equal(log.eventReads, 2, "an unproven close is not memoized");
     assert.equal(log.patches, 0, "nothing was reopened");
   });
 
@@ -532,6 +575,7 @@ describe("verifying a close", () => {
     assert.equal(await closeVerified(31, at), false, "a stranger's close does not stand");
     assert.equal(log.patches, 1, "reopened once");
     assert.equal(log.comments, 1, "said so once");
+    assert.equal(log.labels, 1, "the reopened task takes up a status label again");
 
     const trusted = serve([closedEvt("multi-agency")]);
     assert.equal(await closeVerified(32, at), true);
@@ -554,5 +598,39 @@ describe("verifying a close", () => {
     const log = serve([closedEvt("tamperer")], { state: "open" });
     assert.equal(await closeVerified(34, at), false);
     assert.equal(log.patches, 0, "not reopened again");
+  });
+
+  test("a failed epic audit does not lose its window", async () => {
+    const epic = epicIssue(87, { labels: ["engagement"] });
+    let eventsFail = true;
+    const patches = [];
+    globalThis.fetch = async (url, options = {}) => {
+      const u = new URL(url);
+      const method = options.method ?? "GET";
+      const json = body => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+      if (u.pathname === "/user") return json({ login: "multi-agency" });
+      if (u.pathname === `${REPO}/issues` && method === "GET") {
+        return u.searchParams.get("since") !== null ? json([epic]) : json([]);
+      }
+      if (u.pathname === `${REPO}/issues/87/events`) {
+        if (eventsFail) {
+          eventsFail = false;
+          return new Response("boom", { status: 500 });
+        }
+        return json([closedEvt("tamperer")]);
+      }
+      if (u.pathname === `${REPO}/issues/87` && method === "GET") return json(epic);
+      if (u.pathname.match(/\/collaborators\/[^/]+\/permission$/)) return json({ role_name: "read" });
+      if (method === "PATCH") { patches.push(u.pathname); return json({}); }
+      if (u.pathname.endsWith("/comments") && method === "POST") return json({});
+      throw new Error(`unexpected request: ${method} ${u.pathname}`);
+    };
+
+    // First pass: the epic's events read fails, the audit throws, and the
+    // watermark must stay so the window is audited again.
+    await cycle();
+    assert.notEqual(coordinatorHealth().last_error, null, "the failing audit surfaced");
+    await cycle();
+    assert.equal(patches.length, 1, "the window was audited again once the read worked");
   });
 });
