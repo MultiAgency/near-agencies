@@ -33,6 +33,14 @@ import { putMember, putMemberBody, rosterStoreFiles } from "../lib/roster.mjs";
 const dryRun = process.argv.includes("--dry-run");
 const REGISTRY_URL = process.env.REGISTRY_URL;
 
+// An account's suffix names its network by convention (.testnet here, .near
+// on mainnet; an implicit account has no suffix and belongs to its network by
+// construction). roster.json is shared by every network, so a record whose
+// account contradicts NEAR_NETWORK must not be written: the registry would
+// take it as admitted — and every coordinator of that network would read it
+// back as a member to pay — on a network it was never admitted on.
+const NETWORK_TLD = { testnet: ".testnet", mainnet: ".near" };
+
 // --- the local records -------------------------------------------------------
 
 const buildersOf = path => {
@@ -161,6 +169,11 @@ export function planWrites(members, { commitFor }) {
     const login = loginOf(member);
     if (!member.nearAccount) {
       problems.push(`${login}: no ${network.networkId} account to be paid at — not written`);
+      continue;
+    }
+    const elsewhere = Object.entries(NETWORK_TLD).find(([id, tld]) => id !== network.networkId && String(member.nearAccount).endsWith(tld));
+    if (elsewhere) {
+      problems.push(`${login}: ${member.nearAccount} is a ${elsewhere[0]} account, not ${network.networkId} — not written`);
       continue;
     }
     if (!KINDS.includes(member.kind)) {

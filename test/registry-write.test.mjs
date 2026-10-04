@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -109,7 +109,7 @@ describe("the registry write (putMember)", () => {
   });
 
   test("a 5xx is retried, and success after retries reports no failure", async () => {
-    const statuses = [500, 503];
+    const statuses = [429, 503]; // a throttle and an outage: both retry
     const seen = [];
     globalThis.fetch = async (url, options = {}) => {
       seen.push(JSON.parse(options.body).json.githubLogin);
@@ -291,6 +291,10 @@ describe("/admit writes the shared registry", () => {
     assert.equal(body.admission.status, "admitted");
     assert.equal(body.admission.proofUrl, ISSUE_URL);
     assert.ok(new Date(body.admission.admittedAt) > new Date(Date.now() - 60_000));
+    // One admission, one stamp: the registry carries the admittedAt the
+    // board's own store recorded, not a second, later "now".
+    const stored = JSON.parse(readFileSync(admittedFile, "utf8")).builders.at(-1);
+    assert.equal(body.admission.admittedAt, stored.admittedAt, "the two copies of the admission agree on its time");
     // The admission also stands locally, and the command is answered with no
     // registry failure to report.
     assert.ok(state.comments.some(c => c.body.startsWith("**Admitted** by @owner-jl.")), state.comments.map(c => c.body).join("|"));
@@ -393,6 +397,11 @@ describe("the registry backfill", () => {
     assert.match(problems[2], /ghost-agent.*not a human member/);
     assert.match(problems[3], /grounded.*no testnet account/);
     assert.match(problems[4], /orphan-agent.*grounded has no writable record/, "an agent whose operator will not be written is a problem, not a clean write");
+    // An account of the other network is never written for this one: the
+    // registry would take it as admitted where it was not.
+    const foreign = planWrites([rosterRecord("mainlander", { nearAccount: "mainlander.near" })], { commitFor: () => null });
+    assert.deepEqual(foreign.writes, []);
+    assert.match(foreign.problems[0], /mainlander\.near is a mainnet account, not testnet/);
     // Nothing can prove an entry with no join issue and no commit history.
     const unprovable = planWrites([rosterRecord("mystery")], { commitFor: () => null });
     assert.deepEqual(unprovable.writes, []);
@@ -447,6 +456,15 @@ describe("the registry backfill", () => {
     assert.match(dry, /"githubLogin":"pat"/);
     assert.match(dry, /"operatorGithubLogin":"pat"/);
     assert.match(dry, /"githubLogin":"sam"/);
+
+    // The accident the guard exists for: a run for the wrong network writes
+    // nothing — roster.json's accounts belong to testnet.
+    const backfill = fileURLToPath(new URL("../scripts/registry-backfill.mjs", import.meta.url));
+    const wrong = await nodeIn([backfill, "--dry-run"], { ...env, NEAR_NETWORK: "mainnet" }).catch(error => `${error.stdout}\n${error.stderr}`);
+    assert.match(wrong, /registry backfill — mainnet/);
+    assert.match(wrong, /0 members to write/);
+    assert.match(wrong, /pat\.testnet is a testnet account, not mainnet/);
+    assert.match(wrong, /sam\.testnet is a testnet account, not mainnet/);
 
     // The real run writes through a registry this test serves, people first.
     const writes = [];
