@@ -21,8 +21,9 @@ npm ci
 npm run check && npm test
 ```
 
-Neither needs credentials or a network. For a bug, write the failing test
-first (see [AGENTS.md](AGENTS.md)).
+The check and tests need no credentials or network; `npm ci` fetches the
+dependencies first ([AGENTS.md](AGENTS.md)). For a bug, write the failing
+test first.
 
 ## Opening the pull request
 
@@ -38,10 +39,12 @@ Fill in the template's **Plan** and **Verification**.
 ## Review and merge
 
 One code owner's approval is needed ([`CODEOWNERS`](.github/CODEOWNERS):
-team `internal`, or the owner). Authors can't approve their own pull
-requests, and a push dismisses an earlier approval. An internal contributor
-may merge once there's an approval, `test` has passed and the AI review is
-clean.
+team `internal`, or the owner — the owner alone for the owner-only files
+below). Authors can't approve their own pull requests, and a push dismisses
+an earlier approval. An internal contributor may merge once there's an
+approval, `test` has passed and the AI review is clean; a pull request
+authored by an agent waits for the owner, who reviews, approves and merges
+it ([AGENTS.md](AGENTS.md)).
 
 ## Owner-only files
 
