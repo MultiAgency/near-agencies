@@ -1,0 +1,49 @@
+name: private-review
+
+# A second AI review of every pull request against REVIEW.md, beside
+# ai-review: the model runs in a NEAR AI Cloud enclave, every request is
+# end-to-end encrypted to it, and the review ends with what was verified (see
+# MultiAgency/private-ai). Findings inform the owner's review; they never
+# approve or block a merge on their own.
+#
+# Same triggers as ai-review: pull requests from branches in this repository
+# on open and push, and fork pull requests when a MultiAgency owner comments
+# `/review`. The review reads REVIEW.md and AGENTS.md from the base commit and
+# never runs code from the pull request.
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+  issue_comment:
+    types: [created]
+
+jobs:
+  review:
+    if: >-
+      (github.event_name == 'pull_request'
+        && github.event.pull_request.head.repo.full_name == github.repository
+        && !github.event.pull_request.draft)
+      || (github.event_name == 'issue_comment'
+        && github.event.issue.pull_request
+        && startsWith(github.event.comment.body, '/review')
+        && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
+    runs-on: ubuntu-latest
+    # Job-level, so a comment that doesn't start a review can't cancel one.
+    concurrency:
+      group: private-review-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    env:
+      HAS_KEY: ${{ secrets.NEARAI_API_KEY != '' }}
+    steps:
+      - name: No NEARAI_API_KEY secret yet
+        if: env.HAS_KEY != 'true'
+        run: echo "::notice::Skipping the private review until the NEARAI_API_KEY repository secret is set."
+
+      - uses: MultiAgency/private-ai/review@fbfb5795ca19fa94e62800e66bd410630ae9368d # main
+        if: env.HAS_KEY == 'true'
+        with:
+          nearai-api-key: ${{ secrets.NEARAI_API_KEY }}
