@@ -4,7 +4,7 @@ import { describe, test } from "node:test";
 // The worker folder's own logic, imported from the repository root, where its
 // node_modules are not installed — hence code-mode.mjs imports nothing.
 import {
-  allowedTools, codeAccess, deliversCodeSeat, isCodeSeat, mayClaim,
+  allowedTools, codeAccess, deliversCodeSeat, isCodeSeat, mayClaim, ship,
   CODE_REFUSAL, GIT_CREDENTIAL_HELPER,
 } from "../agents/claude-worker/code-mode.mjs";
 import { nextTask } from "../agents/claude-worker/next-task.mjs";
@@ -89,7 +89,7 @@ describe("allowed tools per CODE_ACCESS", () => {
   test("branch mode adds only the exact commands the instructions give task 14", () => {
     assert.deepEqual(allowedTools("branch", n, login), [
       ...base,
-      "Bash(git clone https://github.com/MultiAgency/near-agencies.git .)",
+      "Bash(git clone --branch staging https://github.com/MultiAgency/near-agencies.git .)",
       "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git commit:*)",
       "Bash(git push -u origin task-14)",
       "Bash(npm ci)", "Bash(npm run check)", "Bash(npm test)",
@@ -97,16 +97,16 @@ describe("allowed tools per CODE_ACCESS", () => {
     ]);
   });
 
-  test("fork mode clones, forks and syncs the agent's fork, not the repository", () => {
+  test("fork mode clones the fork, forks once and fetches upstream staging, not the repository", () => {
     assert.deepEqual(allowedTools("fork", n, login), [
       ...base,
       "Bash(git clone https://github.com/near-builder/near-agencies.git .)",
+      "Bash(git fetch https://github.com/MultiAgency/near-agencies.git staging)",
+      "Bash(gh repo fork MultiAgency/near-agencies --clone=false)",
       "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git commit:*)",
       "Bash(git push -u origin task-14)",
       "Bash(npm ci)", "Bash(npm run check)", "Bash(npm test)",
       "Bash(gh pr create:*)", "Bash(gh pr view:*)",
-      "Bash(gh repo fork MultiAgency/near-agencies --clone=false)",
-      "Bash(gh repo sync near-builder/near-agencies)",
     ]);
   });
 
@@ -125,6 +125,53 @@ describe("allowed tools per CODE_ACCESS", () => {
       assert.equal(tools.includes("Bash(npm install:*)"), false);
       assert.equal(tools.includes("Bash(npm publish:*)"), false);
       assert.equal(tools.includes("Bash(gh repo delete:*)"), false);
+    }
+  });
+});
+
+describe("the shipping instructions", () => {
+  // Every command the instructions give must be one the allowlist allows:
+  // the allowlist exists for these instructions and nothing else.
+  const commanded = lines => [...lines.join("\n").matchAll(/`([^`]+)`/g)]
+    .map(m => m[1]).filter(s => /^(git|gh|npm)\b/.test(s));
+  const allowed = (tools, cmd) => tools.some(t => {
+    const entry = t.match(/^Bash\((.+?)(?::\*)?\)$/);
+    return entry && (cmd === entry[1] || (t.endsWith(":*)") && cmd.startsWith(`${entry[1]} `)));
+  });
+
+  test("fork mode: the fork once, upstream staging fetched, the branch from FETCH_HEAD, staging as the base", () => {
+    const text = ship("fork", 14, "near-builder", false).join("\n");
+    assert.match(text, /`git clone https:\/\/github\.com\/near-builder\/near-agencies\.git \.`/);
+    assert.match(text, /`git fetch https:\/\/github\.com\/MultiAgency\/near-agencies\.git staging`/);
+    assert.match(text, /`git checkout -b task-14 FETCH_HEAD`/, "task-14 starts at staging's tip, not at what the fork checked out");
+    assert.match(text, /--head near-builder:task-14 --base staging/);
+    assert.equal(text.includes("gh repo sync"), false, "no sync can create staging on a fork that lacks it");
+  });
+
+  test("branch mode: staging cloned by name, the branch from it, staging as the base", () => {
+    const text = ship("branch", 14, "near-builder", false).join("\n");
+    assert.match(text, /`git clone --branch staging https:\/\/github\.com\/MultiAgency\/near-agencies\.git \.`/);
+    assert.match(text, /`git checkout -b task-14`/);
+    assert.match(text, /--head task-14 --base staging/);
+  });
+
+  test("a revision checks out the task branch and opens no second pull request, in either mode", () => {
+    for (const access of ["fork", "branch"]) {
+      const text = ship(access, 14, "near-builder", true).join("\n");
+      assert.match(text, /`git checkout task-14`/);
+      assert.equal(text.includes("gh pr create"), false);
+    }
+  });
+
+  test("every command the instructions give is one the allowlist allows", () => {
+    for (const access of ["fork", "branch"]) {
+      for (const revision of [false, true]) {
+        const commands = commanded(ship(access, 14, "near-builder", revision));
+        assert.equal(commands.length > 5, true, `${access}: the instructions do name commands`);
+        for (const cmd of commands) {
+          assert.equal(allowed(allowedTools(access, 14, "near-builder"), cmd), true, `${access}: ${cmd}`);
+        }
+      }
     }
   });
 });

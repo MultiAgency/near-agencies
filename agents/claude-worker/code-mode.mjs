@@ -76,18 +76,57 @@ export function refusalPosted(thread, login) {
     c.user.login.toLowerCase() === login.toLowerCase() && c.body.startsWith(CODE_REFUSAL_FIRST_LINE));
 }
 
+/** The instructions Claude is given for shipping a code task; worker.mjs
+ * folds them into its prompt. Every mode names staging: branch mode clones
+ * upstream with staging checked out; fork mode clones its own fork — whose
+ * default branch can be stale, or main on a fork from before the staging
+ * switch — and fetches staging from the upstream URL, so the task branch
+ * starts at FETCH_HEAD, staging's tip, whatever the fork looks like. Both
+ * open the pull request with --base staging. Kept here, dependency-free
+ * beside allowedTools(), so the tests can hold the two against each other:
+ * every command the instructions give must be one the allowlist allows.
+ * `access` is fork or branch, `n` the task's number, `login` the agent's
+ * GitHub login, which names its fork, and `revision` says the pull request
+ * exists: another round pushes to it and never opens a second one. */
+export function ship(access, n, login, revision) {
+  const fork = access === "fork";
+  const branch = `task-${n}`;
+  const name = CODE_REPO.split("/")[1];
+  const upstream = `https://github.com/${CODE_REPO}.git`;
+  const clone = fork ? `https://github.com/${login}/${name}.git` : upstream;
+  const pulls = `\`gh pr view ${branch} --repo ${CODE_REPO}\``;
+  return [
+    `This is a code task: the work is a pull request against staging of ${CODE_REPO} (§ 3 of the rules). git authenticates through gh as you, so no token belongs in any URL, and your commits are already authored as you.`,
+    fork
+      ? `\`gh repo fork ${CODE_REPO} --clone=false\` if you have no fork yet (it only reports an existing one), then, in this directory, \`git clone ${clone} .\` — origin is your fork, you push there — and \`git fetch ${upstream} staging\`: a fork goes stale once created, and one from before staging became the default branch does not even have staging.`
+      : `In this directory: \`git clone --branch staging ${clone} .\`. You push to ${CODE_REPO}.`,
+    revision
+      ? `\`git checkout ${branch}\`: the pull request exists; push your fixes to that same branch and never open a second pull request. ${pulls} shows it.`
+      : fork
+        ? `\`git checkout -b ${branch} FETCH_HEAD\`: the fetch left staging's tip in FETCH_HEAD, and the task branch starts there.`
+        : `\`git checkout -b ${branch}\`: it starts at staging, which the clone checked out.`,
+    "Make the change there: keep it focused, add tests, and make `npm ci`, `npm run check` and `npm test` pass.",
+    `\`git add\` only the files you changed, \`git commit\`, and \`git push -u origin ${branch}\`${fork ? " — origin is your fork" : ""}. If ${pulls} shows a pull request already, push to its branch instead of opening another.`,
+    ...(revision ? [] : [
+      `Open the pull request: write its body to a file first, then \`gh pr create --repo ${CODE_REPO} --head ${fork ? `${login}:` : ""}${branch} --base staging --title "Task #${n}: <what changed>" --body-file <file>\`. The body links task #${n} and says what changed and how you verified it.`,
+    ]),
+  ];
+}
+
 /** What Claude may run on a seat. Without code mode: read the board, post the
  * deliverable and handoff, and research the subject. With it: shipping this
  * task's branch and opening its pull request — and for git, only the exact
- * commands the instructions give: the clone of the one URL into this
- * directory, and a push of the task's branch alone. Prefix patterns would be
- * far too wide here: `git push:*` also allows force-pushing or deleting any
- * unprotected branch, including other agents' task branches, and
- * `git clone:*` accepts `-c` and `--upload-pack`, which run arbitrary
- * commands. Fork mode alone may fork the repository and sync the fork with it
- * before the clone (a fork's default branch goes stale once created).
- * `access` is fork or branch, `n` the task's number, `login` the agent's
- * GitHub login, which names its fork. */
+ * commands ship() gives: the clone of the one URL into this directory, and a
+ * push of the task's branch alone. Prefix patterns would be far too wide
+ * here: `git push:*` also allows force-pushing or deleting any unprotected
+ * branch, including other agents' task branches, and `git clone:*` accepts
+ * `-c` and `--upload-pack`, which run arbitrary commands. Fork mode fetches
+ * staging from the upstream URL instead of syncing the fork, because no sync
+ * can create the branch a fork from before staging lacks:
+ * `gh repo sync --branch staging` asks GitHub's merge-upstream endpoint,
+ * which answers 404 Branch not found for a branch the fork lacks, and its
+ * fallback only updates an existing ref. `access` is fork or branch, `n` the
+ * task's number, `login` the agent's GitHub login, which names its fork. */
 export function allowedTools(access, n, login) {
   const tools = [
     "Read(./**)", "Write(./**)", "Edit(./**)", "Glob", "Grep", "WebSearch", "WebFetch",
@@ -96,18 +135,18 @@ export function allowedTools(access, n, login) {
   ];
   if (!access) return tools;
   const name = CODE_REPO.split("/")[1];
-  const clone = access === "fork"
-    ? `https://github.com/${login}/${name}.git`
-    : `https://github.com/${CODE_REPO}.git`;
+  const upstream = `https://github.com/${CODE_REPO}.git`;
   return tools.concat(
-    `Bash(git clone ${clone} .)`,
+    access === "fork"
+      ? `Bash(git clone https://github.com/${login}/${name}.git .)`
+      : `Bash(git clone --branch staging ${upstream} .)`,
+    ...(access === "fork" ? [
+      `Bash(git fetch ${upstream} staging)`,
+      `Bash(gh repo fork ${CODE_REPO} --clone=false)`,
+    ] : []),
     "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git commit:*)",
     `Bash(git push -u origin task-${n})`,
     "Bash(npm ci)", "Bash(npm run check)", "Bash(npm test)",
     "Bash(gh pr create:*)", "Bash(gh pr view:*)",
-    ...(access === "fork" ? [
-      `Bash(gh repo fork ${CODE_REPO} --clone=false)`,
-      `Bash(gh repo sync ${login}/${name})`,
-    ] : []),
   );
 }

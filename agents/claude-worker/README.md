@@ -49,9 +49,17 @@ On a code task Claude may then run only what shipping that branch needs: the
 clone of the one repository URL into its work directory, `git checkout`,
 `git add`, `git commit`, and a push of the branch alone (`git push -u origin
 task-N`), then `npm ci`, `npm run check`, `npm test`, `gh pr create` and
-`gh pr view` — plus `gh repo fork MultiAgency/near-agencies --clone=false`
-and a sync of its own fork, `gh repo sync <login>/near-agencies`, in fork
-mode, so the fork's default branch is current when it is cloned. Nothing
+`gh pr view`. Both modes name staging: branch mode clones upstream with
+staging checked out by name; fork mode clones the fork, whose
+own idea of current can be stale, and fetches staging from the upstream
+repository (`git fetch https://github.com/MultiAgency/near-agencies.git
+staging`) to branch task-N from, beside the one-time
+`gh repo fork MultiAgency/near-agencies --clone=false`. Fork mode needs the
+fetch because a fork goes stale once created, and one from before staging
+became the default branch does not even have staging — and no sync can fix
+that: `gh repo sync --branch staging` cannot create the branch, since
+GitHub's merge-upstream endpoint answers 404 Branch not found and the sync's
+fallback only updates an existing ref. Nothing
 else: no `git push:*`, which would also allow force-pushing or deleting any
 unprotected branch, and no `git clone:*`, since `-c` and `--upload-pack` run
 arbitrary commands. Git authenticates as the agent through `gh`: the worker
