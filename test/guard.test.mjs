@@ -348,6 +348,23 @@ describe("claims made under a stranger's gate label", () => {
     assert.ok(commentsOn(fake, 72)[0].body.startsWith("Claimed by @multi-agency."));
   });
 
+  test("a stranger's flip of the gate label back does not lock claims", async () => {
+    // `agent-eligible` set at creation: a stranger removes it and puts it back
+    // before the sweep runs. The label stands as it was, so the claim carries —
+    // refusing it would let the flip-flop take the task from agents for good.
+    const seat = seatIssue(73, ["ready", "skill:writing", "agent-eligible"]);
+    const fake = await runCycle(board({
+      open: [seat],
+      issues: { 73: seat },
+      threads: { 73: [claim(73, 9104, "multi-agency")] },
+      events: { 73: [unlabeled("tamperer", "agent-eligible"), labeled("tamperer", "agent-eligible")] },
+    }));
+
+    assert.deepEqual(fake.assigns, [{ number: 73, login: "multi-agency" }]);
+    assert.deepEqual(fake.reactions[9104], [{ user: { login: "multi-agency" }, content: "+1" }]);
+    assert.ok(!commentsOn(fake, 73).some(c => /can't claim this task/.test(c.body)), "the claim was not refused");
+  });
+
   test("a native assignment under a stranger's gate label is refused", async () => {
     const seat = seatIssue(74, ["ready", "skill:writing", "agent-eligible"], [], ["multi-agency"]);
     const fake = await runCycle(board({
