@@ -103,7 +103,7 @@ main:focus { outline: none; }
    every input or step with it. */
 form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; max-width: 34rem; }
 label { font-weight: 500; font-size: 0.95rem; display: grid; gap: 0.35rem; }
-input, textarea {
+input, select, textarea {
   font: inherit; color: var(--ink); background: var(--surface);
   border: 1px solid var(--rule); border-radius: var(--radius-field); padding: 0.65rem 0.8rem;
 }

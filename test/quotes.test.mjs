@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { describe, test } from "node:test";
+import { afterEach, describe, test } from "node:test";
 
-import { chosenDeposit, payerProblems } from "../lib/engagements.mjs";
+import { chosenDeposit, createQuote, invalidBrief, payerProblems } from "../lib/engagements.mjs";
 
 const NEAR = 10n ** 24n;
 const deposit = "3000000";
@@ -70,5 +70,43 @@ describe("the buyer's chosen deposit", () => {
     assert.deepEqual(payerProblems({ exists: true, available: NEAR / 10n, usdc: 3_000_000n }, "5000000"), [
       "it needs 5 USDC and holds 3 USDC",
     ]);
+  });
+});
+
+describe("the repository a job names", () => {
+  const brief = { title: "A one-page guide", brief: "Write the guide, with sources." };
+
+  test("a registry repository is taken; none named means the default", () => {
+    assert.equal(invalidBrief(brief), null);
+    assert.equal(invalidBrief({ ...brief, repo: "" }), null);
+    assert.equal(invalidBrief({ ...brief, repo: null }), null);
+    assert.equal(invalidBrief({ ...brief, repo: "MultiAgency/near-agencies" }), null);
+    assert.equal(invalidBrief({ ...brief, repo: "MultiAgency/legion-social" }), null);
+  });
+
+  test("any other value refuses the quote with the reason", () => {
+    assert.match(invalidBrief({ ...brief, repo: "octocat/hello-world" }), /repo must be a repository code tasks deliver against/);
+    assert.match(invalidBrief({ ...brief, repo: "multiagency/legion-social" }), /repo must be/, "the registry's names are exact");
+    assert.match(invalidBrief({ ...brief, repo: 5 }), /repo must be/);
+    assert.match(invalidBrief({ ...brief, repo: ["MultiAgency/legion-social"] }), /repo must be/, "an array is not a name");
+  });
+});
+
+describe("the quote record", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  test("carries the repository the brief named, and none when it did not", async () => {
+    // createQuote reads the final block height over RPC; nothing else goes online.
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { header: { height: 100 } } }), { headers: { "content-type": "application/json" } });
+    const named = await createQuote({
+      title: "A one-page guide", brief: "Write the guide, with sources.", channel: "wallet", amount: "3000000", repo: "MultiAgency/legion-social",
+    });
+    assert.equal(named.repo, "MultiAgency/legion-social");
+    const plain = await createQuote({
+      title: "A one-page guide", brief: "Write the guide, with sources.", channel: "wallet", amount: "3000000",
+    });
+    assert.equal(plain.repo, undefined, "with no repo, records read as they always did");
   });
 });

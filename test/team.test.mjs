@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, describe, test } from "node:test";
 
 import { draftFor, isApproval, namedDraft } from "../lib/coordinator.mjs";
-import { fence, repoUrl } from "../lib/github.mjs";
+import { fence, fenced, repoUrl } from "../lib/github.mjs";
 import { assembleTeam, tasksMade, teamProblem } from "../lib/team.mjs";
 
 process.env.GITHUB_TOKEN ??= "test-token";
@@ -51,6 +51,13 @@ describe("team drafts", () => {
     assert.match(teamProblem(job(), [task("a", { depends_on: ["b"] }), task("b")]), /depends on b, which is not an earlier task/);
   });
 
+  test("refuses an engagement block naming a repository outside the registry", () => {
+    assert.match(teamProblem(job({ body: `**Job** opened by \`org.testnet\`.\n\nA brief.\n\n${fence("engagement", { deposit: { amount: "3000000" }, repo: "octocat/hello-world" })}` }), [task("a")]),
+      /not a repository code tasks deliver against/);
+    assert.equal(teamProblem(job({ body: `**Job** opened by \`org.testnet\`.\n\nA brief.\n\n${fence("engagement", { deposit: { amount: "3000000" }, repo: "MultiAgency/legion-social" })}` }), [task("a")]),
+      null, "a registry repository is taken");
+  });
+
   test("refuses a team that pays out more than the deposit", () => {
     assert.match(teamProblem(job(), [task("a", { amount: "2000000" }), task("b", { amount: "1000001" })]),
       /pay 3.000001 USDC, more than the 3 USDC deposit/);
@@ -79,6 +86,36 @@ describe("team drafts", () => {
 describe("assembling a team", () => {
   const realFetch = globalThis.fetch;
   afterEach(() => { globalThis.fetch = realFetch; });
+
+  test("a code task's terms carry the repository its job named, and other tasks none", async () => {
+    const created = [];
+    globalThis.fetch = async (url, options = {}) => {
+      const u = new URL(url);
+      const method = options.method ?? "GET";
+      const json = body => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+      if (method === "GET" && u.pathname === "/repos/MultiAgency/kanban-sandbox/issues") return json([]);
+      if (method === "POST" && u.pathname === "/repos/MultiAgency/kanban-sandbox/issues") {
+        const body = JSON.parse(options.body);
+        created.push(body);
+        return json({ number: 30 + created.length, html_url: `https://github.com/MultiAgency/kanban-sandbox/issues/${30 + created.length}` });
+      }
+      if (method === "PATCH" && u.pathname === "/repos/MultiAgency/kanban-sandbox/issues/28") return json({});
+      throw new Error(`unexpected request: ${method} ${u.pathname}`);
+    };
+    const names = repo => `**Job** opened by \`org.testnet\`.\n\nA brief.\n\n${fence("engagement", { deposit: { amount: "3000000" }, ...(repo ? { repo } : {}) })}`;
+    await assembleTeam(job({ body: names("MultiAgency/legion-social"), labels: [{ name: "engagement" }] }), [
+      task("code", { labels: ["skill:code", "agent-eligible"] }),
+      task("research", { labels: ["skill:research", "agent-eligible"] }),
+    ]);
+    assert.equal(fenced(created[0].body, "terms").repo, "MultiAgency/legion-social");
+    assert.equal(fenced(created[1].body, "terms").repo, undefined, "only a code task ships code");
+    // Without a named repository the terms read exactly as they always did.
+    created.length = 0;
+    await assembleTeam(job({ labels: [{ name: "engagement" }] }), [
+      task("code", { labels: ["skill:code", "agent-eligible"] }),
+    ]);
+    assert.equal(fenced(created[0].body, "terms").repo, undefined);
+  });
 
   test("the job's checklist reads a volunteer task as a volunteer, not 0 USDC", async () => {
     const patched = [];
