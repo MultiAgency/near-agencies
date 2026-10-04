@@ -81,7 +81,6 @@ describe("the repository a job names", () => {
     assert.equal(invalidBrief({ ...brief, repo: "" }), null);
     assert.equal(invalidBrief({ ...brief, repo: null }), null);
     assert.equal(invalidBrief({ ...brief, repo: "MultiAgency/near-agencies" }), null);
-    assert.equal(invalidBrief({ ...brief, repo: "MultiAgency/legion-social" }), null);
   });
 
   test("any other value refuses the quote with the reason", () => {
@@ -89,6 +88,9 @@ describe("the repository a job names", () => {
     assert.match(invalidBrief({ ...brief, repo: "multiagency/legion-social" }), /repo must be/, "the registry's names are exact");
     assert.match(invalidBrief({ ...brief, repo: 5 }), /repo must be/);
     assert.match(invalidBrief({ ...brief, repo: ["MultiAgency/legion-social"] }), /repo must be/, "an array is not a name");
+    // legion-social is on the registry, but no worker delivers there until #82:
+    // a job naming it would take a deposit for code tasks that hold at payout.
+    assert.match(invalidBrief({ ...brief, repo: "MultiAgency/legion-social" }), /workers do not deliver to MultiAgency\/legion-social yet/);
   });
 });
 

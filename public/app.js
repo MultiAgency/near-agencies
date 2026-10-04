@@ -111,7 +111,7 @@ async function renderHome(owner) {
             <label>Brief<span class="hint">What to deliver, and how you will sign it off.</span>
               <textarea name="brief" required minlength="20" maxlength="8000"></textarea></label>
             <label>Repository<span class="hint">Where code tasks deliver their pull requests.</span>
-              <select name="repo">${config.repos.map(r => html`<option value="${r}" ${r === config.defaultRepo ? html`selected` : ""}>${r}</option>`)}</select></label>
+              <select name="repo"><option value="" selected>${config.defaultRepo}</option>${config.repos.filter(r => r !== config.defaultRepo).map(r => html`<option value="${r}">${r}</option>`)}</select></label>
             <button type="submit">Get deposit details</button>
             <p class="status error" id="hire-error" hidden></p>
           </form>

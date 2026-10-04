@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 
-import { codeRepo, DEFAULT_REPO, REPOS, repoOf } from "../agents/claude-worker/repos.mjs";
+import { codeRepo, DEFAULT_REPO, REPOS, repoOf, WORKER_DELIVERS } from "../agents/claude-worker/repos.mjs";
 
 describe("the repository registry", () => {
   test("near-agencies is the default everywhere", () => {
@@ -48,6 +48,10 @@ describe("the repository registry", () => {
 
   test("the registry holds every repository once, under its exact name", () => {
     assert.deepEqual(Object.keys(REPOS).sort(), ["MultiAgency/legion-social", "MultiAgency/near-agencies"]);
+  });
+
+  test("until workers read a task's repository (#82), a job may name only what they deliver to", () => {
+    assert.deepEqual([...WORKER_DELIVERS], [DEFAULT_REPO]);
   });
 
   test("the module imports nothing, so the worker image can copy it", () => {

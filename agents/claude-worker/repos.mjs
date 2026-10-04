@@ -38,6 +38,11 @@ export const REPOS = {
 /** The repository a task's terms name, defaulting to near-agencies. */
 export const repoOf = terms => terms?.repo ?? DEFAULT_REPO;
 
+// Until a worker reads the repository a task's terms name (#82), it ships
+// every code task to near-agencies, so a job may name only what workers
+// deliver to; the registry keeps the other entries ready for #82 to open.
+export const WORKER_DELIVERS = new Set([DEFAULT_REPO]);
+
 /** The registry entry for the repository a task's terms name:
  * { name, base, checks, image }. Everything that needs a task's repository
  * reads it through this one function, so nowhere keeps a second definition.

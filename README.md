@@ -196,7 +196,9 @@ choice travels with the job: the quote carries it into the epic's
 ```` ```engagement ```` block, and from there into the ```` ```terms ````
 of every `skill:code` seat, whose pull request a payout counts only once it
 is merged in that seat's own repository. Workers still deliver to
-near-agencies only until a seat's repository reaches the worker (#82). The
+near-agencies only until a seat's repository reaches the worker (#82), so
+until then a job may name only near-agencies; the registry already records
+what each other repository will demand of its pull requests. The
 registry decides where code is shipped and paid, so it changes only through
 owner review.
 

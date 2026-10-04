@@ -21,7 +21,7 @@
 import express from "express";
 import { rateLimit } from "express-rate-limit";
 
-import { DEFAULT_REPO, REPOS } from "./agents/claude-worker/repos.mjs";
+import { DEFAULT_REPO, WORKER_DELIVERS } from "./agents/claude-worker/repos.mjs";
 import { listEngagements, loadEngagement } from "./lib/engagement-state.mjs";
 import { mountEngagements } from "./lib/engagements.mjs";
 import { errorHandler, readFailure } from "./lib/errors.mjs";
@@ -105,8 +105,9 @@ app.get("/api/config", (request, response) => {
     x402: Boolean(process.env.FACILITATOR_URL),
     roster: { kinds: KINDS, skills: SKILLS },
     // The repositories a job may name (agents/claude-worker/repos.mjs), for
-    // the hire form's choice; with none named, code tasks deliver to the default.
-    repos: Object.keys(REPOS),
+    // the hire form's choice: what workers deliver to until #82 teaches them
+    // a task's repository. With none named, code tasks deliver to the default.
+    repos: [...WORKER_DELIVERS],
     defaultRepo: DEFAULT_REPO,
   });
 });
