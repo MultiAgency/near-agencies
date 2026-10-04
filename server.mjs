@@ -16,8 +16,9 @@
 //
 // With FACILITATOR_URL set, the x402-paid routes are mounted too
 // (lib/x402-intake.mjs): POST /engagements and GET /brief. With COORDINATOR=1
-// this instance also runs the seat coordinator (lib/coordinator.mjs); run it in
-// exactly one place.
+// this instance also runs the seat coordinator (lib/coordinator.mjs), which
+// refuses to write when another instance holds the board's liveness record —
+// it stands by, reports it here, and takes over when that record goes silent.
 import express from "express";
 import { rateLimit } from "express-rate-limit";
 
@@ -80,8 +81,11 @@ app.get("/api/health", async (request, response) => {
   // Capped, so a slow GitHub can't make the liveness check slow; the read goes on
   // in the background and fills the cache for the next call.
   const idle = await withTimeout(idleReport(), 3000, "idle report").catch(() => null);
-  response.status(stale ? 503 : 200).json({
-    ok: !stale,
+  // Standby is this deployment reporting that another holds the board: its own
+  // coordinator is deliberately idle, which is still not a healthy coordinator.
+  const down = stale || coordinator?.standby === true;
+  response.status(down ? 503 : 200).json({
+    ok: !down,
     coordinator,
     github: githubBudget(),
     engagements,

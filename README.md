@@ -244,7 +244,11 @@ Both run `npm start` with a volume at `/app/.data` for the quote store.
 Variables: `NEAR_NETWORK=testnet`, `HOST=0.0.0.0`, `TRUST_PROXY=1`,
 `SANDBOX_REPO`, `GITHUB_TOKEN` (the bot account's fine-grained token for the
 board), and `COORDINATOR` as above: the coordinator must run in exactly one
-place. The x402 routes stay off unless a facilitator is configured.
+place, and now enforces it — a second instance finds the board's liveness
+record (a closed `MultiAgency coordinator liveness` issue) held fresh by the
+runner, stands by without writing, and takes over automatically once that
+record has been silent for a minute. The x402 routes stay off unless a
+facilitator is configured.
 
 ## Network profiles
 
