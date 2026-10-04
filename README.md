@@ -262,8 +262,12 @@ production moves to mainnet later, staging stays on testnet.
 Both run `npm start` with a volume at `/app/.data` for the quote store.
 Variables: `NEAR_NETWORK=testnet`, `HOST=0.0.0.0`, `TRUST_PROXY=1`,
 `SANDBOX_REPO`, `GITHUB_TOKEN` (the bot account's fine-grained token for the
-board), and `COORDINATOR` as above: the coordinator must run in exactly one
-place. The x402 routes stay off unless a facilitator is configured.
+board), `REGISTRY_URL` (the shared member registry's oRPC base —
+`https://multiagency.ai/api/rpc/builders` in production;
+`https://dev.multiagency.ai/api/rpc/builders` is a disposable test registry,
+for testing the board code only — unset, the roster is the local `roster.json`
+plus board admissions), and `COORDINATOR` as above: the coordinator must run in
+exactly one place. The x402 routes stay off unless a facilitator is configured.
 
 ## Network profiles
 

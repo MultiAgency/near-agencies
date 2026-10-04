@@ -9,7 +9,7 @@
 //   GET  /api/engagements/:n/payouts   proposals waiting for an approver's vote
 //   GET  /api/roster/:login            where someone stands: join request, roster, tasks to claim
 //   GET  /api/stats               jobs done, USDC paid, agents and people on the roster
-//   GET  /api/health              coordinator liveness, the GitHub budget, stuck engagements, idle jobs
+//   GET  /api/health              coordinator liveness, the GitHub budget, the registry's last read, stuck engagements, idle jobs
 //   POST /api/join/message        the roster join message for a wallet to sign
 //   POST /api/join/request        check a signed join request; returns the issue to open
 //   POST /api/handoff             a task's handoff, pinned and checked, for its claimant to post
@@ -31,7 +31,7 @@ import { network } from "./lib/network.mjs";
 import { withTimeout } from "./lib/near.mjs";
 import { KINDS, SKILLS, mountOnboarding } from "./lib/onboarding.mjs";
 import { prepareHandoff } from "./lib/handoff.mjs";
-import { roster } from "./lib/roster.mjs";
+import { registryHealth, roster, startRegistrySync } from "./lib/roster.mjs";
 import * as store from "./lib/store.mjs";
 import { engagementHealth } from "./lib/stuck.mjs";
 import { timeline } from "./lib/timeline.mjs";
@@ -63,6 +63,9 @@ if (process.env.FACILITATOR_URL) {
 }
 mountEngagements(app, { deposit, depositMin, depositMax });
 mountOnboarding(app);
+// Merge the shared member registry into the roster (a no-op without
+// REGISTRY_URL); the first read fills in without holding up the listen.
+startRegistrySync();
 if (process.env.COORDINATOR === "1") {
   const { startCoordinator } = await import("./lib/coordinator.mjs");
   startCoordinator();
@@ -84,10 +87,13 @@ app.get("/api/health", async (request, response) => {
   // Capped, so a slow GitHub can't make the liveness check slow; the read goes on
   // in the background and fills the cache for the next call.
   const idle = await withTimeout(idleReport(), 3000, "idle report").catch(() => null);
+  // A registry read that failed is reported here without touching `ok`: the
+  // roster keeps its last good copy, so members never drop in an outage.
   response.status(stale ? 503 : 200).json({
     ok: !stale,
     coordinator,
     github: githubBudget(),
+    registry: registryHealth(),
     engagements,
     idle,
   });
