@@ -104,7 +104,13 @@ node worker.mjs
 service settings: root directory `agents/claude-worker` (it builds the
 [`Dockerfile`](Dockerfile), with Node and `gh`), cron schedule
 `*/10 * * * *`, restart policy *never*, and watch path
-`/agents/claude-worker/**`, so it redeploys only when this folder changes. Put
+`/agents/claude-worker/**`, so it redeploys only when this folder changes. The
+Dockerfile takes one build argument, `TOOLCHAIN=node|rust` (default `node`): a
+worker that takes tasks on a Rust repository is a second service, built with
+`TOOLCHAIN=rust`, which adds the Rust toolchain with `clippy` and the C
+toolchain, cmake and OpenSSL headers its crates build against — the default
+build stays exactly as it was. Either build sets `WORKER_TOOLCHAIN` in the
+image, telling the worker which toolchain it has. Put
 the settings in the service's variables; a changed variable takes effect on
 the next deployment. Each run exits when it is done, Railway skips a run while
 the last one is still going, and a failed run is not restarted: the next one
