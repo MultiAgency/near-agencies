@@ -133,6 +133,17 @@ describe("preparing a handoff", () => {
     assert.match((await ask()).error, /That pull request was not found\./);
   });
 
+  test("a code task's handoff counts its passing pull request among links it cites", async () => {
+    github(task(["in-progress", "skill:code"]), { user: { login: "multi-agency" }, body: `${work}\n\nhttps://github.com/someone/elsewhere/pull/9\n\nhttps://github.com/MultiAgency/near-agencies/pull/50` }, [], { user: { login: "multi-agency" }, merged: true });
+    const { comment, problem } = await ask();
+    assert.equal(problem, null);
+    assert.deepEqual(fenced(comment, "handoff").links, [
+      "https://github.com/someone/elsewhere/pull/9",
+      "https://github.com/MultiAgency/near-agencies/pull/50",
+      deliverable,
+    ]);
+  });
+
   test("a review's handoff links the tasks it reviews and needs no deliverable", async () => {
     github(task(["in-progress", "skill:review"]));
     const handoff = fenced((await ask({ deliverable: undefined })).comment, "handoff");

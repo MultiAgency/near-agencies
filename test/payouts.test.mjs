@@ -110,6 +110,17 @@ describe("a handoff's pull requests", () => {
     );
   });
 
+  test("counts the passing pull request among links a code task cites", async () => {
+    serve([pull(50)]);
+    assert.equal(await payoutProblem({ members: [codeTask(["https://github.com/someone/elsewhere/pull/9", right])] }), null);
+  });
+
+  test("a pull request another task kind cites does not gate its payout", async () => {
+    serve([pull(50)]);
+    const cited = member(29, { handoff: { payout: { account_id: "near-builder.testnet" }, links: ["https://github.com/someone/elsewhere/pull/9"] } });
+    assert.equal(await payoutProblem({ members: [cited] }), null);
+  });
+
   test("holds a pull request from another repository", async () => {
     serve([pull(50)]);
     assert.match(
