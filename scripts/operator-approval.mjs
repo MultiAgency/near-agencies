@@ -4,17 +4,19 @@
 // so a non-zero exit fails the PR.
 //
 //   OWNER       logins whose approval always counts, comma-separated
+//   ORG_TOKEN   a token with the org's "Members: read", for the team reads
 //   ROSTER_URL  the coordinator serving GET /api/roster/:login
 //
 // GITHUB_EVENT_PATH carries the pull_request or pull_request_review event
-// that started the run. Everything uncertain fails the check: a roster that
-// cannot be read, a request that errors, an event with no pull request.
+// that started the run. Everything uncertain fails the check: a roster or a
+// team that cannot be read, a request that errors, an event with no pull
+// request.
 // The decision itself lives in lib/operator-approval.mjs, pure, and runs
 // from the base branch's own checkout (the workflow checks out `staging`),
 // never from the PR's copy of it.
 import { readFileSync } from "node:fs";
 
-import { github } from "../lib/github.mjs";
+import { github, orgApi } from "../lib/github.mjs";
 import {
   combineRoster,
   countableApprovals,
@@ -28,6 +30,12 @@ import {
 } from "../lib/operator-approval.mjs";
 
 const REVIEW_PAGES = 10;
+const TEAM_PAGES = 10;
+// The teams behind CODEOWNERS' `@MultiAgency/internal` entry: a member of
+// `internal` is one of the people whose approvals count, and a member of
+// `internal-agents` is an agent even where a roster record claims a person.
+const INTERNAL_TEAM = "internal";
+const INTERNAL_AGENTS_TEAM = "internal-agents";
 
 try {
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH ?? "", "utf8"));
@@ -36,37 +44,31 @@ try {
   const pr = await github("GET", `/pulls/${number}`);
   const author = pr.user.login;
   const base = pr.base.ref;
+  const org = event.repository?.owner?.login ?? String(process.env.GITHUB_REPOSITORY ?? "").split("/")[0];
 
-  const [reviews, codeowners, builders, fromApi] = await Promise.all([
+  const [reviews, codeowners, builders, fromApi, internal, internalAgents] = await Promise.all([
     allReviews(number),
     textAtBase(".github/CODEOWNERS", base),
     buildersAtBase(base),
     rosterApi(author),
+    teamMembers(org, INTERNAL_TEAM),
+    teamMembers(org, INTERNAL_AGENTS_TEAM),
   ]);
   if (codeowners === null) {
-    console.log("CODEOWNERS could not be read at the base branch, so only the owner's and rostered people's approvals count");
+    console.log("CODEOWNERS could not be read at the base branch, so only the owner's and the internal team's approvals count");
   }
   const standing = countedApprovals(reviews, author);
   const owners = ownersFromEnv(process.env.OWNER);
   const codeownerUsers = ownersFromCodeowners(codeowners ?? "");
-  const known = countableApprovals(standing, codeownerUsers, owners, builders ?? []);
-  // An approver neither CODEOWNERS nor roster.json knows may still be a
-  // person the coordinator has admitted; ask before discounting them, since
-  // a hidden operator reads as "no approvals", the bypass this check closes.
-  // One the coordinator cannot vouch either stays unvouched, and the verdict
-  // fails closed rather than reading it as no approval at all.
-  const vouched = [];
-  const unvouched = [];
-  await Promise.all(
-    unrecognizedApprovals(standing, codeownerUsers, owners, builders ?? []).map(async login => {
-      const record = await rosterApi(login);
-      (record.status === "record" && record.kind === "human" ? vouched : unvouched).push(login);
-    }),
-  );
-  const approvals = [...known, ...vouched];
+  // Only what CODEOWNERS itself covers counts: the file's own logins, OWNER,
+  // and team `internal`'s members. An approval outside them is unvouched,
+  // and the verdict fails closed rather than reading it as no approval at
+  // all — a dropped approval must not hide the operator's.
+  const approvals = countableApprovals(standing, codeownerUsers, owners, internal ?? []);
+  const unvouched = unrecognizedApprovals(standing, codeownerUsers, owners, internal ?? []);
   const roster = combineRoster(builders ? rosterRecord(builders, author) : { status: "unreadable" }, fromApi);
 
-  const { outcome, reason } = operatorApproval({ base, author, roster, owners, approvals, unvouched });
+  const { outcome, reason } = operatorApproval({ base, author, roster, owners, approvals, unvouched, internal, internalAgents });
   console.log(`operator-approval ${outcome}: ${reason}`);
   console.log(`  author @${author}, base ${base}, approvals counted: ${approvals.length ? approvals.map(login => `@${login}`).join(", ") : "none"}, roster: ${roster.status}`);
   process.exit(outcome === "pass" ? 0 : 1);
@@ -106,10 +108,37 @@ async function buildersAtBase(base) {
   }
 }
 
-// The coordinator's roster: roster.json as deployed plus the members an
-// owner admitted on the board, which the file alone does not know. One
-// retry on a rejected or throttled answer: runners share their egress with
-// the rest of GitHub, and a required check should not fail on one 429.
+// A team's members, as GitHub answers for it — the CODEOWNERS team entry
+// made concrete. Null when the team cannot be read, which fails the check:
+// who counts as a reviewer must not hang on a read that silently answered
+// nothing. One retry, as the roster read gets: runners share their egress
+// with the rest of GitHub, and a required check should not fail on one 429.
+async function teamMembers(org, slug, tries = 2) {
+  for (let attempt = 1; attempt <= tries; attempt++) {
+    try {
+      const found = [];
+      for (let page = 1; page <= TEAM_PAGES; page++) {
+        const batch = await orgApi("GET", `/orgs/${encodeURIComponent(org)}/teams/${encodeURIComponent(slug)}/members?per_page=100&page=${page}`);
+        found.push(...batch.map(user => user?.login ?? "").filter(Boolean));
+        if (batch.length < 100) return found;
+      }
+      throw new Error(`more than ${TEAM_PAGES * 100} members`);
+    } catch (error) {
+      if (attempt < tries) {
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        continue;
+      }
+      console.error(`team ${slug} could not be read: ${error.message}`);
+      return null;
+    }
+  }
+}
+
+// The coordinator's roster record for one login: roster.json as deployed,
+// plus members an owner admitted on the board, which the file alone does
+// not know. One retry on a rejected or throttled answer: runners share
+// their egress with the rest of GitHub, and a required check should not
+// fail on one 429.
 async function rosterApi(login, tries = 2) {
   const url = `${process.env.ROSTER_URL ?? "https://demo.multiagency.ai"}/api/roster/${encodeURIComponent(login)}`;
   for (let attempt = 1; attempt <= tries; attempt++) {

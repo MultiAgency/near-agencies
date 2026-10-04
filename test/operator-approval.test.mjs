@@ -79,61 +79,57 @@ describe("ownersFromCodeowners", () => {
 });
 
 describe("countableApprovals", () => {
-  const builders = [
-    { links: { github: "https://github.com/jlwaugh" }, kind: "human" },
-    { links: { github: "https://github.com/saadiqbal-dev/" }, kind: "human" },
-    { links: { github: "https://github.com/agency-builder" }, kind: "agent", operator: "jlwaugh" },
-  ];
+  const internal = ["saadiqbal-dev"];
 
   test("a login CODEOWNERS names or OWNER names counts", () => {
-    assert.deepEqual(countableApprovals(["jlwaugh", "stranger"], ["jlwaugh"], [], builders), ["jlwaugh"]);
-    assert.deepEqual(countableApprovals(["somebody"], [], ["somebody"], builders), ["somebody"]);
+    assert.deepEqual(countableApprovals(["jlwaugh", "stranger"], ["jlwaugh"], [], internal), ["jlwaugh"]);
+    assert.deepEqual(countableApprovals(["somebody"], [], ["somebody"], internal), ["somebody"]);
   });
 
   test("the gate's approval counts once CODEOWNERS names it, as #77 must for the gate to work", () => {
-    assert.deepEqual(countableApprovals(["multai-builder"], ["multai-builder"], [], builders), ["multai-builder"]);
+    assert.deepEqual(countableApprovals(["multai-builder"], ["multai-builder"], [], internal), ["multai-builder"]);
   });
 
-  test("a rostered person counts", () => {
-    assert.deepEqual(countableApprovals(["saadiqbal-dev"], [], [], builders), ["saadiqbal-dev"]);
+  test("a member of team internal counts", () => {
+    assert.deepEqual(countableApprovals(["saadiqbal-dev"], [], [], internal), ["saadiqbal-dev"]);
+  });
+
+  test("a rostered person outside team internal does not: a declared kind decides nothing", () => {
+    assert.deepEqual(countableApprovals(["rostered-outsider"], [], [], []), []);
   });
 
   test("an agent's approval counts for nothing: siblings never count as reviewers", () => {
-    assert.deepEqual(countableApprovals(["agency-builder"], [], ["jlwaugh"], builders), []);
+    assert.deepEqual(countableApprovals(["agency-builder"], [], ["jlwaugh"], internal), []);
   });
 
   test("nor does a stranger's or an alt's", () => {
-    assert.deepEqual(countableApprovals(["stranger", "jlwaugh-alt"], [], [], builders), []);
+    assert.deepEqual(countableApprovals(["stranger", "jlwaugh-alt"], [], [], internal), []);
   });
 
-  test("a person the coordinator has admitted counts, the file not knowing them yet", () => {
-    assert.deepEqual(countableApprovals(["new-person"], [], [], builders, ["new-person"]), ["new-person"]);
-  });
+  // The roster's and coordinator's declared kinds no longer vouch a reviewer
+  // at all: they answer for the PR's author only, never for its approvers.
 
-  // apiHumans arrives already filtered: the script vouches only what the
-  // coordinator answered with kind "human".
-
-  test("with no roster and no names, nobody counts", () => {
+  test("with no names at all, nobody counts", () => {
     assert.deepEqual(countableApprovals(["jlwaugh"], [], [], []), []);
   });
 });
 
 describe("unrecognizedApprovals", () => {
-  const builders = [
-    { links: { github: "https://github.com/jlwaugh" }, kind: "human" },
-    { links: { github: "https://github.com/saadiqbal-dev" }, kind: "human" },
-    { links: { github: "https://github.com/agency-builder" }, kind: "agent", operator: "jlwaugh" },
-  ];
+  const internal = ["saadiqbal-dev"];
 
   test("names the approvals no source here vouches for", () => {
     assert.deepEqual(
-      unrecognizedApprovals(["jlwaugh", "saadiqbal-dev", "agency-builder", "stranger"], ["jlwaugh"], [], builders),
+      unrecognizedApprovals(["jlwaugh", "saadiqbal-dev", "agency-builder", "stranger"], ["jlwaugh"], [], internal),
       ["agency-builder", "stranger"],
     );
   });
 
-  test("an empty standing list asks about nobody", () => {
-    assert.deepEqual(unrecognizedApprovals([], ["jlwaugh"], [], builders), []);
+  test("a rostered person outside team internal is unrecognized too", () => {
+    assert.deepEqual(unrecognizedApprovals(["jlwaugh", "new-person"], ["jlwaugh"], [], []), ["new-person"]);
+  });
+
+  test("an empty standing list names nobody", () => {
+    assert.deepEqual(unrecognizedApprovals([], ["jlwaugh"], [], internal), []);
   });
 });
 
@@ -215,9 +211,19 @@ describe("operatorApproval", () => {
     );
   });
 
+  test("the operator plus an outside 'human' fails: only the operator's approval meets code-owner review", () => {
+    // The script hands the verdict what it counted: the operator's approval
+    // (a member of internal), the outsider's unrecognized — so the operator
+    // stands alone whatever anyone outside CODEOWNERS' reach approved.
+    assert.deepEqual(
+      operatorApproval({ ...staging, author: "new-agent", roster: record("agent", "saadiqbal-dev"), approvals: ["saadiqbal-dev"], unvouched: ["outsider"] }),
+      fail("the only approval is @saadiqbal-dev, @new-agent's operator; an operator's approval alone does not approve their agent's PR"),
+    );
+  });
+
   test("the owner alone on @multi-agency's PR passes", () => {
     assert.deepEqual(
-      operatorApproval({ ...staging, author: "multi-agency", roster: record("agent", "jlwaugh"), approvals: ["jlwaugh"] }),
+      operatorApproval({ ...staging, author: "multi-agency", roster: record("agent", "jlwaugh"), internalAgents: ["multi-agency"], approvals: ["jlwaugh"] }),
       pass("@jlwaugh operates @multi-agency as the owner, whose approval counts as it does today"),
     );
   });
@@ -285,6 +291,45 @@ describe("operatorApproval", () => {
   test("an agent recorded with no operator fails closed", () => {
     assert.deepEqual(
       operatorApproval({ ...staging, author: "broken-agent", roster: record("agent", null), approvals: ["jlwaugh"] }).outcome,
+      "fail",
+    );
+  });
+
+  test("an internal-agents author recorded as a person is still an agent", () => {
+    // Team internal-agents decides agent-hood; a declared kind cannot skip
+    // the check. With no operator any roster source names, it fails closed,
+    // approvals or none.
+    assert.deepEqual(
+      operatorApproval({ ...staging, author: "rogue-agent", roster: record("human", null), internalAgents: ["rogue-agent"], approvals: ["jlwaugh"] }).outcome,
+      "fail",
+    );
+    assert.deepEqual(
+      operatorApproval({ ...staging, author: "rogue-agent", roster: record("human", null), internalAgents: ["rogue-agent"], approvals: [] }).outcome,
+      "fail",
+    );
+  });
+
+  test("nor does a person no roster source names, once the team names them an agent", () => {
+    assert.deepEqual(
+      operatorApproval({ ...staging, author: "rogue-agent", roster: { status: "absent" }, internalAgents: ["rogue-agent"], approvals: ["jlwaugh"] }).outcome,
+      "fail",
+    );
+  });
+
+  test("a member of internal-agents the roster operates still gets the operator check", () => {
+    assert.deepEqual(
+      operatorApproval({ ...staging, author: "new-agent", roster: record("agent", "saadiqbal-dev"), internalAgents: ["new-agent"], approvals: ["saadiqbal-dev"] }),
+      fail("the only approval is @saadiqbal-dev, @new-agent's operator; an operator's approval alone does not approve their agent's PR"),
+    );
+  });
+
+  test("a team that cannot be read fails closed, even off the roster", () => {
+    assert.deepEqual(
+      operatorApproval({ ...staging, author: "jlwaugh", roster: record("human", null), internal: null, internalAgents: [] }).outcome,
+      "fail",
+    );
+    assert.deepEqual(
+      operatorApproval({ ...staging, author: "stranger", roster: { status: "absent" }, internal: [], internalAgents: null }).outcome,
       "fail",
     );
   });
