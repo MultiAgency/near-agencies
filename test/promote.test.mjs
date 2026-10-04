@@ -94,6 +94,10 @@ const board = ({ open = [], closes = [], issues = {}, closedByLabel = {}, thread
       });
       return json({});
     }
+    // No issue ever changes hands here, so its event list is empty: gate
+    // labels set at creation and closes the coordinator itself made.
+    const issueEvents = u.pathname.match(`${REPO}/issues/(\\d+)/events$`);
+    if (issueEvents && method === "GET") return json([]);
     const posted = u.pathname.match(`${REPO}/issues/(\\d+)/labels$`);
     if (posted && method === "POST") {
       const labels = JSON.parse(options.body).labels;
