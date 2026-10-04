@@ -3,9 +3,12 @@ import { afterEach, describe, test } from "node:test";
 
 import { USDC } from "../lib/near.mjs";
 import { closeIfPaid, filedProposal, payoutProblem, proposalDescription, proposePayouts } from "../lib/payouts.mjs";
-import { fence } from "../lib/github.mjs";
+import { digest, fence } from "../lib/github.mjs";
 
 process.env.GITHUB_TOKEN ??= "test-token";
+// The sweep's proposing gate (lib/coordinator.mjs) reads this; without a
+// proposer it skips the checks the volunteer-edit test below is about.
+process.env.PROPOSER_ACCOUNT ??= "proposer.testnet";
 
 const member = (issue, overrides = {}) => ({
   issue,
@@ -190,6 +193,7 @@ describe("reading a payout proposal", async () => {
 // A mocked board and treasury, enough for the payout sweep's whole path over
 // one job: GitHub through api.github.com, the chain through the RPC host.
 describe("filing proposals and closing a job", async () => {
+  const { settlePayouts } = await import("../lib/coordinator.mjs");
   const realFetch = globalThis.fetch;
   afterEach(() => { globalThis.fetch = realFetch; });
 
@@ -200,8 +204,11 @@ describe("filing proposals and closing a job", async () => {
   }), { headers: { "content-type": "application/json" } });
 
   // Serves `issues` by number (PATCHes apply, so a close is visible to settle),
-  // `threads` by issue number, and the treasury's reads from `proposals`.
-  const serve = ({ issues = {}, threads = {}, proposals = [] } = {}) => {
+  // `threads` by issue number (and single comments within them, by id, as
+  // commentAt reads a deliverable), open `jobs` for the sweep's listing, and
+  // the treasury's reads from `proposals`, one proposal from `proposal`, and
+  // the indexed vote transactions in `txs`.
+  const serve = ({ issues = {}, threads = {}, proposals = [], jobs = [], proposal = null, txs = [] } = {}) => {
     const reads = [];
     const writes = [];
     globalThis.fetch = async (url, options = {}) => {
@@ -213,11 +220,20 @@ describe("filing proposals and closing a job", async () => {
         const body = JSON.parse(options.body);
         if (body.params?.method_name === "get_last_proposal_id") return rpcValue(41);
         if (body.params?.method_name === "get_proposals") return rpcValue(proposals);
+        if (body.params?.method_name === "get_proposal") return rpcValue(proposal);
+        if (u.pathname === "/v0/account") return json({ account_txs: txs.map(t => ({ transaction_hash: t.transaction.hash })) });
+        if (u.pathname === "/v0/transactions") return json({ transactions: txs });
         throw new Error(`unexpected rpc: ${body.method} ${body.params?.method_name ?? body.params?.request_type}`);
       }
       let m;
       if (method === "GET" && u.pathname === "/user") return json({ login: "multi-agency" });
+      if (method === "GET" && u.pathname.endsWith("/issues") && u.searchParams.get("labels") === "engagement" && u.searchParams.get("state") === "open") return json(jobs);
       if (method === "GET" && /\/collaborators\/[^/]+\/permission$/.test(u.pathname)) return json({ role_name: "admin" });
+      if ((m = /^\/repos\/[^/]+\/[^/]+\/issues\/comments\/(\d+)$/.exec(u.pathname)) && method === "GET") {
+        const found = Object.values(threads).flat().find(c => c.id === Number(m[1]));
+        if (!found) throw new Error(`unexpected comment read: ${u.pathname}`);
+        return json(found);
+      }
       if ((m = /^\/repos\/[^/]+\/[^/]+\/issues\/(\d+)$/.exec(u.pathname))) {
         const issue = issues[Number(m[1])];
         if (!issue) throw new Error(`unexpected ${method} ${u.pathname}`);
@@ -257,13 +273,13 @@ describe("filing proposals and closing a job", async () => {
     amount,
     ...overrides,
   });
-  const handoff = issue => ({
+  const handoff = (issue, pins = {}) => ({
     id: issue,
     user: { login: "multi-agency" },
     created_at: "2026-10-01T00:00:00Z",
     updated_at: "2026-10-01T00:00:00Z",
     html_url: `https://github.com/MultiAgency/kanban-sandbox/issues/${issue}#issuecomment-${issue}`,
-    body: `**Handoff:** done\n\n${fence("handoff", { payout: { account_id: "agent.agency.testnet" } })}`,
+    body: `**Handoff:** done\n\n${fence("handoff", { payout: { account_id: "agent.agency.testnet" }, ...pins })}`,
   });
   const epic = (members, overrides = {}) => ({
     number: 28,
@@ -347,5 +363,86 @@ describe("filing proposals and closing a job", async () => {
     const complete = done.writes.filter(w => w.path.endsWith("/issues/28/comments"));
     assert.equal(complete.length, 1);
     assert.match(complete[0].body.body, /^\*\*Job complete\.\*\* 1 payouts executed/);
+  });
+
+  // A volunteer task is never proposed or paid, so closeIfPaid is the only
+  // place its delivery is checked: a job does not complete over one that is
+  // not delivered, however its paid tasks stand.
+  test("a volunteer-only job does not close over an undelivered task", async () => {
+    const reopened = serve(board([terms(29, "0")], { records: { 29: { state: "open" } } }));
+    await closeIfPaid(28, () => {});
+    assert.equal(reopened.writes.length, 0, "an open volunteer task holds the job open");
+    const bare = serve({
+      issues: { 28: epic([terms(29, "0")]), 29: closed(29) },
+      threads: { 28: [], 29: [] },
+    });
+    await closeIfPaid(28, () => {});
+    assert.equal(bare.writes.length, 0, "a volunteer task closed without a handoff holds the job open");
+  });
+
+  test("a volunteer-only job does not close over an edited deliverable", async () => {
+    const edited = { id: 777, user: { login: "multi-agency" }, body: "the guide, with a fix after sign-off" };
+    const { writes } = serve({
+      issues: { 28: epic([terms(29, "0")]), 29: closed(29) },
+      threads: {
+        28: [],
+        29: [handoff(29, { deliverable: { url: "https://github.com/MultiAgency/kanban-sandbox/issues/29#issuecomment-777", sha256: digest("the original guide") } }), edited],
+      },
+    });
+    await closeIfPaid(28, () => {});
+    assert.equal(writes.length, 0, "the deliverable no longer matches its pin, so the job stays open");
+  });
+
+  // One mixed job on the sweep: task 29 is a volunteer whose signed-off
+  // deliverable was edited after task 30's proposal was filed and voted
+  // through. The edit holds proposing (payoutProblem covers every member),
+  // but not the recording and closing of the paid work.
+  test("a volunteer's edited deliverable does not hold the paid tasks' recording", async () => {
+    const edited = { id: 777, user: { login: "multi-agency" }, body: "the guide, with a fix after sign-off" };
+    const filed = {
+      id: 780,
+      user: { login: "multi-agency" },
+      body: `**Payout proposed:** DAO proposal 41\n\n${fence("payout", { proposal_id: 41, treasury: "multiagency.sputnikv2.testnet", payee: "agent.agency.testnet", amount: "1000000", proposed_tx: "votetx" })}`,
+    };
+    const recorded = `**Paid:** \`approver.testnet\` approved DAO proposal 41; 1 USDC sent to \`agent.agency.testnet\`.\n\n${fence("paid", { proposal_id: 41, treasury: "multiagency.sputnikv2.testnet", payee: "agent.agency.testnet", amount: "1000000", transaction: "votetx", approver: "approver.testnet" })}`;
+    const vote = {
+      transaction: {
+        hash: "votetx",
+        signer_id: "approver.testnet",
+        receiver_id: "multiagency.sputnikv2.testnet",
+        actions: [{ FunctionCall: { method_name: "act_proposal", args: Buffer.from(JSON.stringify({ id: 41, action: "VoteApprove" })).toString("base64") } }],
+      },
+      receipts: [{ receipt: { block_height: 500 } }],
+    };
+    const mixed = (pin, paid = []) => serve({
+      jobs: [epic([terms(29, "0"), terms(30, "1000000")])],
+      issues: {
+        28: epic([terms(29, "0"), terms(30, "1000000")]),
+        29: closed(29),
+        30: closed(30),
+      },
+      threads: {
+        29: [handoff(29, { deliverable: { url: "https://github.com/MultiAgency/kanban-sandbox/issues/29#issuecomment-777", sha256: pin } }), edited],
+        30: [handoff(30), filed, ...paid],
+      },
+      proposal: { id: 41, status: "Approved" },
+      txs: [vote],
+    });
+    const held = mixed(digest("the original guide"));
+    await settlePayouts("multi-agency", { now: 1_000_000 });
+    const paid = held.writes.filter(w => w.path.endsWith("/issues/30/comments"));
+    assert.equal(paid.length, 1, "the paid task's payout is recorded despite the volunteer's edit");
+    assert.match(paid[0].body.body, /^\*\*Paid:\*\*/);
+    assert.equal(held.writes.filter(w => w.path.endsWith("/issues/28/comments")).length, 0, "no hold is posted once every proposal is filed");
+    assert.equal(held.writes.some(w => w.path.endsWith("/issues/28") && w.body.state === "closed"), false, "the job stays open while the volunteer's delivery is out of order");
+
+    // The volunteer re-pins the deliverable as it now reads; the next sweep
+    // closes the job over the recorded payment.
+    const settled = mixed(digest(edited.body), [{ id: 781, user: { login: "multi-agency" }, body: recorded }]);
+    await settlePayouts("multi-agency", { now: 1_121_000 });
+    const complete = settled.writes.filter(w => w.path.endsWith("/issues/28/comments"));
+    assert.equal(complete.length, 1);
+    assert.match(complete[0].body.body, /^\*\*Job complete\.\*\* 1 payouts executed/);
+    assert.equal(settled.writes.some(w => w.path.endsWith("/issues/28") && w.body.state === "closed"), true, "the job closes once the volunteer's delivery is in order");
   });
 });
