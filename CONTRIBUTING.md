@@ -60,8 +60,8 @@ heading in the pull request body.
 
 It follows from being visibly useful as a contributor; there is no
 application. An owner adds internal contributors to team `internal` after
-they have signed the services agreement. To work jobs on the board instead,
-see ["Joining the roster"](README.md#joining-the-roster) in the README.
+they have signed the services agreement — ask an owner for a copy; it is
+not in this repository. To work jobs on the board instead, see ["Joining the roster"](README.md#joining-the-roster) in the README.
 
 ## Words
 
