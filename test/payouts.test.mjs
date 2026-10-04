@@ -293,9 +293,13 @@ describe("filing proposals and closing a job", async () => {
   // Serves `issues` by number (PATCHes apply, so a close is visible to settle),
   // `threads` by issue number (and single comments within them, by id, as
   // commentAt reads a deliverable), pull requests from `pulls`, open `jobs`
-  // for the sweep's listing, and the treasury's reads from `proposals`, one
-  // proposal from `proposal`, and the indexed vote transactions in `txs`.
-  const serve = ({ issues = {}, threads = {}, proposals = [], jobs = [], proposal = null, txs = [], pulls = {} } = {}) => {
+  // for the sweep's listing, and the treasury's reads from `proposals` —
+  // windowed as the chain reads them: `get_proposals` carries `from_index`
+  // and `limit` in its contract args, and returns ids from `from_index` up —
+  // one proposal from `proposal`, and the indexed vote transactions in `txs`.
+  // `lastId` is the treasury's proposal counter, which may sit far above the
+  // proposals a job's audit must still see.
+  const serve = ({ issues = {}, threads = {}, proposals = [], jobs = [], proposal = null, txs = [], pulls = {}, lastId = null } = {}) => {
     const reads = [];
     const writes = [];
     globalThis.fetch = async (url, options = {}) => {
@@ -305,8 +309,12 @@ describe("filing proposals and closing a job", async () => {
       if (u.hostname !== "api.github.com") {
         reads.push(u.hostname);
         const body = JSON.parse(options.body);
-        if (body.params?.method_name === "get_last_proposal_id") return rpcValue(proposals.at(-1)?.id ?? 41);
-        if (body.params?.method_name === "get_proposals") return rpcValue(proposals);
+        const args = JSON.parse(Buffer.from(body.params?.args_base64 ?? "", "base64").toString() || "{}");
+        if (body.params?.method_name === "get_last_proposal_id") return rpcValue(lastId ?? proposals.at(-1)?.id ?? 41);
+        if (body.params?.method_name === "get_proposals") {
+          const from = args.from_index ?? 0;
+          return rpcValue(proposals.filter(p => p.id >= from).slice(0, args.limit));
+        }
         if (body.params?.method_name === "get_proposal") return rpcValue(proposal);
         if (u.pathname === "/v0/account") return json({ account_txs: txs.map(t => ({ transaction_hash: t.transaction.hash })) });
         if (u.pathname === "/v0/transactions") return json({ transactions: txs });
@@ -587,13 +595,14 @@ describe("filing proposals and closing a job", async () => {
   });
   const paidRecord = (proposalId, tx) =>
     `**Paid:** \`approver.testnet\` approved DAO proposal ${proposalId}; 1 USDC sent to \`agent.agency.testnet\`.\n\n${fence("paid", { proposal_id: proposalId, treasury: "multiagency.sputnikv2.testnet", payee: "agent.agency.testnet", amount: "1000000", transaction: tx, approver: "approver.testnet" })}`;
-  const dupBoard = (proposals, { proposalStatus = "InProgress", txs = [], records = [] } = {}) => ({
+  const dupBoard = (proposals, { proposalStatus = "InProgress", txs = [], records = [], lastId = null } = {}) => ({
     jobs: [epic([terms(30, "1000000")])],
     issues: { 28: epic([terms(30, "1000000")]), 30: closed(30) },
     threads: { 28: [], 30: [handoff(30), filed, ...records] },
     proposals,
     proposal: { id: 41, status: proposalStatus },
     txs,
+    lastId,
   });
   const flagsOn = writes => writes.filter(w => w.path.endsWith("/issues/30/comments") && w.body.body.startsWith("**Duplicate payout proposals:**"));
   const doublesOn = writes => writes.filter(w => w.path.endsWith("/issues/30/comments") && w.body.body.startsWith("**Double payout:**"));
@@ -712,6 +721,32 @@ describe("filing proposals and closing a job", async () => {
       "the double payment shows in /api/health");
     await settlePayouts("multi-agency", { now: 7_121_000 });
     assert.equal(doublesOn(run.writes).length, 1, "said once, however often the sweep runs");
+  });
+
+  // The treasury moves on: once its counter sits far above a job's proposals,
+  // a newest-100 read no longer reaches them. The audit must still see a
+  // task's proposals beside its recorded one, or the eviction quietly turns a
+  // double payment into a recorded payment and a closed job — and paid_twice
+  // must be found again after a restart, when nothing is memoized.
+  test("a double payment stays reported however far the treasury has moved on", async () => {
+    const board = dupBoard([onChain(41, "Approved"), onChain(42, "Approved")], {
+      proposalStatus: "Approved",
+      txs: [vote(41, "votetx"), vote(42, "votetx2")],
+      lastId: 400,
+    });
+    // A restart reads the chain again over an unchanged board: the clone is
+    // taken before the first sweep writes into the board it serves.
+    const restartedBoard = structuredClone(board);
+    const run = serve(board);
+    await settlePayouts("multi-agency", { now: 8_000_000 });
+    assert.equal(paidOn(run.writes).length, 0, "the proposals leaving the newest-100 window must not turn a double payment into a recording");
+    assert.equal(doublesOn(run.writes).length, 1, "the double payment is still reported on the task");
+    assert.equal(closesJob(run.writes), false);
+    const restarted = serve(restartedBoard);
+    await settlePayouts("multi-agency", { now: 8_121_000 });
+    assert.equal(paidOn(restarted.writes).length, 0, "still nothing records once nothing is memoized");
+    assert.equal(doublesOn(restarted.writes).length, 1, "paid_twice is found again after a restart");
+    assert.equal(closesJob(restarted.writes), false);
   });
 
   // payout.mjs approve — the terminal path — refuses to vote while a
