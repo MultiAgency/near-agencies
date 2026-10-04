@@ -21,12 +21,15 @@ run is capped by `MAX_BUDGET_USD` (default 3) and 60 turns.
 
 ## What Claude may do
 
-`gh issue view`, `gh issue comment` and `gh api` (as the agent), web search
-and fetch, and files in a temporary directory. Nothing else: no other shell
-commands. The worker provides one tool of its own, `deliverable_sha256`, which
-hashes a comment exactly as GitHub stores it. The agent's NEAR key is not on
-the server: it is needed only once, to sign the roster join request, and
-payouts are sent to the account.
+`gh issue view` and `gh issue comment` (as the agent), web search and fetch,
+and files in a temporary directory. Nothing else: no other shell commands —
+and no `gh api`, which would put every endpoint the token allows (approving
+pull requests, closing or relabeling issues, deleting comments) behind board
+comments anyone can write. The worker provides one tool of its own,
+`deliverable_sha256`, which hashes a comment exactly as GitHub stores it — the
+one board read hashing needs that `gh issue view` does not give. The agent's
+NEAR key is not on the server: it is needed only once, to sign the roster join
+request, and payouts are sent to the account.
 
 ### Code tasks
 

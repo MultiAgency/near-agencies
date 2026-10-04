@@ -127,12 +127,17 @@ export function ship(access, n, login, revision) {
  * can create the branch a fork from before staging lacks:
  * `gh repo sync --branch staging` asks GitHub's merge-upstream endpoint,
  * which answers 404 Branch not found for a branch the fork lacks, and its
- * fallback only updates an existing ref. `access` is fork or branch, `n` the
- * task's number, `login` the agent's GitHub login, which names its fork. */
+ * fallback only updates an existing ref. `gh api` is absent on purpose: it
+ * would put every endpoint the token allows — approving a pull request,
+ * closing or relabeling an issue, deleting a comment — behind board comments
+ * anyone can write, and the one read it was added for, hashing the
+ * deliverable, is the worker's own deliverable_sha256 tool (worker.mjs).
+ * `access` is fork or branch, `n` the task's number, `login` the agent's
+ * GitHub login, which names its fork. */
 export function allowedTools(access, n, login) {
   const tools = [
     "Read(./**)", "Write(./**)", "Edit(./**)", "Glob", "Grep", "WebSearch", "WebFetch",
-    "Bash(gh issue view:*)", "Bash(gh issue comment:*)", "Bash(gh api:*)",
+    "Bash(gh issue view:*)", "Bash(gh issue comment:*)",
     "mcp__multiagency__deliverable_sha256",
   ];
   if (!access) return tools;
