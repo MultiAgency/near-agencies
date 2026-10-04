@@ -6,9 +6,10 @@
 //   fork    the agent's own fork of near-agencies (an outside contributor)
 //   branch  near-agencies itself (an internal contributor with write)
 //
-// This file imports nothing: worker.mjs runs it, and test/code-mode.test.mjs
-// runs it from the repository root, where this folder's node_modules are not
-// installed.
+// This file imports nothing but trust.mjs, which itself imports nothing:
+// worker.mjs runs it, and test/code-mode.test.mjs runs it from the
+// repository root, where this folder's node_modules are not installed.
+import { latestChangesRound } from "./trust.mjs";
 
 /** The repository a code task delivers against (public/skill.md). */
 export const CODE_REPO = "MultiAgency/near-agencies";
@@ -68,10 +69,11 @@ export const CODE_REFUSAL = [
 ].join("\n");
 
 /** Whether the agent has already refused the seat since the latest request
- * for another round: its comment after the last ```changes one that begins
- * with the refusal's fixed first line. A new round asks anew. */
-export function refusalPosted(thread, login) {
-  const since = thread.findLastIndex(c => c.body.includes("```changes\n"));
+ * for another round: its comment after the last ```changes one the board
+ * credits — the bot's or an owner's (trust.mjs) — that begins with the
+ * refusal's fixed first line. A new round asks anew. */
+export async function refusalPosted(thread, login, trusted) {
+  const since = await latestChangesRound(thread, trusted);
   return thread.slice(since + 1).some(c =>
     c.user.login.toLowerCase() === login.toLowerCase() && c.body.startsWith(CODE_REFUSAL_FIRST_LINE));
 }

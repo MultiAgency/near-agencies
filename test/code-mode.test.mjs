@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
 // The worker folder's own logic, imported from the repository root, where its
-// node_modules are not installed — hence code-mode.mjs imports nothing.
+// node_modules are not installed — hence these modules import nothing.
 import {
   allowedTools, codeAccess, deliversCodeSeat, isCodeSeat, mayClaim, ship,
   CODE_REFUSAL, GIT_CREDENTIAL_HELPER,
 } from "../agents/claude-worker/code-mode.mjs";
 import { nextTask } from "../agents/claude-worker/next-task.mjs";
+import { trustCheck } from "../agents/claude-worker/trust.mjs";
 
 const seat = (labels, assignees = []) => ({
   labels: labels.map(name => ({ name })),
@@ -211,38 +212,43 @@ describe("code tools only on a delivered code seat", () => {
   });
 });
 
-describe("an assigned code seat on a run without code mode", () => {
-  const login = "near-builder";
-  const skills = ["research", "writing"];
-  const c = (user, body) => ({ user: { login: user }, body });
-  const seatIssue = (number, labels, assignees = [], created_at = "2026-10-01T00:00:00Z") => ({
-    number,
-    created_at,
-    body: "Part of job #5.\n\n```terms\nengagement: job 5\n```",
-    assignees: assignees.map(l => ({ login: l })),
-    labels: labels.map(name => ({ name })),
-  });
-  // The board nextTask() reads: the open issues, then one thread or event
-  // list per seat number. Posts are recorded, not sent.
-  const board = (issues, threads = {}, events = {}) => async path => {
-    if (path === "/issues?state=open&per_page=100") return issues;
-    const on = path.match(/^\/issues\/(\d+)\/(comments|events)/);
-    if (!on) throw new Error(`unexpected GET ${path}`);
-    return (on[2] === "comments" ? threads : events)[on[1]] ?? [];
+// One agent's view of the board, shared by the nextTask() describes below:
+// the seat issues, their threads, and the collaborator roles a trust check
+// looks up (the bot is multi-agency, the board's coordinator; everyone else
+// defaults to read). Posts are recorded, not sent.
+const login = "near-builder";
+const skills = ["research", "writing"];
+const bot = "multi-agency";
+const c = (user, body) => ({ user: { login: user }, body });
+const seatIssue = (number, labels, assignees = [], created_at = "2026-10-01T00:00:00Z") => ({
+  number,
+  created_at,
+  body: "Part of job #5.\n\n```terms\nengagement: job 5\n```",
+  assignees: assignees.map(l => ({ login: l })),
+  labels: labels.map(name => ({ name })),
+});
+const board = (issues, threads = {}, events = {}, roles = {}) => async path => {
+  if (path === "/issues?state=open&per_page=100") return issues;
+  const permission = path.match(/^\/collaborators\/([^/]+)\/permission$/);
+  if (permission) return { role_name: roles[decodeURIComponent(permission[1])] ?? "read" };
+  const on = path.match(/^\/issues\/(\d+)\/(comments|events)/);
+  if (!on) throw new Error(`unexpected GET ${path}`);
+  return (on[2] === "comments" ? threads : events)[on[1]] ?? [];
+};
+const harness = (issues, threads = {}, events = {}, extra = {}) => {
+  const posted = [];
+  return {
+    posted,
+    threads,
+    task: () => nextTask({
+      github: board(issues, threads, events, extra.roles),
+      comment: async (number, body) => { posted.push({ number, body }); },
+      login, skills, codeMode: null, bot, ...extra,
+    }),
   };
-  const harness = (issues, threads = {}, events = {}, extra = {}) => {
-    const posted = [];
-    return {
-      posted,
-      threads,
-      task: () => nextTask({
-        github: board(issues, threads, events),
-        comment: async (number, body) => { posted.push({ number, body }); },
-        login, skills, codeMode: null, ...extra,
-      }),
-    };
-  };
+};
 
+describe("an assigned code seat on a run without code mode", () => {
   test("the refusal is posted once, not again on every cron run", async () => {
     const { task, posted, threads } = harness([seatIssue(14, ["skill:code"], [login])], { 14: [] });
     assert.deepEqual(await task(), null, "the run refuses the seat and has nothing else to take");
@@ -256,6 +262,8 @@ describe("an assigned code seat on a run without code mode", () => {
     const { task, posted } = harness(
       [seatIssue(14, ["skill:code"], [login])],
       { 14: [c("agency-owner", "Once more:\n```changes\naddress the review\n```"), c(login, CODE_REFUSAL)] },
+      {},
+      { roles: { "agency-owner": "maintain" } },
     );
     assert.deepEqual(await task(), null);
     assert.deepEqual(posted, [], "the refusal from the last round still stands");
@@ -305,5 +313,99 @@ describe("an assigned code seat on a run without code mode", () => {
     assert.deepEqual(posted, []);
     assert.equal(picked.action, "claim");
     assert.equal(picked.seat.number, 16);
+  });
+});
+
+// The ```changes boundary both nextTask() places read — the revision round a
+// handoff must be newer than, and the round a refusal is counted within —
+// counts only a round the board credits: the bot's or an owner's, the same
+// rule the coordinator applies. A stranger's block opens no round, so it can
+// neither reopen a handed-off task (a second deliverable, a second paid run)
+// nor un-count a refusal.
+describe("the ```changes boundary counts only the bot or an owner", () => {
+  const changes = user => c(user, "Once more:\n```changes\naddress the review\n```");
+  const handoff = c(login, "Done.\n\n```handoff\nlinks: x\n```");
+
+  test("a stranger's ```changes after a handoff leaves the task handed off", async () => {
+    const { task } = harness(
+      [seatIssue(15, ["skill:writing"], [login])],
+      { 15: [handoff, changes("stranger")] },
+    );
+    assert.deepEqual(await task(), null, "the stranger's round is not one: no second delivery");
+  });
+
+  test("the bot's ```changes after a handoff still starts a new round", async () => {
+    const { task } = harness(
+      [seatIssue(15, ["skill:writing"], [login])],
+      { 15: [handoff, changes(bot)] },
+    );
+    const picked = await task();
+    assert.equal(picked.action, "deliver");
+    assert.equal(picked.revision, true);
+  });
+
+  test("an owner's ```changes starts one too", async () => {
+    const { task } = harness(
+      [seatIssue(15, ["skill:writing"], [login])],
+      { 15: [handoff, changes("jlwaugh")] },
+      {},
+      { roles: { jlwaugh: "admin" } },
+    );
+    const picked = await task();
+    assert.equal(picked.revision, true);
+  });
+
+  test("a stranger's ```changes leaves an earlier refusal counted", async () => {
+    const { task, posted } = harness(
+      [seatIssue(14, ["skill:code"], [login])],
+      { 14: [changes(bot), c(login, CODE_REFUSAL), changes("stranger")] },
+    );
+    assert.deepEqual(await task(), null);
+    assert.deepEqual(posted, [], "the refusal from the bot's round still stands");
+  });
+
+  test("the bot's ```changes after the refusal asks anew", async () => {
+    const { task, posted } = harness(
+      [seatIssue(14, ["skill:code"], [login])],
+      { 14: [c(login, CODE_REFUSAL), changes(bot)] },
+    );
+    assert.deepEqual(await task(), null);
+    assert.deepEqual(posted, [{ number: 14, body: CODE_REFUSAL }]);
+  });
+});
+
+describe("the trust check", () => {
+  const roles = map => async path => {
+    const permission = path.match(/^\/collaborators\/([^/]+)\/permission$/);
+    if (!permission) throw new Error(`unexpected GET ${path}`);
+    const role = map[decodeURIComponent(permission[1])];
+    if (role === undefined) throw new Error(`GitHub GET ${path}: 404`);
+    return { role_name: role };
+  };
+
+  test("the bot is trusted with no lookup at all, a stranger is not", async () => {
+    const trusted = trustCheck({ github: roles({}), bot });
+    assert.equal(await trusted("multi-agency"), true);
+    assert.equal(await trusted("Multi-Agency"), true, "logins are not case-sensitive");
+    assert.equal(await trusted("stranger"), false, "a 404 role lookup is no role");
+  });
+
+  test("an owner (admin or maintain) is trusted, a reader is not", async () => {
+    const trusted = trustCheck({ github: roles({ jlwaugh: "admin", second: "maintain", reader: "read" }), bot });
+    assert.equal(await trusted("jlwaugh"), true);
+    assert.equal(await trusted("second"), true);
+    assert.equal(await trusted("reader"), false);
+  });
+
+  test("a failed lookup is not trusted, and is not kept as an answer", async () => {
+    let up = false;
+    const flaky = async path => {
+      if (!/^\/collaborators\/[^/]+\/permission$/.test(path) || !up) throw new Error(`GitHub GET ${path}: 503`);
+      return { role_name: "admin" };
+    };
+    const trusted = trustCheck({ github: flaky, bot });
+    assert.equal(await trusted("jlwaugh"), false, "while the lookup fails, the round is not one");
+    up = true;
+    assert.equal(await trusted("jlwaugh"), true, "the failed lookup was not kept");
   });
 });

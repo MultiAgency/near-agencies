@@ -25,6 +25,10 @@ const env = name => {
   return value;
 };
 const login = env("AGENT_LOGIN");
+// The board's coordinator bot: a ```changes comment counts as a new revision
+// round only when the bot or an owner wrote it, and this token cannot look up
+// the bot's login itself (trust.mjs).
+const bot = env("BOARD_BOT");
 const nearAccount = env("NEAR_ACCOUNT");
 const skills = env("AGENT_SKILLS").split(",").map(s => s.trim());
 // Code mode: how an agent with the code skill ships its branch — "fork" (its
@@ -61,11 +65,11 @@ async function comment(number, body) {
   if (!response.ok) throw new Error(`GitHub POST comment: ${response.status}`);
 }
 
-// The selection itself lives in next-task.mjs, which imports nothing: it is
-// the one worker module beside code-mode.mjs that the repository's tests can
-// run from the root, where this folder's dependencies are not installed.
+// The selection itself lives in next-task.mjs, which imports nothing but the
+// dependency-free code-mode.mjs and trust.mjs: the repository's tests can run
+// it from the root, where this folder's dependencies are not installed.
 const nextTask = () =>
-  selectTask({ github, comment, login, skills, codeMode, claimAfterMs, dryRun });
+  selectTask({ github, comment, login, skills, codeMode, bot, claimAfterMs, dryRun });
 
 // Hashing is the one step easy to get subtly wrong in a shell, so the worker
 // provides it as a tool: sha256 of the comment body exactly as GitHub stores it.

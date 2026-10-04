@@ -1,0 +1,52 @@
+// Who the board credits with a ```changes round on a seat: the bot or an
+// owner — the authorship rule every block the coordinator acts on follows
+// (AGENTS.md), applied there by lib/github.mjs's isTrusted. The worker runs
+// as the agent, not as the bot, so the bot's login arrives as configuration
+// and an owner's role is looked up through the same injected github(). This
+// file imports nothing: worker.mjs runs it, and the repository's tests run it
+// from the root, where this folder's node_modules are not installed.
+
+/** Repository roles whose holder may route change requests, as lib/github.mjs reads them. */
+export const OWNER_ROLES = ["admin", "maintain"];
+
+/** Whether a ```changes comment by `login` opens a revision round: the bot's
+ * own, or an owner's (admin or maintain on the board). Logins compare
+ * case-insensitively: GitHub logins are not case-sensitive, and the bot's
+ * login arrives from a human-edited setting, not from the API. A failed role
+ * lookup reads as not trusted — it can only lose an owner's round, never the
+ * bot's, and the harm this check exists to prevent is acting on a round
+ * twice, not missing one. */
+export function trustCheck({ github, bot }) {
+  // Roles are kept for the run's life; a failed lookup is not kept, so the
+  // next comment asks again.
+  const roles = new Map();
+  const roleOf = login =>
+    github(`/collaborators/${encodeURIComponent(login)}/permission`).then(
+      p => p.role_name,
+      error => {
+        // A login that is not a collaborator has no role (lib/github.mjs).
+        if (String(error.message).endsWith(": 404")) return null;
+        throw error;
+      },
+    );
+  return async login => {
+    if (login.toLowerCase() === bot.toLowerCase()) return true;
+    if (!roles.has(login)) {
+      const role = roleOf(login);
+      roles.set(login, role.then(r => OWNER_ROLES.includes(r)));
+      role.catch(() => roles.delete(login));
+    }
+    return roles.get(login).catch(() => false);
+  };
+}
+
+/** The index of the thread's latest ```changes comment the board credits —
+ * the bot's or an owner's — or -1: the boundary of the current revision
+ * round, the one the coordinator's routedRequests finds (lib/coordinator.mjs).
+ * `trusted` is trustCheck's answer for a login. */
+export async function latestChangesRound(thread, trusted) {
+  for (let i = thread.length - 1; i >= 0; i--) {
+    if (thread[i].body.includes("```changes\n") && await trusted(thread[i].user.login)) return i;
+  }
+  return -1;
+}
