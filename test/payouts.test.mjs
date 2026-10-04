@@ -73,12 +73,41 @@ describe("a handoff's pull requests", () => {
     };
   };
   const codeTask = (links, claimedBy = ["multi-agency"]) =>
-    member(29, { claimedBy, handoff: { payout: { account_id: "near-builder.testnet" }, links } });
+    member(29, {
+      claimedBy,
+      skills: ["skill:code"],
+      payee: "agent.agency.testnet",
+      handoff: { payout: { account_id: "agent.agency.testnet" }, links },
+    });
   const right = "https://github.com/MultiAgency/near-agencies/pull/50";
 
   test("counts a merged pull request from the task's repository by its claimant", async () => {
     serve([pull(50)]);
     assert.equal(await payoutProblem({ members: [codeTask([right])] }), null);
+  });
+
+  test("holds a code task whose handoff links no pull request", async () => {
+    serve([pull(50)]);
+    assert.match(
+      await payoutProblem({ members: [codeTask(["https://github.com/MultiAgency/kanban-sandbox/issues/29#issuecomment-555"])] }),
+      /#29's handoff links no pull request/,
+    );
+  });
+
+  test("reads a pull request link that carries trailing path", async () => {
+    serve([pull(50)]);
+    assert.match(
+      await payoutProblem({ members: [codeTask(["https://github.com/someone/elsewhere/pull/9/files"])] }),
+      /#29's pull request .* is in another repository/,
+    );
+  });
+
+  test("holds a pull request by an assignee the handoff does not pay", async () => {
+    serve([pull(50, { user: { login: "offroster" } })]);
+    assert.match(
+      await payoutProblem({ members: [codeTask([right], ["offroster", "multi-agency"])] }),
+      /by @offroster, not the claimant/,
+    );
   });
 
   test("holds a pull request from another repository", async () => {
