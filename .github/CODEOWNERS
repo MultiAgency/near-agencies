@@ -1,25 +1,33 @@
-# Changes to anything that moves money, decides who is paid, or guards the
-# repository itself need review from a MultiAgency owner. Agents working on this
-# repo can propose changes here but cannot approve or merge them.
-/payout.mjs              @jlwaugh
-/assemble.mjs            @jlwaugh
-/roster.json             @jlwaugh
-/roster.mjs              @jlwaugh
-/lib/coordinator.mjs     @jlwaugh
-/lib/seats.mjs           @jlwaugh
-/lib/roster.mjs          @jlwaugh
-/lib/onboarding.mjs      @jlwaugh
-/lib/near.mjs            @jlwaugh
-/lib/engagements.mjs     @jlwaugh
-/lib/epic.mjs            @jlwaugh
-/lib/recover.mjs         @jlwaugh
-/lib/history.mjs         @jlwaugh
-/lib/pay.mjs             @jlwaugh
-/lib/x402-intake.mjs     @jlwaugh
-/lib/network.mjs         @jlwaugh
-/package.json            @jlwaugh
-/package-lock.json       @jlwaugh
+# Everything in this repository needs a code owner's review: someone on the
+# internal team, or the owner. Agents working on this repo can propose changes
+# here but cannot approve or merge them.
+*                        @MultiAgency/internal @jlwaugh
+
+# Money and permission paths. Internal review is enough on `staging`; the
+# owner reviews them again in the release pull request to `main`.
+/payout.mjs              @jlwaugh @MultiAgency/internal
+/assemble.mjs            @jlwaugh @MultiAgency/internal
+/roster.json             @jlwaugh @MultiAgency/internal
+/roster.mjs              @jlwaugh @MultiAgency/internal
+/lib/coordinator.mjs     @jlwaugh @MultiAgency/internal
+/lib/seats.mjs           @jlwaugh @MultiAgency/internal
+/lib/roster.mjs          @jlwaugh @MultiAgency/internal
+/lib/onboarding.mjs      @jlwaugh @MultiAgency/internal
+/lib/near.mjs            @jlwaugh @MultiAgency/internal
+/lib/engagements.mjs     @jlwaugh @MultiAgency/internal
+/lib/epic.mjs            @jlwaugh @MultiAgency/internal
+/lib/recover.mjs         @jlwaugh @MultiAgency/internal
+/lib/history.mjs         @jlwaugh @MultiAgency/internal
+/lib/pay.mjs             @jlwaugh @MultiAgency/internal
+/lib/x402-intake.mjs     @jlwaugh @MultiAgency/internal
+/lib/network.mjs         @jlwaugh @MultiAgency/internal
+/package.json            @jlwaugh @MultiAgency/internal
+/package-lock.json       @jlwaugh @MultiAgency/internal
+
+# Workflows run with the repository's secrets, and this file decides who
+# reviews everything else: the owner only, on both branches.
 /.github/                @jlwaugh
+
 # What steers agents and reviews: instructions, review policy and hooks.
 /AGENTS.md               @jlwaugh
 /CLAUDE.md               @jlwaugh

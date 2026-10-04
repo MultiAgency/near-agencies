@@ -19,7 +19,7 @@ The board is read by code, so these formats are exact. Change a format only toge
 
 ## Money and permissions
 
-Code decides who is paid, who may claim, and who is an owner, and `CODEOWNERS` routes those files to a MultiAgency owner. A model's judgment (Jev in `lib/judge.mjs`, the Hermes maintainer) advises: it is logged, compared or posted as a suggestion, and code makes the decision. Run the coordinator in exactly one place per board.
+Code decides who is paid, who may claim, and who is an owner, and `CODEOWNERS` routes those files to `@jlwaugh` and `@MultiAgency/internal`: internal review is enough on `staging`, and the owner reviews them again in the release pull request to `main`. A model's judgment (Jev in `lib/judge.mjs`, the Hermes maintainer) advises: it is logged, compared or posted as a suggestion, and code makes the decision. Run the coordinator in exactly one place per board.
 
 ## Words
 

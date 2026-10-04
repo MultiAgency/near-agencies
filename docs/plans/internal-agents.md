@@ -37,7 +37,7 @@ Decided by the owner, 2026-10-02.
 
 | | `staging` (default branch) | `main` |
 |---|---|---|
-| What it is | where all work lands; deploys to today's demo (testnet) | released history; the future mainnet production deploys from it, and until then it deploys nothing |
+| What it is | where all work lands; Railway's `staging` environment deploys from it to today's demo, demo.multiagency.ai, and runs the coordinator (testnet) | released history; Railway's `production` environment deploys from it — coordinator off, no worker schedules until it gets its own board and domain (something like jobs.multiagency.ai) — on testnet for now, moving to mainnet later |
 | PRs come from | everyone: outside (forks), internal people and agents, the house coder | release PRs `staging` → `main` only |
 | Who must approve | a code owner: any internal **person** or the owner. Agents' approvals don't count | the owner |
 | Who may merge | any internal person, or an internal or house agent once a person approved, `test` passed and the AI review is clean | the owner only (the `update` rule) |
@@ -51,12 +51,12 @@ Decided by the owner, 2026-10-02.
 - Team `internal`: internal **people** only, with write (a CODEOWNERS team needs write). Agents go in a separate team, `internal-agents`, with write, so they can merge but never count as reviewers.
 
 **Switching over:**
-1. Create `staging` from `main`, and make it the default branch.
-2. Rulesets and teams as above, plus the CODEOWNERS change (owner commit, since it's in `.github/`), and the matching AGENTS.md change: its money-and-permissions paragraph says CODEOWNERS routes those files to a MultiAgency owner, which stops holding on `staging`, where internal review is enough for them (the owner still reviews them in the release PR to `main`).
+1. Create `staging` from `main`, and make it the default branch. Done 2026-10-03.
+2. Rulesets and teams as above, plus the CODEOWNERS change (owner commit, since it's in `.github/`), and the matching AGENTS.md change: its money-and-permissions paragraph says CODEOWNERS routes those files to a MultiAgency owner, which stops holding on `staging`, where internal review is enough for them (the owner still reviews them in the release PR to `main`). Done 2026-10-03 (teams: `internal` only so far).
 3. `ci.yml`: run on pushes to `staging` as well as `main` (today `push: branches: [main]`).
-4. Railway: the demo service deploys from `staging`.
-5. Point every "against main" at `staging`: `connector.mjs:195`, `agents/claude-worker/worker.mjs` (the code-task instructions), `public/skill.md:79`, AGENTS.md, README, the coder card template, `CONTRIBUTING.md`. Retarget open PRs.
-6. The coder's base clone (`near-agencies-agent`) tracks `origin/staging`.
+4. Railway: the demo service deploys from `staging`. Done 2026-10-03.
+5. Point every "against main" at `staging`: `connector.mjs:195`, `agents/claude-worker/worker.mjs` (the code-task instructions), `public/skill.md:79`, AGENTS.md, README, the coder card template. Retarget open PRs.
+6. The coder's base clone (`near-agencies-agent`) tracks `origin/staging`. Done 2026-10-03.
 7. The local merge hook (`.claude/hooks/require-approval.sh`) already requires an approving review for any PR; it holds for both branches.
 
 **From the AI review of this plan** (2026-10-02):

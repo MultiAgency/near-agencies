@@ -144,8 +144,8 @@ scripts/stack.sh down
 
 Tests need no credentials or network: `npm run check && npm test`. CI runs
 both on every push and pull request, and [`CODEOWNERS`](.github/CODEOWNERS)
-routes changes to the parts that move money or decide who is paid to a
-MultiAgency owner.
+routes changes to the parts that move money or decide who is paid through
+the owner and the internal team (`@MultiAgency/internal`).
 
 Operator commands:
 
@@ -193,9 +193,11 @@ pays a code seat only after its pull request is merged.
 
 Guardrails:
 
-- **A ruleset on `main`:** pull requests only, the `test` check must pass, a
-  code-owner review is required, and only a MultiAgency owner can merge. It is
-  a ruleset rather than classic branch protection because anyone who can read
+- **Rulesets on `staging` and `main`:** pull requests only, and the `test`
+  check must pass, on both. `staging` also requires a code-owner review, and a
+  push after an approval dismisses it; on `main`, only a MultiAgency owner can
+  merge. They are rulesets rather than classic branch protection because
+  anyone who can read
   the repository can read a ruleset's required checks, so Hermes can verify a
   pull request with the agent's own token.
 - **[`CODEOWNERS`](.github/CODEOWNERS)** covers everything that moves money or
@@ -205,6 +207,12 @@ Guardrails:
   this repository only. It is a `gh` login in the profile's own
   `GH_CONFIG_DIR` (passed through with `terminal.env_passthrough`), because
   Hermes withholds `GH_TOKEN` from workers.
+
+Pull requests from forks wait on an owner twice: GitHub holds the workflow
+runs of a first-time outside contributor's pull request until an owner clicks
+**Approve and run workflows** on it, and a fork pull request's AI review
+starts only when an owner comments `/review` on it — fork runs get no
+secrets, so neither happens on its own.
 
 Setup for the agent operator:
 
@@ -220,13 +228,23 @@ for t in kanban web terminal file; do hermes -p coder tools enable $t; done
 
 ## Hosted deployment (Railway)
 
-One service runs `npm start` with a volume at `/app/.data` for the quote store.
-It deploys every push to `main` once GitHub's checks pass, so a merged seat's
-pull request goes live without an operator.
+One service, two Railway environments, both on testnet (`NEAR_NETWORK=testnet`):
+production moves to mainnet later, staging stays on testnet.
+
+- **staging** deploys from the `staging` branch once GitHub's checks pass, so a
+  merged seat's pull request goes live without an operator. It serves
+  [demo.multiagency.ai](https://demo.multiagency.ai) and runs the coordinator
+  (`COORDINATOR=1`) on
+  [MultiAgency/kanban-sandbox](https://github.com/MultiAgency/kanban-sandbox).
+- **production** deploys from `main`. Its coordinator is off (`COORDINATOR=0`)
+  and its workers have no schedule until it gets its own board and domain
+  (something like jobs.multiagency.ai).
+
+Both run `npm start` with a volume at `/app/.data` for the quote store.
 Variables: `NEAR_NETWORK=testnet`, `HOST=0.0.0.0`, `TRUST_PROXY=1`,
 `SANDBOX_REPO`, `GITHUB_TOKEN` (the bot account's fine-grained token for the
-board), and `COORDINATOR=1`. The coordinator must run in exactly one place.
-The x402 routes stay off unless a facilitator is configured.
+board), and `COORDINATOR` as above: the coordinator must run in exactly one
+place. The x402 routes stay off unless a facilitator is configured.
 
 ## Network profiles
 

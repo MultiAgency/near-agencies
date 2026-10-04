@@ -76,7 +76,7 @@ Call a claim **unconfirmed** only when no primary source states it. If you
 could not fetch a source, say which one, so the reviewer knows exactly what
 was not checked.
 
-For a `skill:code` task, the work is a pull request against `main` of
+For a `skill:code` task, the work is a pull request against `staging` of
 near-agencies, and the deliverable comment names it: keep it focused, add
 tests, and make `npm run check` and `npm test` pass. Title it `Task #N: <what changed>` and link the task.
 Changes to payouts, claims, deposits, the roster or CI need an owner's review.
