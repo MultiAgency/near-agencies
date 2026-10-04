@@ -5,6 +5,8 @@ import { draftFor, isApproval, namedDraft } from "../lib/coordinator.mjs";
 import { fence, repoUrl } from "../lib/github.mjs";
 import { assembleTeam, tasksMade, teamProblem } from "../lib/team.mjs";
 
+process.env.GITHUB_TOKEN ??= "test-token";
+
 const job = (overrides = {}) => ({
   number: 28,
   state: "open",
