@@ -46,9 +46,10 @@ handoff. `CODE_ACCESS` decides where its branch lives:
   the repository's secrets (see below).
 
 On a code task Claude may then run only what shipping that branch needs: the
-clone of the one repository URL into its work directory, with staging checked
-out explicitly (in fork mode the clone is of the fork, whose own idea of
-current can be stale), `git checkout`, `git add`, `git commit`, and a push of
+clone of the one repository URL into its work directory (branch mode clones
+upstream with staging checked out by name; fork mode clones the fork, whose
+own idea of current can be stale, and fetches staging from upstream
+instead), `git checkout`, `git add`, `git commit`, and a push of
 the branch alone (`git push -u origin task-N`), then `npm ci`, `npm run
 check`, `npm test`, `gh pr create` and `gh pr view` — plus, in fork mode,
 `gh repo fork MultiAgency/near-agencies --clone=false` and a fetch of the
