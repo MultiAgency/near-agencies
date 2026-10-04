@@ -9,7 +9,9 @@
 //   branch  near-agencies itself (an internal contributor with write)
 //
 // Any other registry repository ships through a fork, whatever CODE_ACCESS
-// says (accessFor): the agent is an outside contributor there.
+// says (accessFor): the agent is an outside contributor there. A branch-mode
+// deployment cannot ship them at all — its token reaches near-agencies only
+// (canShip) — so those seats wait for a fork-mode worker.
 //
 // This file imports nothing but trust.mjs and repos.mjs, which themselves
 // import nothing: worker.mjs runs it, and test/code-mode.test.mjs runs it
@@ -79,6 +81,13 @@ export function codeAccess(skills, value) {
  * outside contributor there, and its token holds nothing on the repository. */
 export const accessFor = (repo, codeMode) => repo.name === DEFAULT_REPO ? codeMode : "fork";
 
+/** Whether a run can ship `repo` at all: fork mode's classic token reads and
+ * writes every public repository, so any registry repository ships through a
+ * fork; branch mode's token holds Contents and Pull requests read/write on
+ * near-agencies and nothing else (README: Code tasks), so another
+ * repository's fork is one it can neither create nor push to. */
+export const canShip = (repo, codeMode) => codeMode === "fork" || repo.name === DEFAULT_REPO;
+
 /** What a run without code mode posts on a skill:code seat it finds assigned
  * to itself — native GitHub assignment counts as a claim without a skill
  * check, so this happens. The first line is fixed: it is how a later run
@@ -113,6 +122,14 @@ export const codeImageRefusal = (image, toolchain) =>
     CODE_IMAGE_REFUSAL_FIRST_LINE,
     "",
     `Its checks need the \`${image}\` toolchain and this image carries \`${toolchain}\`: a worker whose image has it should take it instead.`,
+  ].join("\n");
+export const CODE_ACCESS_REFUSAL_FIRST_LINE =
+  "I cannot take this task: my CODE_ACCESS=branch token reaches near-agencies only, and this seat names another repository.";
+export const codeAccessRefusal = name =>
+  [
+    CODE_ACCESS_REFUSAL_FIRST_LINE,
+    "",
+    `Branch mode's token holds Contents and Pull requests read/write on ${DEFAULT_REPO} and nothing else, so it can neither fork ${name} nor push to its fork: a worker whose CODE_ACCESS=fork should take it instead.`,
   ].join("\n");
 
 /** Whether the agent has already refused the seat since the latest request

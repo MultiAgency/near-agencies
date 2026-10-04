@@ -51,7 +51,10 @@ where the branch lives on near-agencies:
   the repository's secrets (see below).
 
 Any other registry repository ships through a fork, whatever `CODE_ACCESS`
-says: the agent is an outside contributor there. A repository whose image the
+says: the agent is an outside contributor there — and a branch-mode
+deployment never takes those seats at all, since its token could neither
+fork the repository nor push to the fork; such seats wait for a fork-mode
+worker. A repository whose image the
 worker's lacks (the registry's `image` against `WORKER_TOOLCHAIN`) is never
 taken at all: its seats stay open for a worker built with that toolchain.
 legion-social is itself a GitHub fork, of `evgenykuzyakov/near-social-kv`, and

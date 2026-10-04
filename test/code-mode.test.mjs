@@ -4,9 +4,11 @@ import { describe, test } from "node:test";
 // The worker folder's own logic, imported from the repository root, where its
 // node_modules are not installed — hence these modules import nothing.
 import {
-  accessFor, allowedTools, codeAccess, codeImageRefusal, codeRepoRefusal,
-  deliversCodeSeat, isCodeSeat, mayClaim, ship, termsOf,
-  CODE_IMAGE_REFUSAL_FIRST_LINE, CODE_REPO_REFUSAL_FIRST_LINE, CODE_REFUSAL,
+  accessFor, allowedTools, canShip, codeAccess, codeAccessRefusal,
+  codeImageRefusal, codeRepoRefusal, deliversCodeSeat, isCodeSeat, mayClaim,
+  ship, termsOf,
+  CODE_ACCESS_REFUSAL_FIRST_LINE, CODE_IMAGE_REFUSAL_FIRST_LINE,
+  CODE_REPO_REFUSAL_FIRST_LINE, CODE_REFUSAL,
   GIT_CREDENTIAL_HELPER,
 } from "../agents/claude-worker/code-mode.mjs";
 import { codeRepo } from "../agents/claude-worker/repos.mjs";
@@ -292,12 +294,16 @@ describe("the repository refusals", () => {
   test("each refusal starts with its own fixed first line — the once-per-round match", () => {
     const repoBody = codeRepoRefusal("octocat/hello-world");
     const imageBody = codeImageRefusal("rust", "node");
+    const accessBody = codeAccessRefusal("MultiAgency/legion-social");
     assert.equal(repoBody.startsWith(CODE_REPO_REFUSAL_FIRST_LINE), true);
     assert.equal(imageBody.startsWith(CODE_IMAGE_REFUSAL_FIRST_LINE), true);
-    assert.equal(CODE_REPO_REFUSAL_FIRST_LINE === CODE_IMAGE_REFUSAL_FIRST_LINE, false,
-      "one refusal must not count for the other");
+    assert.equal(accessBody.startsWith(CODE_ACCESS_REFUSAL_FIRST_LINE), true);
+    assert.equal(new Set([
+      CODE_REPO_REFUSAL_FIRST_LINE, CODE_IMAGE_REFUSAL_FIRST_LINE, CODE_ACCESS_REFUSAL_FIRST_LINE,
+    ]).size, 3, "one refusal must not count for another");
     assert.match(repoBody, /octocat\/hello-world/);
     assert.match(imageBody, /`rust` toolchain and this image carries `node`/);
+    assert.match(accessBody, /MultiAgency\/legion-social/);
   });
 });
 
@@ -485,6 +491,42 @@ describe("a code seat's repository decides whether this run takes it", () => {
     assert.deepEqual(posted, []);
     assert.equal(picked.action, "claim");
     assert.equal(picked.seat.number, 25);
+  });
+
+  test("canShip: fork mode ships any registry repository, branch mode only near-agencies", () => {
+    assert.equal(canShip(near, "fork"), true);
+    assert.equal(canShip(near, "branch"), true);
+    assert.equal(canShip(legion, "fork"), true);
+    assert.equal(canShip(legion, "branch"), false, "branch mode's token holds write on near-agencies and nothing else");
+  });
+
+  test("a branch-mode worker leaves a rust repository's ready seat unclaimed, for a fork-mode worker", async () => {
+    const { task, posted } = harness(
+      [repoSeat(26, ["ready", "agent-eligible", "skill:code"], "MultiAgency/legion-social")],
+      { 26: [] },
+      {},
+      { ...codeSkills, codeMode: "branch", toolchain: "rust" },
+    );
+    assert.deepEqual(await task(), null);
+    assert.deepEqual(posted, [], "a claimable seat the token cannot ship is skipped, not refused");
+  });
+
+  test("an assigned rust seat is refused once on a branch-mode worker, and the run moves on", async () => {
+    const { task, posted, threads } = harness(
+      [repoSeat(27, ["skill:code"], "MultiAgency/legion-social", [login]), repoSeat(28, ["skill:writing"], undefined, [login])],
+      { 27: [], 28: [] },
+      {},
+      { ...codeSkills, codeMode: "branch", toolchain: "rust" },
+    );
+    const picked = await task();
+    assert.equal(picked.seat.number, 28, "the fork-only seat did not stop the writing seat");
+    assert.equal(posted.length, 1);
+    assert.equal(posted[0].number, 27);
+    assert.equal(posted[0].body.startsWith(CODE_ACCESS_REFUSAL_FIRST_LINE), true);
+    threads[27].push(c(login, posted[0].body));   // the comment the run left
+    const again = await task();
+    assert.equal(again.seat.number, 28, "the second run still delivers the seat it can");
+    assert.equal(posted.length, 1, "not refused a second time");
   });
 
   test("an assigned rust seat is refused once on a node worker, and the run moves on", async () => {

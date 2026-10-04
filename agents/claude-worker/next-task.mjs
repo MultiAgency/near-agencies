@@ -5,8 +5,10 @@
 // injected, so the repository's tests can run whole cron runs from the root,
 // where this folder's dependencies (the Claude SDK) are not installed.
 import {
-  CODE_IMAGE_REFUSAL_FIRST_LINE, CODE_REPO_REFUSAL_FIRST_LINE, CODE_REFUSAL,
-  codeImageRefusal, codeRepoRefusal, isCodeSeat, mayClaim, refusalPosted, termsOf,
+  CODE_ACCESS_REFUSAL_FIRST_LINE, CODE_IMAGE_REFUSAL_FIRST_LINE,
+  CODE_REPO_REFUSAL_FIRST_LINE, CODE_REFUSAL,
+  codeAccessRefusal, codeImageRefusal, codeRepoRefusal, canShip, isCodeSeat,
+  mayClaim, refusalPosted, termsOf,
 } from "./code-mode.mjs";
 import { canBuild, codeRepo } from "./repos.mjs";
 import { latestChangesRound, trustCheck } from "./trust.mjs";
@@ -41,8 +43,10 @@ async function readySince(github, issue) {
  * dryRun nothing is posted: --dry-run only names the task. `toolchain` is
  * what this worker's image carries (WORKER_TOOLCHAIN, the Dockerfile's
  * TOOLCHAIN): a code seat whose repository's checks the image cannot run —
- * canBuild: rust covers node, node covers only node — or whose terms name
- * a repository outside the registry is never taken. */
+ * canBuild: rust covers node, node covers only node — whose repository the
+ * run's CODE_ACCESS cannot ship — canShip: fork mode ships any registry
+ * repository, branch mode only near-agencies — or whose terms name a
+ * repository outside the registry is never taken. */
 export async function nextTask({ github, comment, login, skills, codeMode, bot, claimAfterMs = 0, dryRun = false, toolchain = "node" }) {
   const trusted = trustCheck({ bot });
   const seats = (await github("/issues?state=open&per_page=100")).filter(isSeat);
@@ -68,18 +72,21 @@ export async function nextTask({ github, comment, login, skills, codeMode, bot, 
     }
     // With code mode, the seat's repository decides whether this run can
     // ship it at all: one outside the registry is refused, not attempted,
-    // and one whose toolchain this image lacks cannot run its checks (#82) —
-    // the rust image carries node too, so only a rust repository is out of a
-    // node image's reach (canBuild).
+    // one whose toolchain this image lacks cannot run its checks (#82) — the
+    // rust image carries node too, so only a rust repository is out of a
+    // node image's reach (canBuild) — and one the run's CODE_ACCESS cannot
+    // reach has no token that could fork or push it (canShip).
     // Either refusal is posted on the seat — once per revision round, on its
     // own fixed first line — and the run moves on to what it can deliver.
     if (isCodeSeat(seat) && codeMode) {
       const repo = seatRepo(seat);
-      if (!repo || !canBuild(toolchain, repo)) {
+      if (!repo || !canBuild(toolchain, repo) || !canShip(repo, codeMode)) {
         if (!dryRun) {
-          const [first, body] = repo
-            ? [CODE_IMAGE_REFUSAL_FIRST_LINE, codeImageRefusal(repo.image, toolchain)]
-            : [CODE_REPO_REFUSAL_FIRST_LINE, codeRepoRefusal(termsOf(seat)?.repo)];
+          const [first, body] = !repo
+            ? [CODE_REPO_REFUSAL_FIRST_LINE, codeRepoRefusal(termsOf(seat)?.repo)]
+            : !canBuild(toolchain, repo)
+              ? [CODE_IMAGE_REFUSAL_FIRST_LINE, codeImageRefusal(repo.image, toolchain)]
+              : [CODE_ACCESS_REFUSAL_FIRST_LINE, codeAccessRefusal(repo.name)];
           if (!(await refusalPosted(thread, login, trusted, first))) await comment(seat.number, body);
         }
         continue;
@@ -89,15 +96,21 @@ export async function nextTask({ github, comment, login, skills, codeMode, bot, 
   }
   for (const seat of seats.filter(s => mayClaim(s, skills))) {
     // A repository this run cannot ship is never claimed: outside the
-    // registry nothing may be shipped there, and a toolchain this image
-    // lacks cannot run its checks (#82) — the rust image carries node too,
-    // so only a rust repository is out of a node image's reach (canBuild).
-    // Both stay open — unclaimed — for a worker whose image has what they
-    // need.
+    // registry nothing may be shipped there, a toolchain this image lacks
+    // cannot run its checks (#82) — the rust image carries node too, so only
+    // a rust repository is out of a node image's reach (canBuild) — and a
+    // repository the run's CODE_ACCESS cannot reach has no token that could
+    // fork or push it (canShip). All stay open — unclaimed — for a worker
+    // that can ship them.
     if (isCodeSeat(seat)) {
       const repo = seatRepo(seat);
-      if (!repo || !canBuild(toolchain, repo)) {
-        console.log(`worker: leaving #${seat.number} alone: ${repo ? `${repo.name} needs the ${repo.image} image` : "its terms name a repository outside the registry"}`);
+      if (!repo || !canBuild(toolchain, repo) || !canShip(repo, codeMode)) {
+        const why = !repo
+          ? "its terms name a repository outside the registry"
+          : !canBuild(toolchain, repo)
+            ? `${repo.name} needs the ${repo.image} image`
+            : `${repo.name} needs a fork-mode worker`;
+        console.log(`worker: leaving #${seat.number} alone: ${why}`);
         continue;
       }
     }
