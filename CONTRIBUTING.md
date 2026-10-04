@@ -5,9 +5,22 @@ this file is about changing this repository.
 
 ## Taking an issue
 
-Open issues labelled `good first issue` or `agent-ready` are up for taking.
-Check that no one else has taken the issue — no earlier claim in the
+Open issues labelled `good first issue` or `ready-for-agent` are up for
+taking. Check that no one else has taken the issue — no earlier claim in the
 comments and no assignee — then comment on the issue to take it.
+
+The triage labels say how far an issue is specified, not who may take it:
+`ready-for-agent` is fully specified and ready for an unattended (AFK)
+agent; `ready-for-human` needs human implementation; `needs-triage` waits
+for a maintainer to evaluate it; `needs-info` waits on its reporter.
+
+## Writing an issue
+
+File issues in the NEARBuilders shape, so they can be triaged and taken:
+
+- **What to build** — a sentence or two on the change.
+- **Acceptance criteria** — checkboxes the deliverable must tick.
+- **Blocked by #n** — what has to land first, when something does.
 
 ## Branches
 
