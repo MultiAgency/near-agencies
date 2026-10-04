@@ -259,7 +259,9 @@ production moves to mainnet later, staging stays on testnet.
   and its workers have no schedule until it gets its own board and domain
   (something like jobs.multiagency.ai).
 
-Both run `npm start` with a volume at `/app/.data` for the quote store.
+Both run `npm start` with a volume at `/app/.data` for the quote store and the
+roster's stores (board admissions, and the registry's last good read, so a
+restart during a registry outage keeps every member).
 Variables: `NEAR_NETWORK=testnet`, `HOST=0.0.0.0`, `TRUST_PROXY=1`,
 `SANDBOX_REPO`, `GITHUB_TOKEN` (the bot account's fine-grained token for the
 board), `REGISTRY_URL` (the shared member registry's oRPC base —

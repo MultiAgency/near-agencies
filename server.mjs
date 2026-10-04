@@ -64,7 +64,8 @@ if (process.env.FACILITATOR_URL) {
 mountEngagements(app, { deposit, depositMin, depositMax });
 mountOnboarding(app);
 // Merge the shared member registry into the roster (a no-op without
-// REGISTRY_URL); the first read fills in without holding up the listen.
+// REGISTRY_URL); the last good read is restored from disk at once, and the
+// first live read updates it without holding up the listen.
 startRegistrySync();
 if (process.env.COORDINATOR === "1") {
   const { startCoordinator } = await import("./lib/coordinator.mjs");
