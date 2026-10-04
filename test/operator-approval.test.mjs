@@ -243,6 +243,27 @@ describe("operatorApproval", () => {
     );
   });
 
+  test("an approval nobody can vouch for fails closed, not as none yet", () => {
+    assert.deepEqual(
+      operatorApproval({ ...staging, author: "agency-builder", roster: record("agent", "jlwaugh"), approvals: [], unvouched: ["jlwaugh"] }).outcome,
+      "fail",
+    );
+  });
+
+  test("an unvouched approval alongside the operator's fails too", () => {
+    assert.deepEqual(
+      operatorApproval({ ...staging, author: "agency-builder", roster: record("agent", "jlwaugh"), approvals: [], unvouched: ["stranger", "jlwaugh"] }).outcome,
+      "fail",
+    );
+  });
+
+  test("a vouched approval besides the operator's passes over unvouched noise", () => {
+    assert.deepEqual(
+      operatorApproval({ ...staging, author: "agency-builder", roster: record("agent", "jlwaugh"), approvals: ["saadiqbal-dev"], unvouched: ["stranger"] }).outcome,
+      "pass",
+    );
+  });
+
   test("@multai-builder's approval through the gate counts", () => {
     assert.deepEqual(
       operatorApproval({ ...staging, author: "agency-builder", roster: record("agent", "jlwaugh"), approvals: ["multai-builder"] }).outcome,

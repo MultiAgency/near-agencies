@@ -53,16 +53,20 @@ try {
   // An approver neither CODEOWNERS nor roster.json knows may still be a
   // person the coordinator has admitted; ask before discounting them, since
   // a hidden operator reads as "no approvals", the bypass this check closes.
-  const asked = await Promise.all(
+  // One the coordinator cannot vouch either stays unvouched, and the verdict
+  // fails closed rather than reading it as no approval at all.
+  const vouched = [];
+  const unvouched = [];
+  await Promise.all(
     unrecognizedApprovals(standing, codeownerUsers, owners, builders ?? []).map(async login => {
       const record = await rosterApi(login);
-      return record.status === "record" && record.kind === "human" ? login : null;
+      (record.status === "record" && record.kind === "human" ? vouched : unvouched).push(login);
     }),
   );
-  const approvals = [...known, ...asked.filter(Boolean)];
+  const approvals = [...known, ...vouched];
   const roster = combineRoster(builders ? rosterRecord(builders, author) : { status: "unreadable" }, fromApi);
 
-  const { outcome, reason } = operatorApproval({ base, author, roster, owners, approvals });
+  const { outcome, reason } = operatorApproval({ base, author, roster, owners, approvals, unvouched });
   console.log(`operator-approval ${outcome}: ${reason}`);
   console.log(`  author @${author}, base ${base}, approvals counted: ${approvals.length ? approvals.map(login => `@${login}`).join(", ") : "none"}, roster: ${roster.status}`);
   process.exit(outcome === "pass" ? 0 : 1);
