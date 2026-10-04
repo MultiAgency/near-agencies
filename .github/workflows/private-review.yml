@@ -40,7 +40,7 @@ jobs:
       allowed: ${{ steps.gate.outputs.allowed }}
     steps:
       - id: gate
-        uses: MultiAgency/private-ai/review/gate@68b2de10ae41d19d10ea5e4eb91ec30f5f6f6018 # 68b2de1
+        uses: MultiAgency/private-ai/review/gate@7c0301b598c403485ac7fd7831313cc527fd6c3f # 7c0301b
 
   review:
     needs: gate
@@ -60,7 +60,7 @@ jobs:
         if: env.HAS_KEY != 'true'
         run: echo "::notice::Skipping the private review until the NEARAI_API_KEY repository secret is set."
 
-      - uses: MultiAgency/private-ai/review@68b2de10ae41d19d10ea5e4eb91ec30f5f6f6018 # 68b2de1
+      - uses: MultiAgency/private-ai/review@7c0301b598c403485ac7fd7831313cc527fd6c3f # 7c0301b
         if: env.HAS_KEY == 'true'
         with:
           nearai-api-key: ${{ secrets.NEARAI_API_KEY }}
