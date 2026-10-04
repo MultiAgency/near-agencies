@@ -247,6 +247,36 @@ describe("guarding the gate labels", () => {
     assert.deepEqual(commentsOn(fake, 61), []);
   });
 
+  test("a stranger's flip they flipped back themselves is left as it stands", async () => {
+    // `human-only` was never this seat's gate label: added by a stranger,
+    // then removed again by the same stranger. The net change is nothing, so
+    // restoring "the latest event" would have the bot add it for good.
+    const seat = seatIssue(64, ["ready", "skill:writing", "agent-eligible"]);
+    const fake = await runCycle(board({
+      open: [seat],
+      issues: { 64: seat },
+      events: { 64: [labeled("tamperer", "human-only"), unlabeled("tamperer", "human-only")] },
+    }));
+
+    assert.deepEqual(labelWrites(fake, 64), [], "nothing was restored");
+    assert.deepEqual(commentsOn(fake, 64), []);
+  });
+
+  test("a stranger's flip of the seat's own gate label back does not remove it", async () => {
+    // `agent-eligible` set by the bot, removed by a stranger, put back by the
+    // same stranger: the state is the one the bot left it in, so it stands —
+    // the latest event being a stranger's must not read as tampering.
+    const seat = seatIssue(65, ["ready", "skill:writing", "agent-eligible"]);
+    const fake = await runCycle(board({
+      open: [seat],
+      issues: { 65: seat },
+      events: { 65: [labeled("multi-agency", "agent-eligible"), unlabeled("tamperer", "agent-eligible"), labeled("tamperer", "agent-eligible")] },
+    }));
+
+    assert.deepEqual(labelWrites(fake, 65), [], "the label the bot set stays");
+    assert.deepEqual(commentsOn(fake, 65), []);
+  });
+
   test("a stranger's change an owner already redid is left alone", async () => {
     const seat = seatIssue(62, ["ready", "skill:writing", "agent-eligible"]);
     const fake = await runCycle(board({
@@ -542,15 +572,19 @@ describe("tasks closed by hand", () => {
 });
 
 describe("verifying a close", () => {
-  // state/closedAt describe the issue a re-read before reopening would see.
-  const serve = (events, { state = "closed", closedAt = null } = {}, log = { eventReads: 0, issueReads: 0, comments: 0, patches: 0, labels: 0 }) => {
+  // state/closedAt/closedBy describe the issue a re-read before reopening
+  // would see (closed_by is GitHub's own "who closed this" on the issue).
+  const serve = (events, { state = "closed", closedAt = null, closedBy = null } = {}, log = { eventReads: 0, issueReads: 0, comments: 0, patches: 0, labels: 0 }) => {
     globalThis.fetch = async (url, options = {}) => {
       const u = new URL(url);
       const method = options.method ?? "GET";
       const json = body => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
       if (u.pathname === "/user") return json({ login: "multi-agency" });
       if (u.pathname.endsWith("/events")) { log.eventReads += 1; return json(events); }
-      if (u.pathname.match(/\/issues\/\d+$/) && method === "GET") { log.issueReads += 1; return json({ state, ...(closedAt ? { closed_at: closedAt } : {}) }); }
+      if (u.pathname.match(/\/issues\/\d+$/) && method === "GET") {
+        log.issueReads += 1;
+        return json({ state, ...(closedAt ? { closed_at: closedAt } : {}), ...(closedBy ? { closed_by: { login: closedBy } } : {}) });
+      }
       if (u.pathname.match(/\/collaborators\/[^/]+\/permission$/)) return json({ role_name: "read" });
       if (u.pathname.endsWith("/comments") && method === "POST") { log.comments += 1; return json({}); }
       if (u.pathname.endsWith("/labels") && method === "POST") { log.labels += 1; return json({}); }
@@ -561,8 +595,8 @@ describe("verifying a close", () => {
   };
 
   test("counts a close whose event is not indexed yet, rather than reopening it", async () => {
-    const log = serve([]);
     const at = NOW();
+    const log = serve([], { closedAt: at });
     assert.equal(await closeVerified(30, at), true, "no event yet reads as the coordinator's own close");
     assert.equal(await closeVerified(30, at), true, "and it is checked again rather than trusted");
     assert.equal(log.eventReads, 2, "an unproven close is not memoized");
@@ -583,6 +617,24 @@ describe("verifying a close", () => {
     assert.equal(trusted.eventReads, 1, "its events were read once");
     assert.equal(await closeVerified(32, new Date(Date.parse(at) + 1000).toISOString()), true, "a new close is verified again");
     assert.equal(trusted.eventReads, 2);
+  });
+
+  test("a stranger's close whose event is not indexed yet is reopened all the same", async () => {
+    const at = NOW();
+    const log = serve([], { closedAt: at, closedBy: "tamperer" });
+    assert.equal(await closeVerified(35, at), false, "closed_by says who while the event lags");
+    assert.equal(log.patches, 1, "reopened once");
+    assert.equal(log.comments, 1, "said so once");
+    assert.equal(log.labels, 1, "and the task takes up a status label again");
+  });
+
+  test("the coordinator's own close counts before its event is indexed, and is not memoized", async () => {
+    const at = NOW();
+    const log = serve([], { closedAt: at, closedBy: "multi-agency" });
+    assert.equal(await closeVerified(36, at), true, "no flap on the coordinator's fresh close");
+    assert.equal(await closeVerified(36, at), true, "and it is checked again rather than trusted");
+    assert.equal(log.eventReads, 2, "an unproven close is not memoized");
+    assert.equal(log.patches, 0, "nothing was reopened");
   });
 
   test("a proper close made since the events were read is not undone", async () => {
