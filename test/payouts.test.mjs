@@ -4,6 +4,8 @@ import { afterEach, describe, test } from "node:test";
 import { USDC } from "../lib/near.mjs";
 import { filedProposal, payoutProblem, proposalDescription } from "../lib/payouts.mjs";
 
+process.env.GITHUB_TOKEN ??= "test-token";
+
 const member = (issue, overrides = {}) => ({
   issue,
   title: `Task ${issue}`,
