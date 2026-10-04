@@ -84,10 +84,15 @@ export function refusalPosted(thread, login) {
  * far too wide here: `git push:*` also allows force-pushing or deleting any
  * unprotected branch, including other agents' task branches, and
  * `git clone:*` accepts `-c` and `--upload-pack`, which run arbitrary
- * commands. Fork mode alone may fork the repository and sync the fork with it
- * before the clone (a fork's default branch goes stale once created).
- * `access` is fork or branch, `n` the task's number, `login` the agent's
- * GitHub login, which names its fork. */
+ * commands. Every mode names staging: branch mode clones upstream with
+ * staging checked out; fork mode forks once and fetches staging from the
+ * upstream URL, and its task branch starts at that fetch (FETCH_HEAD) — a
+ * fork goes stale once created, and one created before staging became the
+ * default branch does not even have staging, which a sync cannot create:
+ * `gh repo sync --branch staging` asks GitHub's merge-upstream endpoint,
+ * which answers 404 Branch not found for a branch the fork lacks, and its
+ * fallback only updates an existing ref. `access` is fork or branch, `n` the
+ * task's number, `login` the agent's GitHub login, which names its fork. */
 export function allowedTools(access, n, login) {
   const tools = [
     "Read(./**)", "Write(./**)", "Edit(./**)", "Glob", "Grep", "WebSearch", "WebFetch",
@@ -96,18 +101,18 @@ export function allowedTools(access, n, login) {
   ];
   if (!access) return tools;
   const name = CODE_REPO.split("/")[1];
-  const clone = access === "fork"
-    ? `https://github.com/${login}/${name}.git`
-    : `https://github.com/${CODE_REPO}.git`;
+  const upstream = `https://github.com/${CODE_REPO}.git`;
   return tools.concat(
-    `Bash(git clone ${clone} .)`,
+    access === "fork"
+      ? `Bash(git clone https://github.com/${login}/${name}.git .)`
+      : `Bash(git clone --branch staging ${upstream} .)`,
+    ...(access === "fork" ? [
+      `Bash(git fetch ${upstream} staging)`,
+      `Bash(gh repo fork ${CODE_REPO} --clone=false)`,
+    ] : []),
     "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git commit:*)",
     `Bash(git push -u origin task-${n})`,
     "Bash(npm ci)", "Bash(npm run check)", "Bash(npm test)",
     "Bash(gh pr create:*)", "Bash(gh pr view:*)",
-    ...(access === "fork" ? [
-      `Bash(gh repo fork ${CODE_REPO} --clone=false)`,
-      `Bash(gh repo sync ${login}/${name})`,
-    ] : []),
   );
 }

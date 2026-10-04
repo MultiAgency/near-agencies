@@ -46,12 +46,18 @@ handoff. `CODE_ACCESS` decides where its branch lives:
   the repository's secrets (see below).
 
 On a code task Claude may then run only what shipping that branch needs: the
-clone of the one repository URL into its work directory, `git checkout`,
-`git add`, `git commit`, and a push of the branch alone (`git push -u origin
-task-N`), then `npm ci`, `npm run check`, `npm test`, `gh pr create` and
-`gh pr view` — plus `gh repo fork MultiAgency/near-agencies --clone=false`
-and a sync of its own fork, `gh repo sync <login>/near-agencies`, in fork
-mode, so the fork's default branch is current when it is cloned. Nothing
+clone of the one repository URL into its work directory, with staging checked
+out explicitly (in fork mode the clone is of the fork, whose own idea of
+current can be stale), `git checkout`, `git add`, `git commit`, and a push of
+the branch alone (`git push -u origin task-N`), then `npm ci`, `npm run
+check`, `npm test`, `gh pr create` and `gh pr view` — plus, in fork mode,
+`gh repo fork MultiAgency/near-agencies --clone=false` and a fetch of the
+upstream repository, `git fetch https://github.com/MultiAgency/near-agencies.git
+staging`, from which task-N branches: a fork goes stale once created, and one
+from before staging became the default branch does not even have staging, and
+no sync can fix that (`gh repo sync --branch staging` cannot create the
+branch — GitHub's merge-upstream endpoint answers 404 Branch not found, and
+the sync's fallback only updates an existing ref). Nothing
 else: no `git push:*`, which would also allow force-pushing or deleting any
 unprotected branch, and no `git clone:*`, since `-c` and `--upload-pack` run
 arbitrary commands. Git authenticates as the agent through `gh`: the worker

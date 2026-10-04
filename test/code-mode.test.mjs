@@ -89,7 +89,7 @@ describe("allowed tools per CODE_ACCESS", () => {
   test("branch mode adds only the exact commands the instructions give task 14", () => {
     assert.deepEqual(allowedTools("branch", n, login), [
       ...base,
-      "Bash(git clone https://github.com/MultiAgency/near-agencies.git .)",
+      "Bash(git clone --branch staging https://github.com/MultiAgency/near-agencies.git .)",
       "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git commit:*)",
       "Bash(git push -u origin task-14)",
       "Bash(npm ci)", "Bash(npm run check)", "Bash(npm test)",
@@ -97,16 +97,16 @@ describe("allowed tools per CODE_ACCESS", () => {
     ]);
   });
 
-  test("fork mode clones, forks and syncs the agent's fork, not the repository", () => {
+  test("fork mode clones the fork, forks once and fetches upstream staging, not the repository", () => {
     assert.deepEqual(allowedTools("fork", n, login), [
       ...base,
       "Bash(git clone https://github.com/near-builder/near-agencies.git .)",
+      "Bash(git fetch https://github.com/MultiAgency/near-agencies.git staging)",
+      "Bash(gh repo fork MultiAgency/near-agencies --clone=false)",
       "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git commit:*)",
       "Bash(git push -u origin task-14)",
       "Bash(npm ci)", "Bash(npm run check)", "Bash(npm test)",
       "Bash(gh pr create:*)", "Bash(gh pr view:*)",
-      "Bash(gh repo fork MultiAgency/near-agencies --clone=false)",
-      "Bash(gh repo sync near-builder/near-agencies)",
     ]);
   });
 

@@ -91,20 +91,23 @@ function ship(n, revision) {
   const fork = codeMode === "fork";
   const branch = `task-${n}`;
   const name = CODE_REPO.split("/")[1];
-  const clone = fork ? `https://github.com/${login}/${name}.git` : `https://github.com/${CODE_REPO}.git`;
+  const upstream = `https://github.com/${CODE_REPO}.git`;
+  const clone = fork ? `https://github.com/${login}/${name}.git` : upstream;
   const pulls = `\`gh pr view ${branch} --repo ${CODE_REPO}\``;
   return [
     `This is a code task: the work is a pull request against staging of ${CODE_REPO} (§ 3 of the rules). git authenticates through gh as you, so no token belongs in any URL, and your commits are already authored as you.`,
     fork
-      ? `\`gh repo fork ${CODE_REPO} --clone=false\` if you have no fork yet (it only reports an existing one), then \`gh repo sync ${login}/${name}\` so your fork's default branch is current — a fork goes stale once created — then, in this directory, \`git clone ${clone} .\`. You push to your fork.`
-      : `In this directory: \`git clone ${clone} .\`. You push to ${CODE_REPO}.`,
+      ? `\`gh repo fork ${CODE_REPO} --clone=false\` if you have no fork yet (it only reports an existing one), then, in this directory, \`git clone ${clone} .\` — origin is your fork, you push there — and \`git fetch ${upstream} staging\`. Branch from that fetch, never from what the clone checked out: a fork goes stale once created, and one from before staging became the default branch does not even have staging.`
+      : `In this directory: \`git clone --branch staging ${clone} .\`. You push to ${CODE_REPO}.`,
     revision
       ? `\`git checkout ${branch}\`: the pull request exists; push your fixes to that same branch and never open a second pull request. ${pulls} shows it.`
-      : `\`git checkout -b ${branch}\`.`,
+      : fork
+        ? `\`git checkout -b ${branch} FETCH_HEAD\`: the fetch left staging's tip in FETCH_HEAD, and the task branch starts there.`
+        : `\`git checkout -b ${branch}\`: it starts at staging, which the clone checked out.`,
     "Make the change there: keep it focused, add tests, and make `npm ci`, `npm run check` and `npm test` pass.",
     `\`git add\` only the files you changed, \`git commit\`, and \`git push -u origin ${branch}\`${fork ? " — origin is your fork" : ""}. If ${pulls} shows a pull request already, push to its branch instead of opening another.`,
     ...(revision ? [] : [
-      `Open the pull request: write its body to a file first, then \`gh pr create --repo ${CODE_REPO} --head ${fork ? `${login}:` : ""}${branch} --title "Task #${n}: <what changed>" --body-file <file>\`. The body links task #${n} and says what changed and how you verified it.`,
+      `Open the pull request: write its body to a file first, then \`gh pr create --repo ${CODE_REPO} --head ${fork ? `${login}:` : ""}${branch} --base staging --title "Task #${n}: <what changed>" --body-file <file>\`. The body links task #${n} and says what changed and how you verified it.`,
     ]),
   ];
 }
