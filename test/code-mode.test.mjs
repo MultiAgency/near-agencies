@@ -79,7 +79,7 @@ describe("allowed tools per CODE_ACCESS", () => {
   const login = "near-builder";
   const base = [
     "Read(./**)", "Write(./**)", "Edit(./**)", "Glob", "Grep", "WebSearch", "WebFetch",
-    "Bash(gh issue view:*)", "Bash(gh issue comment:*)", "Bash(gh api:*)",
+    "Bash(gh issue view:*)", "Bash(gh issue comment:*)",
     "mcp__multiagency__deliverable_sha256",
   ];
 
@@ -115,6 +115,13 @@ describe("allowed tools per CODE_ACCESS", () => {
     const tools = allowedTools("branch", 15, login);
     assert.equal(tools.includes("Bash(git push -u origin task-15)"), true);
     assert.equal(tools.includes("Bash(git push -u origin task-14)"), false);
+  });
+
+  test("no mode allows gh api: the token would reach every endpoint a planted comment names", () => {
+    for (const tools of [allowedTools(null, n, login), allowedTools("fork", n, login), allowedTools("branch", n, login)]) {
+      assert.equal(tools.some(t => t.includes("gh api")), false,
+        "gh api approves, closes, relabels and deletes whatever the token can; hashing is deliverable_sha256's job");
+    }
   });
 
   test("no mode hands Claude the whole shell, a force-push or an arbitrary clone", () => {
