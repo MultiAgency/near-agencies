@@ -98,7 +98,7 @@ export function ship(access, n, login, revision) {
   return [
     `This is a code task: the work is a pull request against staging of ${CODE_REPO} (§ 3 of the rules). git authenticates through gh as you, so no token belongs in any URL, and your commits are already authored as you.`,
     fork
-      ? `\`gh repo fork ${CODE_REPO} --clone=false\` if you have no fork yet (it only reports an existing one), then, in this directory, \`git clone ${clone} .\` — origin is your fork, you push there — and \`git fetch ${upstream} staging\`. Branch from that fetch, never from what the clone checked out: a fork goes stale once created, and one from before staging became the default branch does not even have staging.`
+      ? `\`gh repo fork ${CODE_REPO} --clone=false\` if you have no fork yet (it only reports an existing one), then, in this directory, \`git clone ${clone} .\` — origin is your fork, you push there — and \`git fetch ${upstream} staging\`: a fork goes stale once created, and one from before staging became the default branch does not even have staging.`
       : `In this directory: \`git clone --branch staging ${clone} .\`. You push to ${CODE_REPO}.`,
     revision
       ? `\`git checkout ${branch}\`: the pull request exists; push your fixes to that same branch and never open a second pull request. ${pulls} shows it.`
