@@ -8,7 +8,8 @@ import { afterEach, describe, test } from "node:test";
 process.env.GITHUB_TOKEN = "test-token";
 
 // The local admitted store: a member an owner admitted on the board, whom the
-// registry does not have.
+// registry does not have, and one whose stamped admission the registry's newer
+// copy of the same login replaces.
 const admittedFile = join(mkdtempSync(join(tmpdir(), "registry-")), "roster-admitted.json");
 writeFileSync(admittedFile, JSON.stringify({ builders: [{
   nearAccount: "local.admitted.testnet",
@@ -16,6 +17,13 @@ writeFileSync(admittedFile, JSON.stringify({ builders: [{
   skills: ["review"],
   links: { github: "https://github.com/local-member" },
   kind: "human",
+}, {
+  nearAccount: "stale.local.testnet",
+  name: "Stale admitted",
+  skills: ["writing"],
+  links: { github: "https://github.com/stale-member" },
+  kind: "agent",
+  admittedAt: "2026-09-01T00:00:00Z",
 }] }));
 process.env.ADMITTED_FILE = admittedFile;
 
@@ -74,8 +82,11 @@ describe("the shared member registry", () => {
       member(),
       member({ githubLogin: "mainnet-only", admissions: [{ network: "mainnet", status: "admitted", proofUrl: "u", admittedAt: "2026-10-01T00:00:00Z" }] }),
       member({ githubLogin: "still-pending", admissions: [{ network: "testnet", status: "pending", proofUrl: "u", admittedAt: "2026-10-01T00:00:00Z" }] }),
+      member({ githubLogin: "no-account-here", accounts: [{ network: "mainnet", account: "elsewhere.near" }] }),
       // Also on the local files: the registry's copy is the one that counts.
       member({ githubLogin: "jlwaugh", name: "Registry James", skills: ["code"], nearAccount: "dashboard.jlwaugh.testnet", accounts: [{ network: "testnet", account: "payout.jlwaugh.testnet" }] }),
+      // The registry's admission of this login is newer than the store's.
+      member({ githubLogin: "stale-member", admissions: [{ network: "testnet", status: "admitted", proofUrl: "https://github.com/MultiAgency/kanban-sandbox/issues/10", admittedAt: "2026-10-01T00:00:00Z" }] }),
     ] } });
     await refreshRegistry();
     assert.equal(calls.length, 1);
@@ -90,6 +101,7 @@ describe("the shared member registry", () => {
     assert.equal(listed.proof, "https://github.com/MultiAgency/kanban-sandbox/issues/9");
     assert.equal(byGithub("mainnet-only"), null, "admitted only on the other network");
     assert.equal(byGithub("still-pending"), null, "not admitted yet");
+    assert.equal(byGithub("no-account-here"), null, "nowhere on this network to be paid at");
     assert.equal(eligibility({ labels: ["ready", "agent-eligible"], skills: [] }, listed), null);
   });
 
@@ -99,16 +111,28 @@ describe("the shared member registry", () => {
     assert.equal(byGithub("jlwaugh").nearAccount, "payout.jlwaugh.testnet");
   });
 
-  test("roster.json and the admitted store stay as the fallback, an admission stays live", () => {
+  test("roster.json and the admitted store stay as the fallback, an admission stays live", async () => {
     process.env.REGISTRY_URL = REGISTRY_URL;
     assert.equal(byGithub("multi-agency").nearAccount, "agent.agency.testnet");
     assert.equal(byGithub("local-member").kind, "human");
     assert.equal(byGithub("jlwaugh").kind, "agent", "the registry's copy of a login wins over the local files");
+    assert.equal(byGithub("stale-member").nearAccount, "payout.reg-agent.testnet", "the registry's newer admission beats the store's older one");
+    // A fresh board admission keeps its place: the registry's older copy of
+    // the login, read again, does not revert what an owner just admitted.
     admit({ nearAccount: "newcomer.admitted.testnet", name: "Newcomer", skills: ["code"], links: { github: "https://github.com/newcomer" }, kind: "agent" });
     assert.equal(byGithub("newcomer").nearAccount, "newcomer.admitted.testnet");
+    serve({ json: { data: [
+      member({ githubLogin: "newcomer", kind: "agent", admissions: [{ network: "testnet", status: "admitted", proofUrl: "u", admittedAt: "2026-10-01T00:00:00Z" }] }),
+      member(),
+      member({ githubLogin: "jlwaugh", name: "Registry James", skills: ["code"], nearAccount: "dashboard.jlwaugh.testnet", accounts: [{ network: "testnet", account: "payout.jlwaugh.testnet" }] }),
+      member({ githubLogin: "stale-member", admissions: [{ network: "testnet", status: "admitted", proofUrl: "https://github.com/MultiAgency/kanban-sandbox/issues/10", admittedAt: "2026-10-01T00:00:00Z" }] }),
+    ] } });
+    await refreshRegistry();
+    assert.equal(byGithub("newcomer").nearAccount, "newcomer.admitted.testnet", "an admission newer than the registry's read stands");
+    assert.equal(byGithub("newcomer").kind, "agent");
     const health = registryHealth();
     assert.equal(health.url, REGISTRY_URL);
-    assert.equal(health.members, 2);
+    assert.equal(health.members, 4);
     assert.ok(health.last_success_at);
     assert.equal(health.last_error, null);
   });
