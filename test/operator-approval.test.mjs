@@ -3,8 +3,10 @@ import { describe, test } from "node:test";
 
 import {
   combineRoster,
+  countableApprovals,
   countedApprovals,
   operatorApproval,
+  ownersFromCodeowners,
   ownersFromEnv,
   rosterFromApi,
   rosterRecord,
@@ -21,9 +23,16 @@ describe("countedApprovals", () => {
     assert.deepEqual(countedApprovals([approve("jlwaugh")], "agency-builder"), ["jlwaugh"]);
   });
 
-  test("a later dismissal or comment supersedes an earlier approval", () => {
+  test("a later dismissal supersedes an earlier approval", () => {
     assert.deepEqual(countedApprovals([approve("jlwaugh"), review("jlwaugh", "DISMISSED", "2026-10-04T11:00:00Z")], "agency-builder"), []);
-    assert.deepEqual(countedApprovals([approve("jlwaugh"), review("jlwaugh", "COMMENTED", "2026-10-04T11:00:00Z")], "agency-builder"), []);
+  });
+
+  test("a comment leaves an approval standing, as GitHub's review requirement does", () => {
+    assert.deepEqual(countedApprovals([approve("jlwaugh"), review("jlwaugh", "COMMENTED", "2026-10-04T11:00:00Z")], "agency-builder"), ["jlwaugh"]);
+  });
+
+  test("requesting changes after an approval drops it", () => {
+    assert.deepEqual(countedApprovals([approve("jlwaugh"), review("jlwaugh", "CHANGES_REQUESTED", "2026-10-04T11:00:00Z")], "agency-builder"), []);
   });
 
   test("an approval after a dismissal counts again", () => {
@@ -46,6 +55,54 @@ describe("countedApprovals", () => {
 
   test("reviews without a reviewer or a state count for nothing", () => {
     assert.deepEqual(countedApprovals([{ state: "APPROVED" }, { user: { login: "jlwaugh" } }], "multi-agency"), []);
+  });
+});
+
+describe("ownersFromCodeowners", () => {
+  const text = [
+    "# comment",
+    "*                        @MultiAgency/internal @jlwaugh",
+    "/.github/                @jlwaugh",
+    "/lib/pay.mjs             @jlwaugh @MultiAgency/internal",
+    "",
+  ].join("\n");
+
+  test("collects the users it names, teams aside, once each", () => {
+    assert.deepEqual(ownersFromCodeowners(text), ["jlwaugh"]);
+  });
+
+  test("no text, no users", () => {
+    assert.deepEqual(ownersFromCodeowners(null), []);
+    assert.deepEqual(ownersFromCodeowners(""), []);
+  });
+});
+
+describe("countableApprovals", () => {
+  const builders = [
+    { links: { github: "https://github.com/jlwaugh" }, kind: "human" },
+    { links: { github: "https://github.com/saadiqbal-dev/" }, kind: "human" },
+    { links: { github: "https://github.com/agency-builder" }, kind: "agent", operator: "jlwaugh" },
+  ];
+
+  test("a login CODEOWNERS names or OWNER names counts", () => {
+    assert.deepEqual(countableApprovals(["jlwaugh", "stranger"], ["jlwaugh"], [], builders), ["jlwaugh"]);
+    assert.deepEqual(countableApprovals(["somebody"], [], ["somebody"], builders), ["somebody"]);
+  });
+
+  test("a rostered person counts", () => {
+    assert.deepEqual(countableApprovals(["saadiqbal-dev"], [], [], builders), ["saadiqbal-dev"]);
+  });
+
+  test("an agent's approval counts for nothing: siblings never count as reviewers", () => {
+    assert.deepEqual(countableApprovals(["agency-builder"], [], ["jlwaugh"], builders), []);
+  });
+
+  test("nor does a stranger's or an alt's", () => {
+    assert.deepEqual(countableApprovals(["stranger", "jlwaugh-alt"], [], [], builders), []);
+  });
+
+  test("with no roster and no names, nobody counts", () => {
+    assert.deepEqual(countableApprovals(["jlwaugh"], [], [], []), []);
   });
 });
 
@@ -83,9 +140,16 @@ describe("rosterFromApi", () => {
 });
 
 describe("combineRoster", () => {
-  test("the coordinator's answer wins when it has one", () => {
-    assert.deepEqual(combineRoster(record("agent", "jlwaugh"), { status: "absent" }), { status: "absent" });
+  test("the coordinator's record wins when it has one", () => {
     assert.deepEqual(combineRoster(record("human", null), record("agent", "jlwaugh")), record("agent", "jlwaugh"));
+  });
+
+  test("an absent answer defers to roster.json: the coordinator's deployment can lag staging", () => {
+    assert.deepEqual(combineRoster(record("agent", "jlwaugh"), { status: "absent" }), record("agent", "jlwaugh"));
+  });
+
+  test("absent from both homes is absent", () => {
+    assert.deepEqual(combineRoster({ status: "absent" }, { status: "absent" }), { status: "absent" });
   });
 
   test("with no coordinator, roster.json answers only when it names the login", () => {

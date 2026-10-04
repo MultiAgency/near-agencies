@@ -17,8 +17,10 @@ import { readFileSync } from "node:fs";
 import { github } from "../lib/github.mjs";
 import {
   combineRoster,
+  countableApprovals,
   countedApprovals,
   operatorApproval,
+  ownersFromCodeowners,
   ownersFromEnv,
   rosterFromApi,
   rosterRecord,
@@ -34,13 +36,24 @@ try {
   const author = pr.user.login;
   const base = pr.base.ref;
 
-  const [reviews, fromFile, fromApi] = await Promise.all([allReviews(number), rosterFile(base, author), rosterApi(author)]);
-  const approvals = countedApprovals(reviews, author);
-  const roster = combineRoster(fromFile, fromApi);
-  const owners = ownersFromEnv(process.env.OWNER);
-  if (!owners.length) console.log("OWNER is not set, so no approval is exempt from the operator check");
+  const [reviews, codeowners, builders, fromApi] = await Promise.all([
+    allReviews(number),
+    textAtBase(".github/CODEOWNERS", base),
+    buildersAtBase(base),
+    rosterApi(author),
+  ]);
+  if (codeowners === null) {
+    console.log("CODEOWNERS could not be read at the base branch, so only the owner's and rostered people's approvals count");
+  }
+  const approvals = countableApprovals(
+    countedApprovals(reviews, author),
+    ownersFromCodeowners(codeowners ?? ""),
+    ownersFromEnv(process.env.OWNER),
+    builders ?? [],
+  );
+  const roster = combineRoster(builders ? rosterRecord(builders, author) : { status: "unreadable" }, fromApi);
 
-  const { outcome, reason } = operatorApproval({ base, author, roster, owners, approvals });
+  const { outcome, reason } = operatorApproval({ base, author, roster, owners: ownersFromEnv(process.env.OWNER), approvals });
   console.log(`operator-approval ${outcome}: ${reason}`);
   console.log(`  author @${author}, base ${base}, approvals counted: ${approvals.length ? approvals.map(login => `@${login}`).join(", ") : "none"}, roster: ${roster.status}`);
   process.exit(outcome === "pass" ? 0 : 1);
@@ -60,27 +73,43 @@ async function allReviews(number) {
   throw new Error(`more than ${REVIEW_PAGES * 100} reviews on pull request ${number}`);
 }
 
-// roster.json as the base branch has it — never the PR's copy, which the PR
-// could rewrite.
-async function rosterFile(base, author) {
+// A file's text as the base branch has it — never the PR's copy, which the
+// PR could rewrite. Null when it cannot be read.
+async function textAtBase(path, base) {
   try {
-    const file = await github("GET", `/contents/roster.json?ref=${encodeURIComponent(base)}`);
-    const builders = JSON.parse(Buffer.from(file.content ?? "", "base64").toString("utf8")).builders;
-    return rosterRecord(Array.isArray(builders) ? builders : [], author);
+    const file = await github("GET", `/contents/${path}?ref=${encodeURIComponent(base)}`);
+    return Buffer.from(file.content ?? "", "base64").toString("utf8");
   } catch {
-    return { status: "unreadable" };
+    return null;
+  }
+}
+
+async function buildersAtBase(base) {
+  try {
+    const parsed = JSON.parse(await textAtBase("roster.json", base));
+    return Array.isArray(parsed?.builders) ? parsed.builders : null;
+  } catch {
+    return null;
   }
 }
 
 // The coordinator's roster: roster.json as deployed plus the members an
-// owner admitted on the board, which the file alone does not know.
-async function rosterApi(login) {
-  try {
-    const url = `${process.env.ROSTER_URL ?? "https://demo.multiagency.ai"}/api/roster/${encodeURIComponent(login)}`;
-    const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(10_000) });
-    if (!response.ok) return { status: "unreadable" };
-    return rosterFromApi(await response.json());
-  } catch {
-    return { status: "unreadable" };
+// owner admitted on the board, which the file alone does not know. One
+// retry on a rejected or throttled answer: runners share their egress with
+// the rest of GitHub, and a required check should not fail on one 429.
+async function rosterApi(login, tries = 2) {
+  const url = `${process.env.ROSTER_URL ?? "https://demo.multiagency.ai"}/api/roster/${encodeURIComponent(login)}`;
+  for (let attempt = 1; attempt <= tries; attempt++) {
+    try {
+      const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(10_000) });
+      if (response.ok) return rosterFromApi(await response.json());
+      if (attempt < tries) {
+        const wait = Math.min(Number(response.headers.get("retry-after")) * 1000 || 3000, 10_000);
+        await new Promise(resolve => setTimeout(resolve, wait));
+      }
+    } catch {
+      if (attempt < tries) await new Promise(resolve => setTimeout(resolve, 3000));
+    }
   }
+  return { status: "unreadable" };
 }
