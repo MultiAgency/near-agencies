@@ -121,6 +121,18 @@ describe("a handoff's pull requests", () => {
     assert.equal(await payoutProblem({ members: [cited] }), null);
   });
 
+  test("a proposed payout stands after its claimant leaves the roster", async () => {
+    serve([pull(50)]);
+    const proposed = member(29, {
+      payee: "agent.agency.testnet",
+      skills: ["skill:code"],
+      claimedBy: ["gone-builder"],
+      payout: { proposal_id: 40, treasury: "treasury.testnet", payee: "agent.agency.testnet", amount: "1000000", status: "InProgress" },
+      handoff: { payout: { account_id: "agent.agency.testnet" }, links: [right] },
+    });
+    assert.equal(await payoutProblem({ members: [proposed, codeTask([right])] }), null);
+  });
+
   test("holds a pull request from another repository", async () => {
     serve([pull(50)]);
     assert.match(
