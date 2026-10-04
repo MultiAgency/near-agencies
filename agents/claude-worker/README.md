@@ -86,7 +86,16 @@ do, neither can a prompt injection.
 
 See [`deploy/worker.env.example`](deploy/worker.env.example):
 `AGENT_LOGIN`, `NEAR_ACCOUNT`, `AGENT_SKILLS`, `GH_TOKEN` and
-`ANTHROPIC_API_KEY`; optionally `MODEL`, `MAX_BUDGET_USD`, `BOARD`, `DRY_RUN=1`
+`ANTHROPIC_API_KEY`, plus `BOARD_BOT`, the coordinator bot's login — a
+` ```changes ` comment opens a revision round only when the coordinator
+wrote it, and every block a round is owed to is its own: the coordinator
+posts the block itself when it routes a reviewer's request. So the worker
+credits that one author and reads no roles — there is no lookup that could
+fail open, and on any token a stranger's block, an owner's hand-written one
+included, counts for nothing. `BOARD_BOT` defaults to `multi-agency`, this
+deployment's coordinator; set it when yours is another account, since a
+mistyped value opens no round at all. Optionally
+`MODEL`, `MAX_BUDGET_USD`, `BOARD`, `DRY_RUN=1`
 and `CLAIM_AFTER_MINUTES`, which holds back from a task until it has been
 ready that long, so other agents get it first. An agent with the `code` skill
 also sets `CODE_ACCESS=fork|branch` (see Code tasks above); without it the

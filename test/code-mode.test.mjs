@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
 // The worker folder's own logic, imported from the repository root, where its
-// node_modules are not installed — hence code-mode.mjs imports nothing.
+// node_modules are not installed — hence these modules import nothing.
 import {
   allowedTools, codeAccess, deliversCodeSeat, isCodeSeat, mayClaim, ship,
   CODE_REFUSAL, GIT_CREDENTIAL_HELPER,
 } from "../agents/claude-worker/code-mode.mjs";
 import { nextTask } from "../agents/claude-worker/next-task.mjs";
+import { trustCheck } from "../agents/claude-worker/trust.mjs";
 
 const seat = (labels, assignees = []) => ({
   labels: labels.map(name => ({ name })),
@@ -211,38 +212,56 @@ describe("code tools only on a delivered code seat", () => {
   });
 });
 
-describe("an assigned code seat on a run without code mode", () => {
-  const login = "near-builder";
-  const skills = ["research", "writing"];
-  const c = (user, body) => ({ user: { login: user }, body });
-  const seatIssue = (number, labels, assignees = [], created_at = "2026-10-01T00:00:00Z") => ({
-    number,
-    created_at,
-    body: "Part of job #5.\n\n```terms\nengagement: job 5\n```",
-    assignees: assignees.map(l => ({ login: l })),
-    labels: labels.map(name => ({ name })),
-  });
-  // The board nextTask() reads: the open issues, then one thread or event
-  // list per seat number. Posts are recorded, not sent.
-  const board = (issues, threads = {}, events = {}) => async path => {
+// One agent's view of the board, shared by the nextTask() describes below:
+// the seat issues, their threads, and — should any code ask — collaborator
+// roles, counted in `reads.roles`. Nothing may ask: the worker's trust is
+// the coordinator's login alone, so the count staying at zero is the rule
+// ("a 403 can't happen because nothing reads roles"), and a role answer of
+// admin for everyone is the strongest adversary a reintroduced lookup would
+// meet. Posts are recorded, not sent.
+const login = "near-builder";
+const skills = ["research", "writing"];
+const bot = "multi-agency";
+const c = (user, body) => ({ user: { login: user }, body });
+const seatIssue = (number, labels, assignees = [], created_at = "2026-10-01T00:00:00Z") => ({
+  number,
+  created_at,
+  body: "Part of job #5.\n\n```terms\nengagement: job 5\n```",
+  assignees: assignees.map(l => ({ login: l })),
+  labels: labels.map(name => ({ name })),
+});
+const board = (issues, threads = {}, events = {}) => {
+  const reads = { roles: 0 };
+  const github = async path => {
     if (path === "/issues?state=open&per_page=100") return issues;
+    const permission = path.match(/^\/collaborators\/([^/]+)\/permission$/);
+    if (permission) {
+      reads.roles++;
+      return { role_name: "admin" };
+    }
     const on = path.match(/^\/issues\/(\d+)\/(comments|events)/);
     if (!on) throw new Error(`unexpected GET ${path}`);
     return (on[2] === "comments" ? threads : events)[on[1]] ?? [];
   };
-  const harness = (issues, threads = {}, events = {}, extra = {}) => {
-    const posted = [];
-    return {
-      posted,
-      threads,
-      task: () => nextTask({
-        github: board(issues, threads, events),
-        comment: async (number, body) => { posted.push({ number, body }); },
-        login, skills, codeMode: null, ...extra,
-      }),
-    };
+  github.reads = reads;
+  return github;
+};
+const harness = (issues, threads = {}, events = {}, extra = {}) => {
+  const posted = [];
+  const github = board(issues, threads, events);
+  return {
+    posted,
+    threads,
+    reads: github.reads,
+    task: () => nextTask({
+      github,
+      comment: async (number, body) => { posted.push({ number, body }); },
+      login, skills, codeMode: null, bot, ...extra,
+    }),
   };
+};
 
+describe("an assigned code seat on a run without code mode", () => {
   test("the refusal is posted once, not again on every cron run", async () => {
     const { task, posted, threads } = harness([seatIssue(14, ["skill:code"], [login])], { 14: [] });
     assert.deepEqual(await task(), null, "the run refuses the seat and has nothing else to take");
@@ -252,13 +271,13 @@ describe("an assigned code seat on a run without code mode", () => {
     assert.deepEqual(posted, [{ number: 14, body: CODE_REFUSAL }], "not refused a second time");
   });
 
-  test("a new ```changes round asks anew", async () => {
+  test("an owner's hand-written ```changes asks nothing anew: only the coordinator's opens a round", async () => {
     const { task, posted } = harness(
       [seatIssue(14, ["skill:code"], [login])],
-      { 14: [c("agency-owner", "Once more:\n```changes\naddress the review\n```"), c(login, CODE_REFUSAL)] },
+      { 14: [c(login, CODE_REFUSAL), c("jlwaugh", "Once more:\n```changes\naddress the review\n```")] },
     );
     assert.deepEqual(await task(), null);
-    assert.deepEqual(posted, [], "the refusal from the last round still stands");
+    assert.deepEqual(posted, [], "the owner's block is not a round: the coordinator posts every block a round is owed to, and this one is not its own");
   });
 
   test("the run moves on to the seats it can deliver", async () => {
@@ -305,5 +324,96 @@ describe("an assigned code seat on a run without code mode", () => {
     assert.deepEqual(posted, []);
     assert.equal(picked.action, "claim");
     assert.equal(picked.seat.number, 16);
+  });
+});
+
+// The ```changes boundary both nextTask() places read — the revision round a
+// handoff must be newer than, and the round a refusal is counted within —
+// counts only the coordinator's own block: it writes every block a round is
+// owed to, posting one itself when it routes a reviewer's request
+// (lib/coordinator.mjs). Anything else — a stranger's, an owner's own
+// hand-written — opens no round, so it can neither reopen a handed-off task
+// (a second deliverable, a second paid run) nor un-count a refusal.
+describe("the ```changes boundary counts only the coordinator's own block", () => {
+  const changes = user => c(user, "Once more:\n```changes\naddress the review\n```");
+  const handoff = c(login, "Done.\n\n```handoff\nlinks: x\n```");
+
+  test("a stranger's ```changes after a handoff leaves the task handed off", async () => {
+    const { task } = harness(
+      [seatIssue(15, ["skill:writing"], [login])],
+      { 15: [handoff, changes("stranger")] },
+    );
+    assert.deepEqual(await task(), null, "the stranger's round is not one: no second delivery");
+  });
+
+  test("the coordinator's ```changes after a handoff still starts a new round", async () => {
+    const { task } = harness(
+      [seatIssue(15, ["skill:writing"], [login])],
+      { 15: [handoff, changes(bot)] },
+    );
+    const picked = await task();
+    assert.equal(picked.action, "deliver");
+    assert.equal(picked.revision, true);
+  });
+
+  test("an owner's hand-written ```changes opens none: the seat stays handed off", async () => {
+    const { task } = harness(
+      [seatIssue(15, ["skill:writing"], [login])],
+      { 15: [handoff, changes("jlwaugh")] },
+    );
+    assert.deepEqual(await task(), null, "an owner's block is not a round; the coordinator posts the round itself when it routes the request");
+  });
+
+  test("a stranger's ```changes leaves an earlier refusal counted", async () => {
+    const { task, posted } = harness(
+      [seatIssue(14, ["skill:code"], [login])],
+      { 14: [changes(bot), c(login, CODE_REFUSAL), changes("stranger")] },
+    );
+    assert.deepEqual(await task(), null);
+    assert.deepEqual(posted, [], "the refusal from the bot's round still stands");
+  });
+
+  test("the credited round comes back with the task, not a stranger's later block", async () => {
+    const credited = { ...changes(bot), html_url: "https://github.com/x/y/issues/15#issuecomment-1" };
+    const stranger = { ...changes("stranger"), html_url: "https://github.com/x/y/issues/15#issuecomment-2" };
+    const { task } = harness(
+      [seatIssue(15, ["skill:writing"], [login])],
+      { 15: [handoff, credited, stranger] },
+    );
+    const picked = await task();
+    assert.equal(picked.revision, true);
+    assert.deepEqual(picked.round, credited, "the delivery prompt must name the credited round, not the stranger's block after it");
+  });
+
+  test("no role lookup takes part, so no token's 403 can fail the check open", async () => {
+    const { task, reads } = harness(
+      [seatIssue(15, ["skill:writing"], [login])],
+      { 15: [handoff, changes(bot), changes("stranger"), changes("jlwaugh")] },
+    );
+    await task();
+    assert.equal(reads.roles, 0, "trust is the coordinator's login alone: no GitHub read decides it, on any token");
+  });
+
+  test("the coordinator's ```changes after the refusal asks anew", async () => {
+    const { task, posted } = harness(
+      [seatIssue(14, ["skill:code"], [login])],
+      { 14: [c(login, CODE_REFUSAL), changes(bot)] },
+    );
+    assert.deepEqual(await task(), null);
+    assert.deepEqual(posted, [{ number: 14, body: CODE_REFUSAL }]);
+  });
+});
+
+describe("the trust check", () => {
+  test("the coordinator's login is the only trusted one — an owner's is not", () => {
+    const trusted = trustCheck({ bot });
+    assert.equal(trusted("multi-agency"), true);
+    assert.equal(trusted("Multi-Agency"), true, "logins are not case-sensitive");
+    assert.equal(trusted("stranger"), false);
+    assert.equal(trusted("jlwaugh"), false, "an owner's hand-written block is not a round: the coordinator writes the blocks rounds are owed to, and this is not one of its own");
+  });
+
+  test("a missing bot login is refused up front, naming the setting", () => {
+    assert.throws(() => trustCheck({}), /\(BOARD_BOT\) is required/);
   });
 });

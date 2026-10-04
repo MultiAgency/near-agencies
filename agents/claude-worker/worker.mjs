@@ -25,6 +25,12 @@ const env = name => {
   return value;
 };
 const login = env("AGENT_LOGIN");
+// The board's coordinator bot: a ```changes comment counts as a new revision
+// round only when the coordinator wrote it, and every block a round is owed
+// to is its own — it posts the block itself when it routes a reviewer's
+// request (trust.mjs). Defaults to this deployment's coordinator; set it
+// when yours is another account.
+const bot = process.env.BOARD_BOT ?? "multi-agency";
 const nearAccount = env("NEAR_ACCOUNT");
 const skills = env("AGENT_SKILLS").split(",").map(s => s.trim());
 // Code mode: how an agent with the code skill ships its branch — "fork" (its
@@ -61,11 +67,11 @@ async function comment(number, body) {
   if (!response.ok) throw new Error(`GitHub POST comment: ${response.status}`);
 }
 
-// The selection itself lives in next-task.mjs, which imports nothing: it is
-// the one worker module beside code-mode.mjs that the repository's tests can
-// run from the root, where this folder's dependencies are not installed.
+// The selection itself lives in next-task.mjs, which imports nothing but the
+// dependency-free code-mode.mjs and trust.mjs: the repository's tests can run
+// it from the root, where this folder's dependencies are not installed.
 const nextTask = () =>
-  selectTask({ github, comment, login, skills, codeMode, claimAfterMs, dryRun });
+  selectTask({ github, comment, login, skills, codeMode, bot, claimAfterMs, dryRun });
 
 // Hashing is the one step easy to get subtly wrong in a shell, so the worker
 // provides it as a tool: sha256 of the comment body exactly as GitHub stores it.
@@ -88,17 +94,25 @@ function instructions(task) {
   // With code mode off, an assigned skill:code seat cannot be delivered:
   // the shipping steps would name commands the run is not allowed to run.
   const code = Boolean(codeMode) && deliversCodeSeat(task);
+  // The revision sentence names the credited round's comment — the
+  // coordinator's own, which nextTask() returns — never "the latest":
+  // whatever ```changes block anyone else posted after it must not steer
+  // the run.
+  const revisionNote = round =>
+    round
+      ? ` The reviewer asked for another round (the ${"```"}changes comment by @${round.user.login}: ${round.html_url}): address every point in it in a new deliverable.`
+      : "";
   const doing = task.action === "claim"
     ? `Claim task #${n}: comment exactly \`/claim\` on it, then stop. The coordinator assigns it; a later run does the work.`
     : code
       ? [
-          `Deliver task #${n}, which is assigned to you.${task.revision ? " The reviewer asked for another round (the latest ```changes comment): address every point in a new deliverable." : ""}`,
+          `Deliver task #${n}, which is assigned to you.${revisionNote(task.round)}`,
           "Read the task, the job it names, and the deliverables of any tasks it depends on. Do the work, citing sources inline as links.",
           ...ship(codeMode, n, login, task.revision),
           `Then post the deliverable comment, naming the pull request, get its sha256 with the deliverable_sha256 tool, and post the handoff comment, exactly as the rules say. The coordinator closes the task once the handoff checks out.`,
         ].join("\n")
       : [
-          `Deliver task #${n}, which is assigned to you.${task.revision ? " The reviewer asked for another round (the latest ```changes comment): address every point in a new deliverable." : ""}`,
+          `Deliver task #${n}, which is assigned to you.${revisionNote(task.round)}`,
           "Read the task, the job it names, and the deliverables of any tasks it depends on. Do the work, citing sources inline as links.",
           `Then post the deliverable comment, get its sha256 with the deliverable_sha256 tool, and post the handoff comment, exactly as the rules say. The coordinator closes the task once the handoff checks out.`,
         ].join("\n");
