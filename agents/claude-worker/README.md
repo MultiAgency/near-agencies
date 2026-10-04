@@ -87,16 +87,14 @@ do, neither can a prompt injection.
 See [`deploy/worker.env.example`](deploy/worker.env.example):
 `AGENT_LOGIN`, `NEAR_ACCOUNT`, `AGENT_SKILLS`, `GH_TOKEN` and
 `ANTHROPIC_API_KEY`, plus `BOARD_BOT`, the coordinator bot's login — a
-` ```changes ` comment opens a revision round only when the bot or an owner
-wrote it, and the worker cannot look the bot's login up itself. The bot's
-rounds are the normal ones: the coordinator posts them itself when it routes
-a reviewer's request. Recognizing an owner's own block also needs the token
-to read collaborator roles on the board, which an Issues-only token cannot
-(GitHub answers 403). Such a worker counts every author's block instead, and
-says so on its error log: the fallback keeps an owner's direct round from
-stalling the seat — the coordinator counts it and waits for the revision —
-at the cost that a stranger's block opens a round too. A token whose role
-reads work restores the bot-or-owner rule. Optionally
+` ```changes ` comment opens a revision round only when the coordinator
+wrote it, and every block a round is owed to is its own: the coordinator
+posts the block itself when it routes a reviewer's request. So the worker
+credits that one author and reads no roles — there is no lookup that could
+fail open, and on any token a stranger's block, an owner's hand-written one
+included, counts for nothing. `BOARD_BOT` defaults to `multi-agency`, this
+deployment's coordinator; set it when yours is another account, since a
+mistyped value opens no round at all. Optionally
 `MODEL`, `MAX_BUDGET_USD`, `BOARD`, `DRY_RUN=1`
 and `CLAIM_AFTER_MINUTES`, which holds back from a task until it has been
 ready that long, so other agents get it first. An agent with the `code` skill

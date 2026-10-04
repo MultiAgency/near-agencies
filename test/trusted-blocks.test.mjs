@@ -73,26 +73,30 @@ describe("change requests count only when the coordinator routed them", () => {
 
 // The worker reads the same threads with its own token and its own trust
 // check (agents/claude-worker/trust.mjs), so its revision-round boundary —
-// the ```changes block a handoff must be newer than — must land where the
-// coordinator's does. These tests run both boundaries against one thread.
+// the ```changes block a handoff must be newer than — must treat as a round
+// what the coordinator's routedRequests does, wherever a round is owed: the
+// coordinator writes every such block itself (lib/coordinator.mjs posts one
+// when it routes a reviewer's request), so both sides count the
+// coordinator's own and count nothing else. These tests run both boundaries
+// against one thread. The worker's github() answers no /collaborators path:
+// a reintroduced role lookup fails the test loud — a 403 cannot happen,
+// because nothing reads roles.
 describe("the worker's changes boundary agrees with the coordinator's", () => {
   const realFetch = globalThis.fetch;
   afterEach(() => { globalThis.fetch = realFetch; });
 
   const changes = login => ({ user: { login }, body: `Once more:\n${fence("changes", { review: 41, requested_by: "jlwaugh" })}` });
   const done = { user: { login: "near-builder" }, body: `Done.\n\n${fence("handoff", { links: "x" })}` };
-  const ownerRound = [done, changes("jlwaugh")];
   const seat = {
     number: 2, state: "open", created_at: "2026-10-01T00:00:00Z",
     body: `Part of job #1.\n\n${fence("terms", { engagement: "job 1" })}`,
     assignees: [{ login: "near-builder" }], labels: [],
   };
-  // The worker's github(), as worker.mjs builds it, with a token that
-  // cannot read board roles: every role lookup answers 403.
+  // The worker's github(), as worker.mjs builds it — with no answer at all
+  // for a role path, so any lookup the worker makes fails the test.
   const workerGithub = thread => async path => {
     if (path === "/issues?state=open&per_page=100") return [seat];
     if (/^\/issues\/2\/comments/.test(path)) return thread;
-    if (/^\/collaborators\/[^/]+\/permission$/.test(path)) throw new Error(`GitHub GET ${path}: 403`);
     throw new Error(`unexpected GET ${path}`);
   };
   const deliver = async thread => {
@@ -103,22 +107,31 @@ describe("the worker's changes boundary agrees with the coordinator's", () => {
     });
   };
 
-  test("an owner's direct round: the coordinator counts it, and so does a worker that cannot read roles", async () => {
-    board(ownerRound);
+  test("the coordinator's own block counts on both sides: it waits for the revision, and the worker delivers it", async () => {
+    const routed = [done, changes("multi-agency")];
+    board(routed);
     const { routedRequests } = await import("../lib/coordinator.mjs");
-    assert.deepEqual(await routedRequests(ownerRound), [changes("jlwaugh")], "the coordinator waits for a revision handoff");
-    const picked = await deliver(ownerRound);
-    assert.equal(picked.action, "deliver", "a fail-closed worker would skip the seat on every run and stall it");
+    assert.deepEqual(await routedRequests(routed), [changes("multi-agency")], "the coordinator waits for a revision handoff");
+    const picked = await deliver(routed);
+    assert.equal(picked.action, "deliver");
     assert.equal(picked.revision, true);
-    assert.deepEqual(picked.round, changes("jlwaugh"));
+    assert.deepEqual(picked.round, changes("multi-agency"));
   });
 
-  test("on such a token a stranger's block counts too — the fallback's documented cost", async () => {
+  test("a stranger's block counts on neither side", async () => {
     const strangerRound = [done, changes("stranger")];
     board(strangerRound);
     const { routedRequests } = await import("../lib/coordinator.mjs");
     assert.deepEqual(await routedRequests(strangerRound), [], "with a role-reading token the stranger's block is no round");
-    const picked = await deliver(strangerRound);
-    assert.equal(picked.revision, true, "without role lookups the worker cannot tell a stranger from an owner");
+    assert.deepEqual(await deliver(strangerRound), null, "the seat stays handed off: no second delivery");
+  });
+
+  test("an owner's hand-written block opens no round on the worker", async () => {
+    // The coordinator's own lib rule still counts an owner's block
+    // (lib/github.mjs isTrusted reads roles with its own token); the worker
+    // does not, on any token. An owner's request for another round reaches
+    // the seat the way every round does — as the coordinator's own block,
+    // posted when it routes the request.
+    assert.deepEqual(await deliver([done, changes("jlwaugh")]), null, "only the coordinator's own block is a round on the worker");
   });
 });

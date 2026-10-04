@@ -70,10 +70,10 @@ export const CODE_REFUSAL = [
 
 /** Whether the agent has already refused the seat since the latest request
  * for another round: its comment after the last ```changes one the board
- * credits — the bot's or an owner's (trust.mjs) — that begins with the
+ * credits — the coordinator's own (trust.mjs) — that begins with the
  * refusal's fixed first line. A new round asks anew. */
 export async function refusalPosted(thread, login, trusted) {
-  const since = await latestChangesRound(thread, trusted);
+  const since = latestChangesRound(thread, trusted);
   return thread.slice(since + 1).some(c =>
     c.user.login.toLowerCase() === login.toLowerCase() && c.body.startsWith(CODE_REFUSAL_FIRST_LINE));
 }

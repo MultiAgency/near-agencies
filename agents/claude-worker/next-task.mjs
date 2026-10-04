@@ -19,21 +19,22 @@ async function readySince(github, issue) {
 
 /** The one task for this run, or null. `github` reads the board the way
  * worker.mjs's github() does; `comment` posts a comment on a seat; `bot` is
- * the coordinator's login, the half of the ```changes authorship rule this
- * token cannot look up itself (trust.mjs). A deliver result carries `round`,
- * the credited ```changes comment a revision is to address, so the delivery
- * prompt can name it instead of "the latest", which a stranger's later block
- * would be. With dryRun nothing is posted: --dry-run only names the task. */
+ * the coordinator's login, the only ```changes author a round counts from
+ * (trust.mjs). A deliver result carries `round`, the credited ```changes
+ * comment a revision is to address, so the delivery prompt can name it
+ * instead of "the latest", which a stranger's later block would be. With
+ * dryRun nothing is posted: --dry-run only names the task. */
 export async function nextTask({ github, comment, login, skills, codeMode, bot, claimAfterMs = 0, dryRun = false }) {
-  const trusted = trustCheck({ github, bot });
+  const trusted = trustCheck({ bot });
   const seats = (await github("/issues?state=open&per_page=100")).filter(isSeat);
   for (const seat of seats.filter(s => s.assignees.some(a => same(a.login, login)))) {
     const thread = await github(`/issues/${seat.number}/comments?per_page=100`);
-    // A ```changes block opens a revision round only when the board credits
-    // its author, the bot or an owner — the coordinator's rule. A stranger's
-    // counts for nothing: it must not reopen a handed-off task (a second
-    // deliverable and a second paid run) or un-count a refusal.
-    const since = await latestChangesRound(thread, trusted);
+    // A ```changes block opens a revision round only when the coordinator
+    // wrote it — it posts every block a round is owed to, when it routes a
+    // reviewer's request. Anyone else's, an owner's hand-written one
+    // included, counts for nothing: it must not reopen a handed-off task (a
+    // second deliverable and a second paid run) or un-count a refusal.
+    const since = latestChangesRound(thread, trusted);
     const handedOff = thread.slice(since + 1).some(c => same(c.user.login, login) && c.body.includes("```handoff\n"));
     if (handedOff) continue;
     // Native GitHub assignment counts as a claim without a skill check, so a
