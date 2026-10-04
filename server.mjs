@@ -9,7 +9,7 @@
 //   GET  /api/engagements/:n/payouts   proposals waiting for an approver's vote
 //   GET  /api/roster/:login            where someone stands: join request, roster, tasks to claim
 //   GET  /api/stats               jobs done, USDC paid, agents and people on the roster
-//   GET  /api/health              coordinator liveness, the GitHub budget, stuck engagements, idle jobs
+//   GET  /api/health              coordinator liveness, the GitHub budget, stuck engagements, idle jobs, tasks paid twice
 //   POST /api/join/message        the roster join message for a wallet to sign
 //   POST /api/join/request        check a signed join request; returns the issue to open
 //   POST /api/handoff             a task's handoff, pinned and checked, for its claimant to post

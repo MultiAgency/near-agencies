@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, describe, test } from "node:test";
 
 import { USDC } from "../lib/near.mjs";
-import { closeIfPaid, filedProposal, pendingPayouts, payoutProblem, proposalDescription, proposePayouts } from "../lib/payouts.mjs";
+import { closeIfPaid, duplicatePayoutProblem, filedProposal, pendingPayouts, payoutProblem, proposalDescription, proposePayouts } from "../lib/payouts.mjs";
 import { digest, fence } from "../lib/github.mjs";
 
 process.env.GITHUB_TOKEN ??= "test-token";
@@ -27,6 +27,16 @@ const proposal = (id, m, overrides = {}) => ({
   kind: { Transfer: { token_id: USDC, receiver_id: m.payee, amount: m.amount, msg: null } },
   ...overrides,
 });
+// A member as pendingPayouts reads it: the payout recorded on its task, with
+// the proposal's live state beside it.
+const recorded = (issue, overrides = {}, status = "InProgress") => {
+  const m = member(issue, overrides);
+  return {
+    ...m,
+    payout: { proposal_id: 40, treasury: "multiagency.sputnikv2.testnet", payee: m.payee, amount: m.amount, status },
+    proposal: { proposer: "proposer.testnet", kind: { Transfer: { token_id: USDC, receiver_id: m.payee, amount: m.amount, msg: null } } },
+  };
+};
 
 describe("payout proposals", () => {
   test("finds a task's live proposal by task, payee, amount and token", () => {
@@ -80,16 +90,6 @@ describe("payout proposals", () => {
 
 describe("a duplicated payout proposal", () => {
   const approvers = ["approver.testnet"];
-  // A member as pendingPayouts reads it: the payout recorded on its task,
-  // with the proposal's live state beside it.
-  const recorded = (issue, overrides = {}) => {
-    const m = member(issue, overrides);
-    return {
-      ...m,
-      payout: { proposal_id: 40, treasury: "multiagency.sputnikv2.testnet", payee: m.payee, amount: m.amount, status: "InProgress" },
-      proposal: { proposer: "proposer.testnet", kind: { Transfer: { token_id: USDC, receiver_id: m.payee, amount: m.amount, msg: null } } },
-    };
-  };
 
   test("two matching live proposals hold the job's approval, naming the extra", async () => {
     const m = recorded(29);
@@ -99,6 +99,22 @@ describe("a duplicated payout proposal", () => {
     assert.match(problem, /\b40\b/, "both duplicates are named");
     assert.match(problem, /\b41\b/, "both duplicates are named");
     assert.match(problem, /reject 41/, "the proposal the payout is not recorded with is the extra one");
+  });
+
+  test("an approved duplicate becomes the payment and the recorded proposal the rejection", async () => {
+    const m = recorded(29);
+    const { pending, problem } = await pendingPayouts({ members: [m] }, approvers, [proposal(40, m), proposal(41, m, { status: "Approved" })]);
+    assert.match(problem, /\b41\b.*approved/, "the approved duplicate is named as the payment");
+    assert.match(problem, /reject 40/, "the recorded proposal is the one an approver must now reject");
+    assert.equal(pending.length, 1, "the recorded proposal is still votable, for its rejection");
+  });
+
+  test("a recorded proposal approved beside its live duplicate still holds the panel", async () => {
+    const m = recorded(29, {}, "Approved");
+    const { pending, problem } = await pendingPayouts({ members: [m] }, approvers, [proposal(40, m, { status: "Approved" }), proposal(41, m)]);
+    assert.equal(pending.length, 0, "the approved proposal no longer waits for a vote");
+    assert.match(problem, /#29/, "the duplicate holds the panel whatever the recorded proposal's status");
+    assert.match(problem, /reject 41/);
   });
 
   test("one live proposal behaves as today", async () => {
@@ -117,6 +133,15 @@ describe("a duplicated payout proposal", () => {
     const m = recorded(29);
     const { problem } = await pendingPayouts({ members: [m] }, approvers, [proposal(40, m), proposal(41, member(30))]);
     assert.equal(problem, null);
+  });
+
+  // The refusal payout.mjs approve votes by: a real duplicate refuses, a
+  // payout that stands alone does not.
+  test("the approve refusal keys to a duplicate, not to any payout", async () => {
+    const m = recorded(29);
+    assert.equal(await duplicatePayoutProblem({ members: [m] }, [proposal(40, m)]), null);
+    assert.equal(await duplicatePayoutProblem({ members: [] }, [proposal(40, m), proposal(41, m)]), null, "a team without recorded payouts is never refused");
+    assert.match(await duplicatePayoutProblem({ members: [m] }, [proposal(40, m), proposal(41, m)]), /reject 41/);
   });
 });
 
@@ -545,21 +570,35 @@ describe("filing proposals and closing a job", async () => {
     user: { login: "multi-agency" },
     body: `**Payout proposed:** DAO proposal 41\n\n${fence("payout", { proposal_id: 41, treasury: "multiagency.sputnikv2.testnet", payee: "agent.agency.testnet", amount: "1000000", proposed_tx: "votetx" })}`,
   };
-  const onChain = id => ({
+  const onChain = (id, status = "InProgress") => ({
     id,
-    status: "InProgress",
+    status,
     description: proposalDescription(28, shaped(30, "1000000")),
     kind: { Transfer: { token_id: USDC, receiver_id: "agent.agency.testnet", amount: "1000000", msg: null } },
   });
-  const dupBoard = (proposals, { proposalStatus = "InProgress", txs = [] } = {}) => ({
+  const vote = (id, hash) => ({
+    transaction: {
+      hash,
+      signer_id: "approver.testnet",
+      receiver_id: "multiagency.sputnikv2.testnet",
+      actions: [{ FunctionCall: { method_name: "act_proposal", args: Buffer.from(JSON.stringify({ id, action: "VoteApprove" })).toString("base64") } }],
+    },
+    receipts: [{ receipt: { block_height: 500 } }],
+  });
+  const paidRecord = (proposalId, tx) =>
+    `**Paid:** \`approver.testnet\` approved DAO proposal ${proposalId}; 1 USDC sent to \`agent.agency.testnet\`.\n\n${fence("paid", { proposal_id: proposalId, treasury: "multiagency.sputnikv2.testnet", payee: "agent.agency.testnet", amount: "1000000", transaction: tx, approver: "approver.testnet" })}`;
+  const dupBoard = (proposals, { proposalStatus = "InProgress", txs = [], records = [] } = {}) => ({
     jobs: [epic([terms(30, "1000000")])],
     issues: { 28: epic([terms(30, "1000000")]), 30: closed(30) },
-    threads: { 28: [], 30: [handoff(30), filed] },
+    threads: { 28: [], 30: [handoff(30), filed, ...records] },
     proposals,
     proposal: { id: 41, status: proposalStatus },
     txs,
   });
   const flagsOn = writes => writes.filter(w => w.path.endsWith("/issues/30/comments") && w.body.body.startsWith("**Duplicate payout proposals:**"));
+  const doublesOn = writes => writes.filter(w => w.path.endsWith("/issues/30/comments") && w.body.body.startsWith("**Double payout:**"));
+  const paidOn = writes => writes.filter(w => w.path.endsWith("/issues/30/comments") && w.body.body.startsWith("**Paid:**"));
+  const closesJob = writes => writes.some(w => w.path.endsWith("/issues/28") && w.body.state === "closed");
 
   test("two matching live proposals are flagged on their task, once", async () => {
     const run = serve(dupBoard([onChain(41), onChain(42)]));
@@ -596,5 +635,96 @@ describe("filing proposals and closing a job", async () => {
     assert.equal(paid.length, 1, "recorded once, from the proposal the task's payout names");
     assert.match(paid[0].body.body, /approved DAO proposal 41;/);
     assert.doesNotMatch(paid[0].body.body, /proposal 42/);
+  });
+
+  // The owner's race: proposal 41 — the one the task's payout records — was
+  // approved in Trezu before a sweep could flag its duplicate. The payment
+  // records from 41 all the same, 42 stays flagged for rejection, and the job
+  // waits for it to die; once it is rejected, the job closes.
+  test("an approved recording proposal keeps its duplicate flagged and the job open", async () => {
+    const run = serve(dupBoard([onChain(41, "Approved"), onChain(42)], { proposalStatus: "Approved", txs: [vote(41, "votetx")] }));
+    await settlePayouts("multi-agency", { now: 5_000_000 });
+    const paid = paidOn(run.writes);
+    assert.equal(paid.length, 1, "the payment records once, from the proposal that was approved");
+    assert.match(paid[0].body.body, /approved DAO proposal 41;/);
+    const flags = flagsOn(run.writes);
+    assert.equal(flags.length, 1, "the duplicate is flagged although the recorded proposal is no longer InProgress");
+    assert.match(flags[0].body.body, /Proposal 41 was approved; reject 42/);
+    assert.equal(closesJob(run.writes), false, "the job does not close while proposal 42 is still live");
+    const holds = run.writes.filter(w => w.path.endsWith("/issues/28/comments"));
+    assert.equal(holds.length, 1);
+    assert.match(holds[0].body.body, /^\*\*Delivery on hold:\*\* #30 has 2 payout proposals \(41 and 42\)/);
+
+    const settled = serve(dupBoard([onChain(41, "Approved"), onChain(42, "Rejected")], {
+      proposalStatus: "Approved",
+      txs: [vote(41, "votetx")],
+      records: [{ id: 782, user: { login: "multi-agency" }, body: paidRecord(41, "votetx") }],
+    }));
+    await settlePayouts("multi-agency", { now: 5_121_000 });
+    assert.equal(flagsOn(settled.writes).length, 0, "a rejected duplicate is no duplicate");
+    const complete = settled.writes.filter(w => w.path.endsWith("/issues/28/comments"));
+    assert.equal(complete.length, 1, "the job closes once the duplicate is rejected");
+    assert.match(complete[0].body.body, /^\*\*Job complete\.\*\* 1 payouts executed/);
+  });
+
+  // The mirror: the EXTRA proposal 42 is the one approved while the recorded
+  // 41 still waits. The payment adopts 42 — the transfer that really ran —
+  // and 41, now pointless, is what an approver must reject.
+  test("an approved duplicate is adopted as the payment and the recorded proposal flagged", async () => {
+    const run = serve(dupBoard([onChain(41), onChain(42, "Approved")], { txs: [vote(42, "votetx2")] }));
+    await settlePayouts("multi-agency", { now: 6_000_000 });
+    const paid = paidOn(run.writes);
+    assert.equal(paid.length, 1, "the payment records once");
+    assert.match(paid[0].body.body, /approved DAO proposal 42;/);
+    assert.doesNotMatch(paid[0].body.body, /proposal 41/);
+    const flags = flagsOn(run.writes);
+    assert.equal(flags.length, 1);
+    assert.match(flags[0].body.body, /Proposal 42 was approved, so the payment is recorded with it; reject 41/);
+    assert.equal(closesJob(run.writes), false, "the recorded proposal is still live, so the job waits");
+
+    const settled = serve(dupBoard([onChain(41, "Rejected"), onChain(42, "Approved")], {
+      proposalStatus: "Rejected",
+      txs: [vote(42, "votetx2")],
+      records: [{ id: 782, user: { login: "multi-agency" }, body: paidRecord(42, "votetx2") }],
+    }));
+    await settlePayouts("multi-agency", { now: 6_121_000 });
+    const complete = settled.writes.filter(w => w.path.endsWith("/issues/28/comments"));
+    assert.equal(complete.length, 1, "the job closes once the recorded proposal is rejected");
+    assert.match(complete[0].body.body, /^\*\*Job complete\.\*\* 1 payouts executed/);
+  });
+
+  // Both proposals approved: the task was paid twice. Nothing records, the
+  // task says so loudly once, and the incident shows in /api/health.
+  test("two approved proposals are reported as a double payment and never recorded", async () => {
+    const run = serve(dupBoard([onChain(41, "Approved"), onChain(42, "Approved")], {
+      proposalStatus: "Approved",
+      txs: [vote(41, "votetx"), vote(42, "votetx2")],
+    }));
+    await settlePayouts("multi-agency", { now: 7_000_000 });
+    assert.equal(paidOn(run.writes).length, 0, "a task paid twice records no payment");
+    const doubles = doublesOn(run.writes);
+    assert.equal(doubles.length, 1);
+    assert.match(doubles[0].body.body, /DAO proposals 41 and 42 on `multiagency\.sputnikv2\.testnet` were all approved/);
+    assert.match(doubles[0].body.body, /paid more than once/);
+    assert.equal(closesJob(run.writes), false);
+    const { coordinatorHealth } = await import("../lib/coordinator.mjs");
+    assert.deepEqual(coordinatorHealth().paid_twice.map(p => [p.job, p.task, p.proposals]), [[28, 30, [41, 42]]],
+      "the double payment shows in /api/health");
+    await settlePayouts("multi-agency", { now: 7_121_000 });
+    assert.equal(doublesOn(run.writes).length, 1, "said once, however often the sweep runs");
+  });
+
+  // payout.mjs approve — the terminal path — refuses to vote while a
+  // duplicate stands, by the same check the panel and the sweep read.
+  test("the terminal approve refuses to vote while a duplicate stands", async () => {
+    const argv = process.argv;
+    process.argv = ["node", "payout.mjs", "approve", "28", "--as", "approver.testnet"];
+    try {
+      const { writes } = serve(dupBoard([onChain(41), onChain(42)]));
+      await assert.rejects(import("../payout.mjs"), /Refusing to vote: #30 has 2 payout proposals \(41 and 42\)/);
+      assert.equal(paidOn(writes).length, 0, "nothing was voted or recorded");
+    } finally {
+      process.argv = argv;
+    }
   });
 });
