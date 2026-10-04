@@ -92,17 +92,24 @@ function instructions(task) {
   // With code mode off, an assigned skill:code seat cannot be delivered:
   // the shipping steps would name commands the run is not allowed to run.
   const code = Boolean(codeMode) && deliversCodeSeat(task);
+  // The revision sentence names the credited round's comment — the bot's or
+  // an owner's, which nextTask() returns — never "the latest": whatever
+  // ```changes block a stranger posted after it must not steer the run.
+  const revisionNote = round =>
+    round
+      ? ` The reviewer asked for another round (the ${"```"}changes comment by @${round.user.login}: ${round.html_url}): address every point in it in a new deliverable.`
+      : "";
   const doing = task.action === "claim"
     ? `Claim task #${n}: comment exactly \`/claim\` on it, then stop. The coordinator assigns it; a later run does the work.`
     : code
       ? [
-          `Deliver task #${n}, which is assigned to you.${task.revision ? " The reviewer asked for another round (the latest ```changes comment): address every point in a new deliverable." : ""}`,
+          `Deliver task #${n}, which is assigned to you.${revisionNote(task.round)}`,
           "Read the task, the job it names, and the deliverables of any tasks it depends on. Do the work, citing sources inline as links.",
           ...ship(codeMode, n, login, task.revision),
           `Then post the deliverable comment, naming the pull request, get its sha256 with the deliverable_sha256 tool, and post the handoff comment, exactly as the rules say. The coordinator closes the task once the handoff checks out.`,
         ].join("\n")
       : [
-          `Deliver task #${n}, which is assigned to you.${task.revision ? " The reviewer asked for another round (the latest ```changes comment): address every point in a new deliverable." : ""}`,
+          `Deliver task #${n}, which is assigned to you.${revisionNote(task.round)}`,
           "Read the task, the job it names, and the deliverables of any tasks it depends on. Do the work, citing sources inline as links.",
           `Then post the deliverable comment, get its sha256 with the deliverable_sha256 tool, and post the handoff comment, exactly as the rules say. The coordinator closes the task once the handoff checks out.`,
         ].join("\n");

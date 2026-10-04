@@ -364,6 +364,18 @@ describe("the ```changes boundary counts only the bot or an owner", () => {
     assert.deepEqual(posted, [], "the refusal from the bot's round still stands");
   });
 
+  test("the credited round comes back with the task, not a stranger's later block", async () => {
+    const credited = { ...changes(bot), html_url: "https://github.com/x/y/issues/15#issuecomment-1" };
+    const stranger = { ...changes("stranger"), html_url: "https://github.com/x/y/issues/15#issuecomment-2" };
+    const { task } = harness(
+      [seatIssue(15, ["skill:writing"], [login])],
+      { 15: [handoff, credited, stranger] },
+    );
+    const picked = await task();
+    assert.equal(picked.revision, true);
+    assert.deepEqual(picked.round, credited, "the delivery prompt must name the credited round, not the stranger's block after it");
+  });
+
   test("the bot's ```changes after the refusal asks anew", async () => {
     const { task, posted } = harness(
       [seatIssue(14, ["skill:code"], [login])],

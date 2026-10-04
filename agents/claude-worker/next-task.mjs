@@ -20,8 +20,10 @@ async function readySince(github, issue) {
 /** The one task for this run, or null. `github` reads the board the way
  * worker.mjs's github() does; `comment` posts a comment on a seat; `bot` is
  * the coordinator's login, the half of the ```changes authorship rule this
- * token cannot look up itself (trust.mjs). With dryRun nothing is posted:
- * --dry-run only names the task. */
+ * token cannot look up itself (trust.mjs). A deliver result carries `round`,
+ * the credited ```changes comment a revision is to address, so the delivery
+ * prompt can name it instead of "the latest", which a stranger's later block
+ * would be. With dryRun nothing is posted: --dry-run only names the task. */
 export async function nextTask({ github, comment, login, skills, codeMode, bot, claimAfterMs = 0, dryRun = false }) {
   const trusted = trustCheck({ github, bot });
   const seats = (await github("/issues?state=open&per_page=100")).filter(isSeat);
@@ -44,7 +46,7 @@ export async function nextTask({ github, comment, login, skills, codeMode, bot, 
       if (!dryRun && !(await refusalPosted(thread, login, trusted))) await comment(seat.number, CODE_REFUSAL);
       continue;
     }
-    return { action: "deliver", seat, revision: since !== -1 };
+    return { action: "deliver", seat, revision: since !== -1, round: since === -1 ? null : thread[since] };
   }
   for (const seat of seats.filter(s => mayClaim(s, skills))) {
     const wait = claimAfterMs - (Date.now() - await readySince(github, seat));

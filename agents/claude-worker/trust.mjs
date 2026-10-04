@@ -17,6 +17,7 @@ export const OWNER_ROLES = ["admin", "maintain"];
  * bot's, and the harm this check exists to prevent is acting on a round
  * twice, not missing one. */
 export function trustCheck({ github, bot }) {
+  if (!bot) throw new Error("trustCheck: the board bot's login (BOARD_BOT) is required");
   // Roles are kept for the run's life; a failed lookup is not kept, so the
   // next comment asks again. The failure is logged once per login: a token
   // that cannot read board roles would otherwise silently ignore every
