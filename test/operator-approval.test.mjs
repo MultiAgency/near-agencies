@@ -334,6 +334,28 @@ describe("operatorApproval", () => {
     );
   });
 
+  test("a fork, whose run gets no secrets and so no teams, is judged on what needs no org token", () => {
+    // GitHub refuses a fork's run every repository secret, so its teams are
+    // unread by design: judged on CODEOWNERS' own logins and OWNER, with the
+    // roster still answering for the author.
+    assert.deepEqual(
+      operatorApproval({ ...staging, author: "stranger", roster: { status: "absent" }, internal: null, internalAgents: null, fork: true, approvals: [] }).outcome,
+      "pass",
+    );
+    assert.deepEqual(
+      operatorApproval({ ...staging, author: "fork-agent", roster: record("agent", "jlwaugh"), internal: null, internalAgents: null, fork: true, approvals: ["jlwaugh"] }).outcome,
+      "pass",
+    );
+    assert.deepEqual(
+      operatorApproval({ ...staging, author: "fork-agent", roster: record("agent", "jlwaugh"), internal: null, internalAgents: null, fork: true, approvals: [] }).outcome,
+      "pass",
+    );
+    assert.deepEqual(
+      operatorApproval({ ...staging, author: "fork-agent", roster: record("agent", "jlwaugh"), internal: null, internalAgents: null, fork: true, approvals: [], unvouched: ["jlwaugh"] }).outcome,
+      "fail",
+    );
+  });
+
   test("a record naming no kind fails closed", () => {
     assert.deepEqual(
       operatorApproval({ ...staging, author: "broken-agent", roster: record(null, "jlwaugh"), approvals: ["jlwaugh"] }).outcome,

@@ -45,6 +45,12 @@ try {
   const author = pr.user.login;
   const base = pr.base.ref;
   const org = event.repository?.owner?.login ?? String(process.env.GITHUB_REPOSITORY ?? "").split("/")[0];
+  // A fork's run gets no repository secrets, so its team reads cannot
+  // succeed — GitHub's design, not a read that failed. The unread teams
+  // pass through and the verdict judges the fork on what needs no org
+  // token (lib/operator-approval.mjs); a same-repo PR fails closed when a
+  // team cannot be read.
+  const fork = event.pull_request.head.repo?.full_name !== event.repository?.full_name;
 
   const [reviews, codeowners, builders, fromApi, internal, internalAgents] = await Promise.all([
     allReviews(number),
@@ -68,7 +74,7 @@ try {
   const unvouched = unrecognizedApprovals(standing, codeownerUsers, owners, internal ?? []);
   const roster = combineRoster(builders ? rosterRecord(builders, author) : { status: "unreadable" }, fromApi);
 
-  const { outcome, reason } = operatorApproval({ base, author, roster, owners, approvals, unvouched, internal, internalAgents });
+  const { outcome, reason } = operatorApproval({ base, author, roster, owners, approvals, unvouched, internal, internalAgents, fork });
   console.log(`operator-approval ${outcome}: ${reason}`);
   console.log(`  author @${author}, base ${base}, approvals counted: ${approvals.length ? approvals.map(login => `@${login}`).join(", ") : "none"}, roster: ${roster.status}`);
   process.exit(outcome === "pass" ? 0 : 1);
