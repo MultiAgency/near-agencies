@@ -24,6 +24,7 @@ import {
   ownersFromEnv,
   rosterFromApi,
   rosterRecord,
+  unrecognizedApprovals,
 } from "../lib/operator-approval.mjs";
 
 const REVIEW_PAGES = 10;
@@ -45,15 +46,23 @@ try {
   if (codeowners === null) {
     console.log("CODEOWNERS could not be read at the base branch, so only the owner's and rostered people's approvals count");
   }
-  const approvals = countableApprovals(
-    countedApprovals(reviews, author),
-    ownersFromCodeowners(codeowners ?? ""),
-    ownersFromEnv(process.env.OWNER),
-    builders ?? [],
+  const standing = countedApprovals(reviews, author);
+  const owners = ownersFromEnv(process.env.OWNER);
+  const codeownerUsers = ownersFromCodeowners(codeowners ?? "");
+  const known = countableApprovals(standing, codeownerUsers, owners, builders ?? []);
+  // An approver neither CODEOWNERS nor roster.json knows may still be a
+  // person the coordinator has admitted; ask before discounting them, since
+  // a hidden operator reads as "no approvals", the bypass this check closes.
+  const asked = await Promise.all(
+    unrecognizedApprovals(standing, codeownerUsers, owners, builders ?? []).map(async login => {
+      const record = await rosterApi(login);
+      return record.status === "record" && record.kind === "human" ? login : null;
+    }),
   );
+  const approvals = [...known, ...asked.filter(Boolean)];
   const roster = combineRoster(builders ? rosterRecord(builders, author) : { status: "unreadable" }, fromApi);
 
-  const { outcome, reason } = operatorApproval({ base, author, roster, owners: ownersFromEnv(process.env.OWNER), approvals });
+  const { outcome, reason } = operatorApproval({ base, author, roster, owners, approvals });
   console.log(`operator-approval ${outcome}: ${reason}`);
   console.log(`  author @${author}, base ${base}, approvals counted: ${approvals.length ? approvals.map(login => `@${login}`).join(", ") : "none"}, roster: ${roster.status}`);
   process.exit(outcome === "pass" ? 0 : 1);

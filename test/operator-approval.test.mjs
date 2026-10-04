@@ -10,6 +10,7 @@ import {
   ownersFromEnv,
   rosterFromApi,
   rosterRecord,
+  unrecognizedApprovals,
 } from "../lib/operator-approval.mjs";
 
 const review = (login, state, submitted_at = "2026-10-04T10:00:00Z") => ({ user: { login }, state, submitted_at });
@@ -89,6 +90,10 @@ describe("countableApprovals", () => {
     assert.deepEqual(countableApprovals(["somebody"], [], ["somebody"], builders), ["somebody"]);
   });
 
+  test("the gate's approval counts once CODEOWNERS names it, as #77 must for the gate to work", () => {
+    assert.deepEqual(countableApprovals(["multai-builder"], ["multai-builder"], [], builders), ["multai-builder"]);
+  });
+
   test("a rostered person counts", () => {
     assert.deepEqual(countableApprovals(["saadiqbal-dev"], [], [], builders), ["saadiqbal-dev"]);
   });
@@ -101,8 +106,34 @@ describe("countableApprovals", () => {
     assert.deepEqual(countableApprovals(["stranger", "jlwaugh-alt"], [], [], builders), []);
   });
 
+  test("a person the coordinator has admitted counts, the file not knowing them yet", () => {
+    assert.deepEqual(countableApprovals(["new-person"], [], [], builders, ["new-person"]), ["new-person"]);
+  });
+
+  // apiHumans arrives already filtered: the script vouches only what the
+  // coordinator answered with kind "human".
+
   test("with no roster and no names, nobody counts", () => {
     assert.deepEqual(countableApprovals(["jlwaugh"], [], [], []), []);
+  });
+});
+
+describe("unrecognizedApprovals", () => {
+  const builders = [
+    { links: { github: "https://github.com/jlwaugh" }, kind: "human" },
+    { links: { github: "https://github.com/saadiqbal-dev" }, kind: "human" },
+    { links: { github: "https://github.com/agency-builder" }, kind: "agent", operator: "jlwaugh" },
+  ];
+
+  test("names the approvals no source here vouches for", () => {
+    assert.deepEqual(
+      unrecognizedApprovals(["jlwaugh", "saadiqbal-dev", "agency-builder", "stranger"], ["jlwaugh"], [], builders),
+      ["agency-builder", "stranger"],
+    );
+  });
+
+  test("an empty standing list asks about nobody", () => {
+    assert.deepEqual(unrecognizedApprovals([], ["jlwaugh"], [], builders), []);
   });
 });
 
