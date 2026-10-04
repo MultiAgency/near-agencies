@@ -7,9 +7,10 @@ name: private-review
 # approve or block a merge on their own.
 #
 # Same triggers as ai-review: pull requests from branches in this repository
-# on open and push, and fork pull requests when a MultiAgency owner comments
-# `/review`. The review reads REVIEW.md and AGENTS.md from the base commit and
-# never runs code from the pull request.
+# on open and push, and fork pull requests when someone with write access
+# comments `/review` (the action checks the commenter's role). The review reads
+# REVIEW.md and AGENTS.md from the base commit through the API and never runs
+# code from the pull request.
 
 on:
   pull_request:
@@ -25,8 +26,7 @@ jobs:
         && !github.event.pull_request.draft)
       || (github.event_name == 'issue_comment'
         && github.event.issue.pull_request
-        && startsWith(github.event.comment.body, '/review')
-        && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
+        && startsWith(github.event.comment.body, '/review'))
     runs-on: ubuntu-latest
     # Job-level, so a comment that doesn't start a review can't cancel one.
     concurrency:
@@ -43,7 +43,7 @@ jobs:
         if: env.HAS_KEY != 'true'
         run: echo "::notice::Skipping the private review until the NEARAI_API_KEY repository secret is set."
 
-      - uses: MultiAgency/private-ai/review@fbfb5795ca19fa94e62800e66bd410630ae9368d # main
+      - uses: MultiAgency/private-ai/review@0a92ca27e06707c88b210458552ccc0309f3a699 # 0a92ca2
         if: env.HAS_KEY == 'true'
         with:
           nearai-api-key: ${{ secrets.NEARAI_API_KEY }}
