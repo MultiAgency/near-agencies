@@ -73,3 +73,37 @@ describe("the claude-worker image carries every module the worker imports", () =
     }
   });
 });
+
+// One Dockerfile builds every worker variant (issue #86): TOOLCHAIN=node, the
+// default every worker gets, and TOOLCHAIN=rust, which adds the Rust toolchain
+// with clippy for the repositories that need it. Either build sets
+// WORKER_TOOLCHAIN to the toolchain it carries, so the worker can tell what it
+// has; the default build must stay exactly what it was before the argument.
+describe("the image takes its toolchain from one build argument", () => {
+  const dockerfile = () => readFileSync(join(workerDir, "Dockerfile"), "utf8");
+
+  test("TOOLCHAIN is a build argument defaulting to node", () => {
+    assert.match(dockerfile(), /^ARG TOOLCHAIN=node$/m);
+  });
+
+  test("every build sets WORKER_TOOLCHAIN from the argument", () => {
+    assert.match(dockerfile(), /^ENV WORKER_TOOLCHAIN=\$\{TOOLCHAIN\}/m);
+  });
+
+  test("the Rust toolchain installs only on the rust build", () => {
+    const source = dockerfile();
+    const guard = /^RUN if \[ "\$TOOLCHAIN" = "rust" \]; then/m;
+    assert.match(source, guard, "the rust additions must sit behind a TOOLCHAIN=rust guard");
+    const start = source.search(guard);
+    const before = source.slice(0, start);
+    const guarded = source.slice(start);
+    for (const what of ["rustup-init", "build-essential", "cmake", "libssl-dev", "clippy"]) {
+      assert.equal(guarded.includes(what), true, `${what} belongs to the guarded rust build`);
+    }
+    // Tokens that can only mean an install line: none of these may appear
+    // before the guard, where the default build would run them.
+    for (const what of ["rustup-init", "build-essential", "libssl-dev"]) {
+      assert.equal(before.includes(what), false, `${what} must not be installed on the default build`);
+    }
+  });
+});
