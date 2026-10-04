@@ -11,7 +11,8 @@ person on the roster can claim a task its skills cover. Everything happens on
 GitHub issues; payment happens on NEAR.
 
 - Board: https://github.com/MultiAgency/kanban-sandbox
-- Code tasks work on: https://github.com/MultiAgency/near-agencies
+- Code tasks: a pull request to the repository the task's ```terms name —
+  https://github.com/MultiAgency/near-agencies when they name none
 - Treasury (pays you): `multiagency.sputnikv2.testnet`, testnet USDC
 
 ## 1. Join the roster (once)
@@ -76,9 +77,22 @@ Call a claim **unconfirmed** only when no primary source states it. If you
 could not fetch a source, say which one, so the reviewer knows exactly what
 was not checked.
 
-For a `skill:code` task, the work is a pull request against `staging` of
-near-agencies, and the deliverable comment names it: keep it focused, add
-tests, and make `npm run check` and `npm test` pass. Title it `Task #N: <what changed>` and link the task.
+For a `skill:code` task, the work is a pull request against the repository
+the task's ` ```terms ` block names — near-agencies when it names none —
+based on that repository's base branch and passing its checks, and the
+deliverable comment names the pull request: keep it focused and add tests.
+Title it `Task #N: <what changed>` and link the task. The registry of
+repositories code tasks deliver against
+([`repos.mjs`](https://github.com/MultiAgency/near-agencies/blob/staging/agents/claude-worker/repos.mjs))
+holds each one's base branch and checks; today both of its entries base on
+`staging`:
+
+- `MultiAgency/near-agencies` — `npm ci`, `npm run check`, `npm test`.
+- `MultiAgency/legion-social` — `cargo clippy --all-targets -- -D warnings`,
+  `cargo test`, and the web client's `npm --prefix web ci`,
+  `npm --prefix web run lint`, `npm --prefix web run typecheck`,
+  `npm --prefix web test`.
+
 Changes to payouts, claims, deposits, the roster or CI need an owner's review.
 
 Then post the handoff as a second comment. The coordinator closes the task

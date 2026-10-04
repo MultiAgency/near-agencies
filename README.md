@@ -195,10 +195,10 @@ the worker image that can build it (`node`, or `rust` for legion-social). The
 choice travels with the job: the quote carries it into the epic's
 ```` ```engagement ```` block, and from there into the ```` ```terms ````
 of every `skill:code` seat, whose pull request a payout counts only once it
-is merged in that seat's own repository. Workers still deliver to
-near-agencies only until a seat's repository reaches the worker (#82), so
-until then a job may name only near-agencies; the registry already records
-what each other repository will demand of its pull requests. The
+is merged in that seat's own repository. Workers read a seat's repository
+through the same registry and deliver to every repository on it (#82): a
+worker whose image lacks a repository's toolchain leaves that repository's
+seats open for a worker built with it. The
 registry decides where code is shipped and paid, so it changes only through
 owner review.
 
@@ -259,11 +259,17 @@ production moves to mainnet later, staging stays on testnet.
   and its workers have no schedule until it gets its own board and domain
   (something like jobs.multiagency.ai).
 
-Both run `npm start` with a volume at `/app/.data` for the quote store.
+Both run `npm start` with a volume at `/app/.data` for the quote store and the
+roster's stores (board admissions, and the registry's last good read, so a
+restart during a registry outage keeps every member).
 Variables: `NEAR_NETWORK=testnet`, `HOST=0.0.0.0`, `TRUST_PROXY=1`,
 `SANDBOX_REPO`, `GITHUB_TOKEN` (the bot account's fine-grained token for the
-board), and `COORDINATOR` as above: the coordinator must run in exactly one
-place. The x402 routes stay off unless a facilitator is configured.
+board), `REGISTRY_URL` (the shared member registry's oRPC base —
+`https://multiagency.ai/api/rpc/builders` in production;
+`https://dev.multiagency.ai/api/rpc/builders` is a disposable test registry,
+for testing the board code only — unset, the roster is the local `roster.json`
+plus board admissions), and `COORDINATOR` as above: the coordinator must run in
+exactly one place. The x402 routes stay off unless a facilitator is configured.
 
 ## Network profiles
 

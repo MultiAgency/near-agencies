@@ -31,7 +31,7 @@ import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 
 import { comment, digest, fence, fenced, issue, me, repoId } from "./lib/github.mjs";
-import { byGithub } from "./lib/roster.mjs";
+import { byGithub, startRegistrySync } from "./lib/roster.mjs";
 import { comments, eligibility, isClaim, openSeats } from "./lib/seats.mjs";
 import { serialized } from "./lib/serialize.mjs";
 
@@ -45,6 +45,9 @@ const DELIVERABLE = "**Deliverable**";
 
 const login = await me();
 const board = await repoId();
+// The roster may include registry members (a no-op without REGISTRY_URL),
+// and the payout account named in a handoff must be the merged roster's.
+await startRegistrySync();
 const builder = byGithub(login);
 if (!builder) throw new Error(`${login} is not on the MultiAgency roster`);
 console.log(`connector: ${login} → ${builder.nearAccount} (${builder.skills.join(", ")})`);
