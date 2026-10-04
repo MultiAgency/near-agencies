@@ -21,14 +21,19 @@ RUN apt-get update \
 # toolchain, cmake, pkg-config and OpenSSL headers that the crates a Rust
 # repository brings (ring, aws-lc-sys, openssl-sys) build against. Installed
 # under /usr/local and linked into /usr/local/bin, so the unprivileged node
-# user runs cargo too; its crate caches go to its own home directory.
+# user runs cargo too; its crate caches go to its own home directory. The
+# toolchain is pinned: bump it in a deliberate change, and re-run the checks
+# of the repositories this image serves when you do. A repository that pins
+# another version in rust-toolchain.toml installs it into the shared
+# RUSTUP_HOME on first use, so the directories there belong to node.
 RUN if [ "$TOOLCHAIN" = "rust" ]; then \
       apt-get update \
       && apt-get install -y --no-install-recommends build-essential cmake pkg-config libssl-dev \
       && curl -fsSL https://sh.rustup.rs -o /tmp/rustup-init.sh \
-      && env RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo sh /tmp/rustup-init.sh -y --profile minimal --component clippy --default-toolchain stable --no-modify-path \
+      && env RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo sh /tmp/rustup-init.sh -y --profile minimal --component clippy --default-toolchain 1.99.0 --no-modify-path \
       && rm /tmp/rustup-init.sh \
       && ln -s /usr/local/cargo/bin/* /usr/local/bin/ \
+      && chown -R node:node /usr/local/rustup \
       && rm -rf /var/lib/apt/lists/*; \
     elif [ "$TOOLCHAIN" != "node" ]; then \
       echo "TOOLCHAIN is node or rust, not '$TOOLCHAIN'" >&2; \

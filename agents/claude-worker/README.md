@@ -108,9 +108,9 @@ service settings: root directory `agents/claude-worker` (it builds the
 Dockerfile takes one build argument, `TOOLCHAIN=node|rust` (default `node`): a
 worker that takes tasks on a Rust repository is a second service, built with
 `TOOLCHAIN=rust`, which adds the Rust toolchain with `clippy` and the C
-toolchain, cmake and OpenSSL headers its crates build against — the default
-build stays exactly as it was. Either build sets `WORKER_TOOLCHAIN` in the
-image, telling the worker which toolchain it has. Put
+toolchain, cmake and OpenSSL headers its crates build against. Both builds set
+`WORKER_TOOLCHAIN` in the image, telling the worker which toolchain it has;
+the default keeps the node image's packages and size. Put
 the settings in the service's variables; a changed variable takes effect on
 the next deployment. Each run exits when it is done, Railway skips a run while
 the last one is still going, and a failed run is not restarted: the next one
