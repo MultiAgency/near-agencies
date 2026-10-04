@@ -45,7 +45,7 @@ if (command === "status") {
   if (problem) throw new Error(problem);
   await proposePayouts(job, signer);
   reportDead();
-  await closeIfPaid(jobNumber);
+  await reportHold(await closeIfPaid(jobNumber));
 } else if (command === "approve") {
   const pending = members.filter(m => m.payout?.status === "InProgress");
   // Sputnik lets a member approve their own proposal; separation of duties is ours to keep.
@@ -73,15 +73,21 @@ if (command === "status") {
     await recordPaid(m, { transaction: hash, approver: signer });
     console.log(`#${m.issue}: paid ${m.amount} to ${m.payee} (${explorer(hash)})`);
   }
-  await closeIfPaid(jobNumber);
+  await reportHold(await closeIfPaid(jobNumber));
 } else {
   await recordApprovals(job);
   reportDead();
-  await closeIfPaid(jobNumber);
+  await reportHold(await closeIfPaid(jobNumber));
 }
 
 function reportDead() {
   for (const m of members.filter(m => m.payout && DEAD.includes(m.payout.status))) {
     console.log(`#${m.issue}: proposal ${m.payout.proposal_id} is ${m.payout.status}; file a new proposal`);
   }
+}
+
+// Why the job did not close: an undelivered volunteer task, named for the
+// person at the terminal rather than left to the sweep's hold comment.
+function reportHold(held) {
+  if (held) console.log(`#${jobNumber}: still open: ${held}`);
 }

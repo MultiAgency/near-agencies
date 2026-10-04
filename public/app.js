@@ -392,7 +392,7 @@ async function renderStatus(owner, login) {
   const request = s.request && html`<a href="${s.request.url}">join request #${s.request.number}</a>`;
   const board = html`<a href="${`${config.board}/issues?q=is%3Aopen+label%3Aready`}">open tasks on the board</a>`;
   const taskList = tasks => html`<ul class="task-list">${tasks.map(t => html`
-    <li><a href="${t.url}">#${t.number} ${t.title}</a>${t.amount ? html`<span class="m">${usdc(t.amount)} USDC</span>` : ""}</li>`)}</ul>`;
+    <li><a href="${t.url}">#${t.number} ${t.title}</a>${taskAmount(t.amount)}</li>`)}</ul>`;
   const next = {
     none: html`<p class="now">No join request from @${login} yet. If you posted one a moment ago, it can take a minute to appear.</p>
       <p><a href="#/join">Sign a join request</a> to get started.</p>`,
@@ -452,7 +452,7 @@ function restoreDraft(form) {
 function handoffForm(t) {
   return html`
     <div class="working">
-      <p><a href="${t.url}" target="_blank" rel="noopener">#${t.number} ${t.title}</a>${t.amount ? html`<span class="m">${usdc(t.amount)} USDC</span>` : ""}</p>
+      <p><a href="${t.url}" target="_blank" rel="noopener">#${t.number} ${t.title}</a>${taskAmount(t.amount)}</p>
       <details><summary>Prepare your handoff</summary>
         <form class="handoff" data-task="${t.number}">
           ${t.review ? html`<p class="hint">A review's handoff links the tasks it reviews; it needs no deliverable. To ask for another round instead, comment on this task starting <code>Changes requested</code>.</p>`
@@ -619,9 +619,11 @@ function resultSection(result, e) {
 function moneyStrip(e) {
   const total = Number(e.totals.deposit);
   const part = amount => `${(Number(amount) / total) * 100}%`;
+  // The strip is the deposit's allocation, so volunteer tasks, which carry no
+  // money, are not on it; each is listed below with its work.
   return html`
     <div class="money" role="img" aria-label="${`${usdc(e.totals.deposit)} USDC deposit: ${usdc(e.totals.paid)} paid, ${usdc(e.totals.margin)} ${ended(e) ? "kept by MultiAgency" : "not yet allocated"}`}">
-      ${e.members.map(m => html`
+      ${e.members.filter(m => paid(m.amount)).map(m => html`
         <a class="seg ${m.paid ? "paid" : ""} ${m.human ? "human" : ""}" style="${`width:${part(m.amount)}`}" href="${m.paid ? m.paid.link : m.url}" title="${`${m.title}: ${usdc(m.amount)} USDC${m.paid ? ", paid" : ""}`}">
           <span>${m.title.split(":")[0]} ${usdc(m.amount)}</span>
         </a>`)}
@@ -674,9 +676,9 @@ async function renderEngagement(owner, number) {
         <li class="stop out ${m.human ? "human" : ""} ${m.paid ? "paid" : ""}">
           <div class="stop-head">
             <h3><a href="${m.url}">${m.title}</a></h3>
-            <span class="flow">−${usdc(m.amount)} USDC</span>
+            <span class="flow">${paid(m.amount) ? `−${usdc(m.amount)} USDC` : "volunteer"}</span>
           </div>
-          <span class="seat">${m.human ? "For a person" : "For an AI agent"}${m.payee ? html`, paid to ${accountLink(m.payee)}` : ""}</span>
+          <span class="seat">${m.human ? "For a person" : "For an AI agent"}${paid(m.amount) && m.payee ? html`, paid to ${accountLink(m.payee)}` : ""}</span>
           <ul class="facts">
             <li>${m.claimedBy.length ? `Taken on by ${m.claimedBy.join(", ")}` : "Waiting for someone to take it on"}</li>
             <li class="${m.state === "closed" ? "ok" : ""}">${m.state === "closed" ? (m.handoff ? `Delivered by ${m.handoffBy}` : "Closed without being delivered") : m.claimedBy.length ? "In progress" : "Open"}</li>
@@ -814,6 +816,13 @@ function usdc(atomic) {
   const value = Number(atomic ?? 0) / 1e6;
   return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 });
 }
+
+// What a task's amount reads as: a payout, `volunteer` when it carries none,
+// and nothing when the task names no amount at all.
+const paid = atomic => Number(atomic ?? 0) > 0;
+const taskAmount = amount => !amount ? "" : paid(amount)
+  ? html`<span class="m">${usdc(amount)} USDC</span>`
+  : html`<span class="m">volunteer</span>`;
 
 // Read an API answer only after checking what it is: an HTML error page
 // (Express's 404 for a bare path, a proxy's block page) would otherwise
