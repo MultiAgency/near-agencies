@@ -49,8 +49,8 @@ On a code task Claude may then run only what shipping that branch needs: the
 clone of the one repository URL into its work directory, `git checkout`,
 `git add`, `git commit`, and a push of the branch alone (`git push -u origin
 task-N`), then `npm ci`, `npm run check`, `npm test`, `gh pr create` and
-`gh pr view`. The clone names staging in both modes: branch mode clones
-upstream with staging checked out by name; fork mode clones the fork, whose
+`gh pr view`. Both modes name staging: branch mode clones upstream with
+staging checked out by name; fork mode clones the fork, whose
 own idea of current can be stale, and fetches staging from the upstream
 repository (`git fetch https://github.com/MultiAgency/near-agencies.git
 staging`) to branch task-N from, beside the one-time
