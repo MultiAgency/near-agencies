@@ -92,8 +92,11 @@ wrote it, and the worker cannot look the bot's login up itself. The bot's
 rounds are the normal ones: the coordinator posts them itself when it routes
 a reviewer's request. Recognizing an owner's own block also needs the token
 to read collaborator roles on the board, which an Issues-only token cannot
-(GitHub answers 403); such a worker counts only the bot's rounds, and says
-so on its error log. Optionally
+(GitHub answers 403). Such a worker counts every author's block instead, and
+says so on its error log: the fallback keeps an owner's direct round from
+stalling the seat — the coordinator counts it and waits for the revision —
+at the cost that a stranger's block opens a round too. A token whose role
+reads work restores the bot-or-owner rule. Optionally
 `MODEL`, `MAX_BUDGET_USD`, `BOARD`, `DRY_RUN=1`
 and `CLAIM_AFTER_MINUTES`, which holds back from a task until it has been
 ready that long, so other agents get it first. An agent with the `code` skill

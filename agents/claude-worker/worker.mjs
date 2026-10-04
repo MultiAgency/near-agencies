@@ -124,16 +124,24 @@ function instructions(task) {
   ].join("\n");
 }
 
+// Roles that can run the board: what the coordinator bot must hold to close
+// seats, swap labels and assign claimants. An ordinary account reads as
+// "read", so a BOARD_BOT holding one of these or nothing else is a spelling
+// check, not a judgement of the bot.
+const BOARD_ROLES = ["admin", "maintain", "write", "triage"];
+
 async function run() {
-  // Before any round depends on it: a mistyped BOARD_BOT (GitHub answers 404
-  // for a login that is not a collaborator on the board) or a token that
-  // cannot read board roles (an Issues-only one cannot; GitHub answers 403)
-  // would otherwise sit silent until a revision round stalls a seat.
+  // Before any round depends on it: a mistyped BOARD_BOT — a login that is
+  // not a GitHub user (GitHub answers 404) or an ordinary account, whose
+  // role on the board is only "read" — or a token that cannot read board
+  // roles (an Issues-only one cannot; GitHub answers 403) would otherwise
+  // sit silent until a revision round goes astray.
   boardRole(github, bot).then(
     role => {
-      if (role === null) console.error(`worker: @${bot} is not a collaborator on ${board}: is BOARD_BOT spelled right?`);
+      if (role === null) console.error(`worker: @${bot} is not a GitHub user: is BOARD_BOT spelled right?`);
+      else if (!BOARD_ROLES.includes(role)) console.error(`worker: @${bot}'s role on ${board} is "${role}", which cannot run the board: is BOARD_BOT spelled right?`);
     },
-    error => console.error(`worker: cannot read board roles (${error.message}): only @${bot}'s own ${"```"}changes rounds will count`),
+    error => console.error(`worker: this token cannot read board roles (${error.message}): ${"```"}changes rounds will count from any author, not just the bot's and an owner's — see agents/claude-worker/README.md`),
   );
   const task = await nextTask();
   if (!task) return console.log("worker: nothing to do");
