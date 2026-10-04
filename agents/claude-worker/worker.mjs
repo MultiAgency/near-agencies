@@ -16,8 +16,9 @@ import { join } from "node:path";
 import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 
-import { allowedTools, codeAccess, deliversCodeSeat, ship, GIT_CREDENTIAL_HELPER } from "./code-mode.mjs";
+import { accessFor, allowedTools, codeAccess, deliversCodeSeat, ship, termsOf, GIT_CREDENTIAL_HELPER } from "./code-mode.mjs";
 import { nextTask as selectTask } from "./next-task.mjs";
+import { codeRepo } from "./repos.mjs";
 
 const env = name => {
   const value = process.env[name];
@@ -37,6 +38,11 @@ const skills = env("AGENT_SKILLS").split(",").map(s => s.trim());
 // own fork, an outside contributor) or "branch" (near-agencies itself, an
 // internal contributor). Null without the code skill.
 const codeMode = codeAccess(skills, process.env.CODE_ACCESS);
+// The toolchain this image carries: the Dockerfile sets WORKER_TOOLCHAIN to
+// the TOOLCHAIN it was built with (node by default), and the registry's
+// image per repository decides which code seats this run may take
+// (next-task.mjs).
+const toolchain = process.env.WORKER_TOOLCHAIN ?? "node";
 const board = process.env.BOARD ?? "MultiAgency/kanban-sandbox";
 const skillUrl = process.env.SKILL_URL ?? "https://demo.multiagency.ai/skill.md";
 const model = process.env.MODEL ?? "claude-sonnet-5";
@@ -71,7 +77,7 @@ async function comment(number, body) {
 // dependency-free code-mode.mjs and trust.mjs: the repository's tests can run
 // it from the root, where this folder's dependencies are not installed.
 const nextTask = () =>
-  selectTask({ github, comment, login, skills, codeMode, bot, claimAfterMs, dryRun });
+  selectTask({ github, comment, login, skills, codeMode, bot, claimAfterMs, dryRun, toolchain });
 
 // Hashing is the one step easy to get subtly wrong in a shell, so the worker
 // provides it as a tool: sha256 of the comment body exactly as GitHub stores it.
@@ -94,6 +100,10 @@ function instructions(task) {
   // With code mode off, an assigned skill:code seat cannot be delivered:
   // the shipping steps would name commands the run is not allowed to run.
   const code = Boolean(codeMode) && deliversCodeSeat(task);
+  // The registry entry for the repository this delivery ships to, and how it
+  // pushes its branch there: the selection (next-task.mjs) has already
+  // refused a code seat this run cannot ship, so this parses.
+  const repo = code ? codeRepo(termsOf(task.seat)) : null;
   // The revision sentence names the credited round's comment — the
   // coordinator's own, which nextTask() returns — never "the latest":
   // whatever ```changes block anyone else posted after it must not steer
@@ -108,7 +118,7 @@ function instructions(task) {
       ? [
           `Deliver task #${n}, which is assigned to you.${revisionNote(task.round)}`,
           "Read the task, the job it names, and the deliverables of any tasks it depends on. Do the work, citing sources inline as links.",
-          ...ship(codeMode, n, login, task.revision),
+          ...ship(accessFor(repo, codeMode), repo, n, login, task.revision),
           `Then post the deliverable comment, naming the pull request, get its sha256 with the deliverable_sha256 tool, and post the handoff comment, exactly as the rules say. The coordinator closes the task once the handoff checks out.`,
         ].join("\n")
       : [
@@ -137,6 +147,10 @@ async function run() {
   // code mode never gets here on a skill:code seat: nextTask() refused it
   // once and moved on to what this run can deliver.
   const code = Boolean(codeMode) && deliversCodeSeat(task);
+  // The repository this delivery ships to, as the selection gated it: the
+  // tools list the registry's checks for it, and the branch goes to a fork
+  // for any repository but near-agencies (accessFor).
+  const repo = code ? codeRepo(termsOf(task.seat)) : null;
   const skill = await (await fetch(skillUrl)).text();
   const cwd = await mkdtemp(join(tmpdir(), `seat-${task.seat.number}-`));
   try {
@@ -172,7 +186,7 @@ async function run() {
         mcpServers: { multiagency: helpers },
         tools: ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch"],
         permissionMode: "dontAsk",
-        allowedTools: allowedTools(code ? codeMode : null, task.seat.number, login),
+        allowedTools: allowedTools(code ? accessFor(repo, codeMode) : null, repo, task.seat.number, login),
       },
     })) {
       if (message.type === "assistant") {

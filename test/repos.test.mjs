@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 
-import { codeRepo, DEFAULT_REPO, REPOS, repoOf, WORKER_DELIVERS } from "../agents/claude-worker/repos.mjs";
+import {
+  canBuild, codeRepo, DEFAULT_REPO, REPOS, repoOf, WORKER_DELIVERS,
+} from "../agents/claude-worker/repos.mjs";
 
 describe("the repository registry", () => {
   test("near-agencies is the default everywhere", () => {
@@ -40,6 +42,13 @@ describe("the repository registry", () => {
     });
   });
 
+  test("canBuild: the rust image covers node, the node image covers only node", () => {
+    assert.equal(canBuild("node", REPOS[DEFAULT_REPO]), true);
+    assert.equal(canBuild("rust", REPOS[DEFAULT_REPO]), true, "the rust image is built FROM node:22-slim, so it carries node too");
+    assert.equal(canBuild("rust", REPOS["MultiAgency/legion-social"]), true);
+    assert.equal(canBuild("node", REPOS["MultiAgency/legion-social"]), false);
+  });
+
   test("a repository outside the registry is refused: nothing may be shipped there", () => {
     assert.throws(() => codeRepo({ repo: "octocat/hello-world" }), /not a repository code tasks deliver against/);
     assert.throws(() => codeRepo({ repo: ["MultiAgency/legion-social"] }), /not a repository code tasks deliver against/,
@@ -50,8 +59,8 @@ describe("the repository registry", () => {
     assert.deepEqual(Object.keys(REPOS).sort(), ["MultiAgency/legion-social", "MultiAgency/near-agencies"]);
   });
 
-  test("until workers read a task's repository (#82), a job may name only what they deliver to", () => {
-    assert.deepEqual([...WORKER_DELIVERS], [DEFAULT_REPO]);
+  test("workers deliver to every registry repository (#82)", () => {
+    assert.deepEqual([...WORKER_DELIVERS].sort(), ["MultiAgency/legion-social", DEFAULT_REPO]);
   });
 
   test("the module imports nothing, so the worker image can copy it", () => {

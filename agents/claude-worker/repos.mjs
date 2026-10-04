@@ -38,10 +38,11 @@ export const REPOS = {
 /** The repository a task's terms name, defaulting to near-agencies. */
 export const repoOf = terms => terms?.repo ?? DEFAULT_REPO;
 
-// Until a worker reads the repository a task's terms name (#82), it ships
-// every code task to near-agencies, so a job may name only what workers
-// deliver to; the registry keeps the other entries ready for #82 to open.
-export const WORKER_DELIVERS = new Set([DEFAULT_REPO]);
+/** The repositories the intake may name on a job (#100): the ones workers
+ * deliver to. Every registry entry is one now that the worker reads a task's
+ * repository (#82); a later entry joins this set only when a worker image
+ * serves it, so the intake never takes a deposit a delivery would hold. */
+export const WORKER_DELIVERS = new Set([DEFAULT_REPO, "MultiAgency/legion-social"]);
 
 /** The registry entry for the repository a task's terms name:
  * { name, base, checks, image }. Everything that needs a task's repository
@@ -54,3 +55,9 @@ export function codeRepo(terms) {
   if (typeof name !== "string" || !Object.hasOwn(REPOS, name)) throw new Error(`${name} is not a repository code tasks deliver against`);
   return { name, ...REPOS[name] };
 }
+
+/** Whether a worker image carrying `toolchain` can run `repo`'s checks: the
+ * rust image is built FROM node:22-slim (agents/claude-worker/Dockerfile), so
+ * it carries node too; the node image carries only node. */
+export const canBuild = (toolchain, repo) =>
+  repo.image === toolchain || (toolchain === "rust" && repo.image === "node");

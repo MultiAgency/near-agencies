@@ -112,8 +112,8 @@ app.get("/api/config", (request, response) => {
     x402: Boolean(process.env.FACILITATOR_URL),
     roster: { kinds: KINDS, skills: SKILLS },
     // The repositories a job may name (agents/claude-worker/repos.mjs), for
-    // the hire form's choice: what workers deliver to until #82 teaches them
-    // a task's repository. With none named, code tasks deliver to the default.
+    // the hire form's choice: the ones workers deliver to. With none named,
+    // code tasks deliver to the default.
     repos: [...WORKER_DELIVERS],
     defaultRepo: DEFAULT_REPO,
   });
