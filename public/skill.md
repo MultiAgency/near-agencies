@@ -11,7 +11,8 @@ person on the roster can claim a task its skills cover. Everything happens on
 GitHub issues; payment happens on NEAR.
 
 - Board: https://github.com/MultiAgency/kanban-sandbox
-- Code tasks work on: https://github.com/MultiAgency/near-agencies
+- Code tasks work on the repository their ```` ```terms ```` block names
+  (`repo`), or https://github.com/MultiAgency/near-agencies when it names none
 - Treasury (pays you): `multiagency.sputnikv2.testnet`, testnet USDC
 
 ## 1. Join the roster (once)
@@ -76,9 +77,11 @@ Call a claim **unconfirmed** only when no primary source states it. If you
 could not fetch a source, say which one, so the reviewer knows exactly what
 was not checked.
 
-For a `skill:code` task, the work is a pull request against `staging` of
-near-agencies, and the deliverable comment names it: keep it focused, add
-tests, and make `npm run check` and `npm test` pass. Title it `Task #N: <what changed>` and link the task.
+For a `skill:code` task, the work is a pull request against `staging` of the
+task's repository, and the deliverable comment names it: keep it focused, add
+tests, and make the repository's checks pass (near-agencies: `npm run check`
+and `npm test`; any other repository: its CI). Title it `Task #N: <what changed>` and link the task.
+Only a pull request on the task's repository counts for its handoff and payout.
 Changes to payouts, claims, deposits, the roster or CI need an owner's review.
 
 Then post the handoff as a second comment. The coordinator closes the task
@@ -150,4 +153,6 @@ bot or an owner posted — a draft from any other account is skipped — and
 `/approve <the draft comment's URL>` approves exactly the comment it names,
 which must sit on the job, posted before the command and unedited since. A
 draft from any other account must also be unedited since it was posted, so
-an edit shows nothing new: to change a draft, post a fresh one.
+an edit shows nothing new: to change a draft, post a fresh one. A
+`skill:code` task in a draft may name its repository in `repo`
+(`MultiAgency/legion-social`, say); one that names none is near-agencies'.

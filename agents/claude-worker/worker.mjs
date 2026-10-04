@@ -18,6 +18,7 @@ import { z } from "zod";
 
 import { allowedTools, codeAccess, deliversCodeSeat, ship, GIT_CREDENTIAL_HELPER } from "./code-mode.mjs";
 import { nextTask as selectTask } from "./next-task.mjs";
+import { seatRepo } from "./repos.mjs";
 
 const env = name => {
   const value = process.env[name];
@@ -28,8 +29,8 @@ const login = env("AGENT_LOGIN");
 const nearAccount = env("NEAR_ACCOUNT");
 const skills = env("AGENT_SKILLS").split(",").map(s => s.trim());
 // Code mode: how an agent with the code skill ships its branch — "fork" (its
-// own fork, an outside contributor) or "branch" (near-agencies itself, an
-// internal contributor). Null without the code skill.
+// own fork, an outside contributor) or "branch" (the task's repository itself,
+// an internal contributor). Null without the code skill.
 const codeMode = codeAccess(skills, process.env.CODE_ACCESS);
 const board = process.env.BOARD ?? "MultiAgency/kanban-sandbox";
 const skillUrl = process.env.SKILL_URL ?? "https://demo.multiagency.ai/skill.md";
@@ -83,18 +84,18 @@ const helpers = createSdkMcpServer({
   ],
 });
 
-function instructions(task) {
+// `repo` is the task's entry from repos.mjs when this run ships code, else
+// null: with code mode off, an assigned skill:code seat cannot be delivered,
+// since the shipping steps would name commands the run is not allowed to run.
+function instructions(task, repo) {
   const n = task.seat.number;
-  // With code mode off, an assigned skill:code seat cannot be delivered:
-  // the shipping steps would name commands the run is not allowed to run.
-  const code = Boolean(codeMode) && deliversCodeSeat(task);
   const doing = task.action === "claim"
     ? `Claim task #${n}: comment exactly \`/claim\` on it, then stop. The coordinator assigns it; a later run does the work.`
-    : code
+    : repo
       ? [
           `Deliver task #${n}, which is assigned to you.${task.revision ? " The reviewer asked for another round (the latest ```changes comment): address every point in a new deliverable." : ""}`,
           "Read the task, the job it names, and the deliverables of any tasks it depends on. Do the work, citing sources inline as links.",
-          ...ship(codeMode, n, login, task.revision),
+          ...ship(codeMode, repo, n, login, task.revision),
           `Then post the deliverable comment, naming the pull request, get its sha256 with the deliverable_sha256 tool, and post the handoff comment, exactly as the rules say. The coordinator closes the task once the handoff checks out.`,
         ].join("\n")
       : [
@@ -115,18 +116,19 @@ function instructions(task) {
 async function run() {
   const task = await nextTask();
   if (!task) return console.log("worker: nothing to do");
-  console.log(`worker: ${task.action} #${task.seat.number}${task.revision ? " (revision)" : ""}`);
-  if (dryRun) return;
   // Only a run with code mode (the agent listed the code skill and chose a
   // CODE_ACCESS) that is delivering a skill:code seat gets the git
-  // environment, the shipping instructions and the code tools. A run without
-  // code mode never gets here on a skill:code seat: nextTask() refused it
-  // once and moved on to what this run can deliver.
-  const code = Boolean(codeMode) && deliversCodeSeat(task);
+  // environment, the shipping instructions and the code tools, for the
+  // repository the task names. A run without code mode never gets here on a
+  // skill:code seat: nextTask() refused it once and moved on to what this
+  // run can deliver.
+  const repo = codeMode && deliversCodeSeat(task) ? seatRepo(task.seat) : null;
+  console.log(`worker: ${task.action} #${task.seat.number}${task.revision ? " (revision)" : ""}${repo ? ` in ${repo.name}` : ""}`);
+  if (dryRun) return;
   const skill = await (await fetch(skillUrl)).text();
   const cwd = await mkdtemp(join(tmpdir(), `seat-${task.seat.number}-`));
   try {
-    if (code) {
+    if (repo) {
       // git ships the work as the agent: gh (holding GH_TOKEN) is its only
       // credential helper, injected through the environment together with a
       // clean git config so no system or operator setting — a stored keychain
@@ -147,7 +149,7 @@ async function run() {
       });
     }
     for await (const message of query({
-      prompt: instructions(task),
+      prompt: instructions(task, repo),
       options: {
         cwd,
         model,
@@ -158,7 +160,7 @@ async function run() {
         mcpServers: { multiagency: helpers },
         tools: ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch"],
         permissionMode: "dontAsk",
-        allowedTools: allowedTools(code ? codeMode : null, task.seat.number, login),
+        allowedTools: allowedTools(repo ? codeMode : null, repo, task.seat.number, login),
       },
     })) {
       if (message.type === "assistant") {

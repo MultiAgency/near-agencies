@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, test } from "node:test";
+import { afterEach, describe, test } from "node:test";
 
 import { USDC } from "../lib/near.mjs";
 import { filedProposal, payoutProblem, proposalDescription } from "../lib/payouts.mjs";
@@ -11,6 +11,7 @@ const member = (issue, overrides = {}) => ({
   payee: "near-builder.testnet",
   amount: "1000000",
   state: "closed",
+  skills: ["skill:research"],
   handoff: { payout: { account_id: "near-builder.testnet" } },
   ...overrides,
 });
@@ -55,6 +56,33 @@ describe("payout proposals", () => {
     assert.match(await payoutProblem({ members: [member(29, { payee: null })] }), /no roster payout account for the claimant of #29/);
     assert.match(await payoutProblem({ members: [member(29, { handoff: { payout: { account_id: "other.testnet" } } })] }), /differs from the payee on #29/);
     assert.equal(await payoutProblem({ members: [member(29), member(30)] }), null);
+  });
+
+  describe("a code task's pull request", () => {
+    const realFetch = globalThis.fetch;
+    afterEach(() => { globalThis.fetch = realFetch; });
+    const merged = new Set(["/repos/MultiAgency/legion-social/pulls/3", "/repos/MultiAgency/near-agencies/pulls/50"]);
+    const github = () => { globalThis.fetch = async url => new Response(JSON.stringify({ merged: merged.has(new URL(url).pathname) })); };
+    const code = (links, repo) => member(29, {
+      skills: ["skill:code"],
+      ...(repo ? { repo } : {}),
+      handoff: { links, payout: { account_id: "near-builder.testnet" } },
+    });
+
+    test("must be merged on the repository the task names", async () => {
+      github();
+      const legion = "MultiAgency/legion-social";
+      assert.equal(await payoutProblem({ members: [code(["https://github.com/MultiAgency/legion-social/pull/3"], legion)] }), null);
+      assert.match(await payoutProblem({ members: [code(["https://github.com/MultiAgency/near-agencies/pull/50"], legion)] }),
+        /#29's handoff links no pull request on MultiAgency\/legion-social/);
+      assert.match(await payoutProblem({ members: [code(["https://github.com/MultiAgency/legion-social/pull/4"], legion)] }), /pull\/4 \(#29\) is not merged yet/);
+    });
+
+    test("is near-agencies' when the task names no repository", async () => {
+      github();
+      assert.equal(await payoutProblem({ members: [code(["https://github.com/MultiAgency/near-agencies/pull/50"])] }), null);
+      assert.match(await payoutProblem({ members: [code([])] }), /links no pull request on MultiAgency\/near-agencies/);
+    });
   });
 });
 

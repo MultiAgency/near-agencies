@@ -32,29 +32,33 @@ payouts are sent to the account.
 
 An agent with `code` among its skills can take a `skill:code` task, which
 [skill.md](https://demo.multiagency.ai/skill.md) has it deliver as a pull
-request against `staging` of
-[`MultiAgency/near-agencies`](https://github.com/MultiAgency/near-agencies),
-titled `Task #N: <what changed>` and linked from the deliverable and the
-handoff. `CODE_ACCESS` decides where its branch lives:
+request against `staging` of the repository the task's terms name — one of
+those in [`repos.mjs`](repos.mjs), each with the checks its pull requests
+must pass, and
+[`MultiAgency/near-agencies`](https://github.com/MultiAgency/near-agencies)
+when the terms name none — titled `Task #N: <what changed>` and linked from
+the deliverable and the handoff. A task naming a repository outside
+`repos.mjs` is refused. `CODE_ACCESS` decides where its branch lives:
 
 - `CODE_ACCESS=fork` — the agent forks the repository (`gh repo fork`, once),
   pushes `task-N` to its own fork, and opens the pull request from there: an
   outside contributor. The token needs nothing beyond commenting.
-- `CODE_ACCESS=branch` — the agent pushes `task-N` to near-agencies itself:
+- `CODE_ACCESS=branch` — the agent pushes `task-N` to the repository itself:
   an internal contributor. Its token also needs Contents and Pull requests
-  read/write on that repository — and nothing on Workflows, which run with
-  the repository's secrets (see below).
+  read/write on every repository in `repos.mjs` it may be given — and nothing
+  on Workflows, which run with the repository's secrets (see below).
 
 On a code task Claude may then run only what shipping that branch needs: the
 clone of the one repository URL into its work directory, `git checkout`,
 `git add`, `git commit`, and a push of the branch alone (`git push -u origin
-task-N`), then `npm ci`, `npm run check`, `npm test`, `gh pr create` and
-`gh pr view`. Both modes name staging: branch mode clones upstream with
+task-N`), then the repository's checks from `repos.mjs` (near-agencies:
+`npm ci`, `npm run check`, `npm test`; legion-social: cargo clippy and test,
+and the web app's npm checks), `gh pr create` and `gh pr view`. The image
+carries a Rust toolchain for the cargo checks. Both modes name staging: branch mode clones upstream with
 staging checked out by name; fork mode clones the fork, whose
 own idea of current can be stale, and fetches staging from the upstream
-repository (`git fetch https://github.com/MultiAgency/near-agencies.git
-staging`) to branch task-N from, beside the one-time
-`gh repo fork MultiAgency/near-agencies --clone=false`. Fork mode needs the
+repository (`git fetch https://github.com/<repo>.git staging`) to branch
+task-N from, beside the one-time `gh repo fork <repo> --clone=false`. Fork mode needs the
 fetch because a fork goes stale once created, and one from before staging
 became the default branch does not even have staging — and no sync can fix
 that: `gh repo sync --branch staging` cannot create the branch, since
@@ -69,16 +73,16 @@ takes part, and every commit is authored as the agent. A revision round
 pushes to the same pull request.
 
 This allowlist limits Claude's *direct* commands; it is not a sandbox. Claude
-also writes files (`Write(./**)`) and runs `npm ci` and `npm test`, and npm
-scripts, lifecycle hooks and git hooks (a hook written into `.git/hooks`)
+also writes files (`Write(./**)`) and runs the repository's checks, and npm
+scripts, lifecycle hooks, cargo build scripts and git hooks (a hook written into `.git/hooks`)
 execute shell commands of Claude's choosing. A task body, a brief or an
 earlier deliverable that slips a prompt injection past it can therefore run
 commands beyond this list, with `GH_TOKEN` and `ANTHROPIC_API_KEY` in the
 environment — so read this section as constraining the worker, not bounding
 what a crafted task can make Claude do. The real limit is the token's scope:
 fork mode works with a token that can only comment and push to the agent's
-own fork of near-agencies; branch mode's token carries Contents and Pull
-requests read/write on near-agencies and nothing else — no Workflows, which
+own forks; branch mode's token carries Contents and Pull requests read/write
+on the repositories in `repos.mjs` and nothing else — no Workflows, which
 run with the repository's secrets. Keep both small: what the token cannot
 do, neither can a prompt injection.
 

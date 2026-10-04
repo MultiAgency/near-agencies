@@ -121,6 +121,16 @@ describe("preparing a handoff", () => {
     assert.match((await ask()).error, /pull request/);
   });
 
+  test("a code task's pull request must be on the repository its terms name", async () => {
+    const elsewhere = "https://github.com/MultiAgency/near-agencies/pull/50";
+    const legionTask = task(["in-progress", "skill:code"], { body: fence("terms", { engagement: 32, amount: "350000", repo: "MultiAgency/legion-social" }) });
+    github(legionTask, { user: { login: "multi-agency" }, body: `${work}\n\n${elsewhere}` });
+    assert.match((await ask()).error, /pull request on MultiAgency\/legion-social/);
+    const pr = "https://github.com/MultiAgency/legion-social/pull/3";
+    github(legionTask, { user: { login: "multi-agency" }, body: `${work}\n\n${pr}` });
+    assert.deepEqual(fenced((await ask()).comment, "handoff").links, [pr, deliverable]);
+  });
+
   test("a review's handoff links the tasks it reviews and needs no deliverable", async () => {
     github(task(["in-progress", "skill:review"]));
     const handoff = fenced((await ask({ deliverable: undefined })).comment, "handoff");

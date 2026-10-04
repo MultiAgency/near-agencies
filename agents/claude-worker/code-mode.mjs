@@ -1,17 +1,15 @@
 // Code mode: what lets a worker take a skill:code seat and ship it. The rules
 // (public/skill.md § 3) have the work land as a pull request against staging of
-// near-agencies, titled after the task and linked from the deliverable and
-// the handoff. CODE_ACCESS decides which GitHub identity pushes the branch:
+// the repository the task names (repos.mjs), titled after the task and linked
+// from the deliverable and the handoff. CODE_ACCESS decides which GitHub
+// identity pushes the branch:
 //
-//   fork    the agent's own fork of near-agencies (an outside contributor)
-//   branch  near-agencies itself (an internal contributor with write)
+//   fork    the agent's own fork of the repository (an outside contributor)
+//   branch  the repository itself (an internal contributor with write)
 //
 // This file imports nothing: worker.mjs runs it, and test/code-mode.test.mjs
 // runs it from the repository root, where this folder's node_modules are not
 // installed.
-
-/** The repository a code task delivers against (public/skill.md). */
-export const CODE_REPO = "MultiAgency/near-agencies";
 
 /** The one credential helper a code run's git may use: gh, holding GH_TOKEN,
  * acting as the agent (worker.mjs sets it as GIT_CONFIG_VALUE_0 beside a
@@ -85,30 +83,29 @@ export function refusalPosted(thread, login) {
  * open the pull request with --base staging. Kept here, dependency-free
  * beside allowedTools(), so the tests can hold the two against each other:
  * every command the instructions give must be one the allowlist allows.
- * `access` is fork or branch, `n` the task's number, `login` the agent's
- * GitHub login, which names its fork, and `revision` says the pull request
- * exists: another round pushes to it and never opens a second one. */
-export function ship(access, n, login, revision) {
+ * `access` is fork or branch, `repo` the task's entry from repos.mjs
+ * ({ name, checks }), `n` the task's number, `login` the agent's GitHub
+ * login, which names its fork, and `revision` says the pull request exists:
+ * another round pushes to it and never opens a second one. */
+export function ship(access, repo, n, login, revision) {
   const fork = access === "fork";
   const branch = `task-${n}`;
-  const name = CODE_REPO.split("/")[1];
-  const upstream = `https://github.com/${CODE_REPO}.git`;
-  const clone = fork ? `https://github.com/${login}/${name}.git` : upstream;
-  const pulls = `\`gh pr view ${branch} --repo ${CODE_REPO}\``;
+  const { upstream, clone } = urls(access, repo, login);
+  const pulls = `\`gh pr view ${branch} --repo ${repo.name}\``;
   return [
-    `This is a code task: the work is a pull request against staging of ${CODE_REPO} (§ 3 of the rules). git authenticates through gh as you, so no token belongs in any URL, and your commits are already authored as you.`,
+    `This is a code task: the work is a pull request against staging of ${repo.name} (§ 3 of the rules). git authenticates through gh as you, so no token belongs in any URL, and your commits are already authored as you.`,
     fork
-      ? `\`gh repo fork ${CODE_REPO} --clone=false\` if you have no fork yet (it only reports an existing one), then, in this directory, \`git clone ${clone} .\` — origin is your fork, you push there — and \`git fetch ${upstream} staging\`: a fork goes stale once created, and one from before staging became the default branch does not even have staging.`
-      : `In this directory: \`git clone --branch staging ${clone} .\`. You push to ${CODE_REPO}.`,
+      ? `\`gh repo fork ${repo.name} --clone=false\` if you have no fork yet (it only reports an existing one), then, in this directory, \`git clone ${clone} .\` — origin is your fork, you push there — and \`git fetch ${upstream} staging\`: a fork goes stale once created, and one from before staging became the default branch does not even have staging.`
+      : `In this directory: \`git clone --branch staging ${clone} .\`. You push to ${repo.name}.`,
     revision
       ? `\`git checkout ${branch}\`: the pull request exists; push your fixes to that same branch and never open a second pull request. ${pulls} shows it.`
       : fork
         ? `\`git checkout -b ${branch} FETCH_HEAD\`: the fetch left staging's tip in FETCH_HEAD, and the task branch starts there.`
         : `\`git checkout -b ${branch}\`: it starts at staging, which the clone checked out.`,
-    "Make the change there: keep it focused, add tests, and make `npm ci`, `npm run check` and `npm test` pass.",
+    `Make the change there: keep it focused, add tests, and make ${list(repo.checks.map(c => `\`${c}\``))} pass.`,
     `\`git add\` only the files you changed, \`git commit\`, and \`git push -u origin ${branch}\`${fork ? " — origin is your fork" : ""}. If ${pulls} shows a pull request already, push to its branch instead of opening another.`,
     ...(revision ? [] : [
-      `Open the pull request: write its body to a file first, then \`gh pr create --repo ${CODE_REPO} --head ${fork ? `${login}:` : ""}${branch} --base staging --title "Task #${n}: <what changed>" --body-file <file>\`. The body links task #${n} and says what changed and how you verified it.`,
+      `Open the pull request: write its body to a file first, then \`gh pr create --repo ${repo.name} --head ${fork ? `${login}:` : ""}${branch} --base staging --title "Task #${n}: <what changed>" --body-file <file>\`. The body links task #${n} and says what changed and how you verified it.`,
     ]),
   ];
 }
@@ -126,27 +123,39 @@ export function ship(access, n, login, revision) {
  * `gh repo sync --branch staging` asks GitHub's merge-upstream endpoint,
  * which answers 404 Branch not found for a branch the fork lacks, and its
  * fallback only updates an existing ref. `access` is fork or branch, `n` the
- * task's number, `login` the agent's GitHub login, which names its fork. */
-export function allowedTools(access, n, login) {
+ * task's entry from repos.mjs, whose checks are the only other commands it
+ * may run, `n` the task's number, `login` the agent's GitHub login, which
+ * names its fork. */
+export function allowedTools(access, repo, n, login) {
   const tools = [
     "Read(./**)", "Write(./**)", "Edit(./**)", "Glob", "Grep", "WebSearch", "WebFetch",
     "Bash(gh issue view:*)", "Bash(gh issue comment:*)", "Bash(gh api:*)",
     "mcp__multiagency__deliverable_sha256",
   ];
   if (!access) return tools;
-  const name = CODE_REPO.split("/")[1];
-  const upstream = `https://github.com/${CODE_REPO}.git`;
+  const { upstream, clone } = urls(access, repo, login);
   return tools.concat(
     access === "fork"
-      ? `Bash(git clone https://github.com/${login}/${name}.git .)`
-      : `Bash(git clone --branch staging ${upstream} .)`,
+      ? `Bash(git clone ${clone} .)`
+      : `Bash(git clone --branch staging ${clone} .)`,
     ...(access === "fork" ? [
       `Bash(git fetch ${upstream} staging)`,
-      `Bash(gh repo fork ${CODE_REPO} --clone=false)`,
+      `Bash(gh repo fork ${repo.name} --clone=false)`,
     ] : []),
     "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git commit:*)",
     `Bash(git push -u origin task-${n})`,
-    "Bash(npm ci)", "Bash(npm run check)", "Bash(npm test)",
+    ...repo.checks.map(check => `Bash(${check})`),
     "Bash(gh pr create:*)", "Bash(gh pr view:*)",
   );
 }
+
+// The repository's URL, and the one a run clones: the agent's fork of it,
+// which keeps the repository's name, or the repository itself.
+function urls(access, repo, login) {
+  const upstream = `https://github.com/${repo.name}.git`;
+  const clone = access === "fork" ? `https://github.com/${login}/${repo.name.split("/")[1]}.git` : upstream;
+  return { upstream, clone };
+}
+
+// "a", "a and b", "a, b and c".
+const list = items => items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;

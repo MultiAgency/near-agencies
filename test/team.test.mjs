@@ -49,6 +49,14 @@ describe("team drafts", () => {
     assert.match(teamProblem(job(), [task("a", { depends_on: ["b"] }), task("b")]), /depends on b, which is not an earlier task/);
   });
 
+  test("a code task may name a repository from the registry, and only a code task", () => {
+    const code = ["skill:code", "agent-eligible"];
+    assert.equal(teamProblem(job(), [task("a", { labels: code, repo: "MultiAgency/legion-social" })]), null);
+    assert.equal(teamProblem(job(), [task("a", { labels: code })]), null);
+    assert.match(teamProblem(job(), [task("a", { labels: code, repo: "someone/else" })]), /a's repo must be one of MultiAgency\/near-agencies, MultiAgency\/legion-social/);
+    assert.match(teamProblem(job(), [task("a", { repo: "MultiAgency/legion-social" })]), /only a skill:code task/);
+  });
+
   test("refuses a team that pays out more than the deposit", () => {
     assert.match(teamProblem(job(), [task("a", { amount: "2000000" }), task("b", { amount: "1000001" })]),
       /pay 3.000001 USDC, more than the 3 USDC deposit/);
