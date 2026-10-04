@@ -90,18 +90,38 @@ describe("a handoff's pull requests", () => {
       return found ? new Response(JSON.stringify(found)) : new Response("{}", { status: 404 });
     };
   };
-  const codeTask = (links, claimedBy = ["multi-agency"]) =>
+  const codeTask = (links, claimedBy = ["multi-agency"], repo) =>
     member(29, {
       claimedBy,
       skills: ["skill:code"],
       payee: "agent.agency.testnet",
+      ...(repo ? { repo } : {}),
       handoff: { payout: { account_id: "agent.agency.testnet" }, links },
     });
   const right = "https://github.com/MultiAgency/near-agencies/pull/50";
+  const social = "https://github.com/MultiAgency/legion-social/pull/9";
 
   test("counts a merged pull request from the task's repository by its claimant", async () => {
     serve([pull(50)]);
     assert.equal(await payoutProblem({ members: [codeTask([right])] }), null);
+  });
+
+  test("counts a merged pull request in the repository the task's terms name", async () => {
+    serve([pull(9)]);
+    assert.equal(await payoutProblem({ members: [codeTask([social], ["multi-agency"], "MultiAgency/legion-social")] }), null);
+    assert.match(
+      await payoutProblem({ members: [codeTask([right], ["multi-agency"], "MultiAgency/legion-social")] }),
+      /is in another repository; the pull request must be in MultiAgency\/legion-social\./,
+      "near-agencies is not the repository a legion-social task delivers to",
+    );
+  });
+
+  test("holds a task whose terms name a repository outside the registry", async () => {
+    serve([pull(50)]);
+    assert.match(
+      await payoutProblem({ members: [codeTask([right], ["multi-agency"], "octocat/hello-world")] }),
+      /#29's terms name a repository code tasks do not deliver against/,
+    );
   });
 
   test("holds a code task whose handoff links no pull request", async () => {

@@ -133,6 +133,23 @@ describe("preparing a handoff", () => {
     assert.match((await ask()).error, /That pull request was not found\./);
   });
 
+  test("a code task's pull request must be in the repository its terms name, through the registry", async () => {
+    const social = "https://github.com/MultiAgency/legion-social/pull/9";
+    const onSocial = task(["in-progress", "skill:code"], {
+      body: `Part of job #32.\n\n${fence("terms", { engagement: 32, amount: "350000", repo: "MultiAgency/legion-social" })}`,
+    });
+    github(onSocial, { user: { login: "multi-agency" }, body: `${work}\n\n${social}` }, [], { user: { login: "multi-agency" }, merged: true });
+    assert.deepEqual(fenced((await ask()).comment, "handoff").links, [social, deliverable]);
+    github(onSocial, { user: { login: "multi-agency" }, body: `${work}\n\nhttps://github.com/MultiAgency/near-agencies/pull/50` }, [], { user: { login: "multi-agency" }, merged: true });
+    assert.match((await ask()).error, /is in another repository; the pull request must be in MultiAgency\/legion-social\./);
+    // A repository outside the registry is refused before any pull request is read.
+    const stray = task(["in-progress", "skill:code"], {
+      body: `Part of job #32.\n\n${fence("terms", { engagement: 32, amount: "350000", repo: "octocat/hello-world" })}`,
+    });
+    github(stray, { user: { login: "multi-agency" }, body: `${work}\n\nhttps://github.com/octocat/hello-world/pull/9` }, [], { user: { login: "multi-agency" }, merged: true });
+    assert.match((await ask()).error, /octocat\/hello-world is not a repository code tasks deliver against\./);
+  });
+
   test("a code task's handoff counts its passing pull request among links it cites", async () => {
     github(task(["in-progress", "skill:code"]), { user: { login: "multi-agency" }, body: `${work}\n\nhttps://github.com/someone/elsewhere/pull/9\n\nhttps://github.com/MultiAgency/near-agencies/pull/50` }, [], { user: { login: "multi-agency" }, merged: true });
     const { comment, problem } = await ask();

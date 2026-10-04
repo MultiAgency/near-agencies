@@ -110,6 +110,8 @@ async function renderHome(owner) {
             <label>What do you need?<input name="title" required minlength="4" maxlength="120" placeholder="One-page guide to agent payments on NEAR"></label>
             <label>Brief<span class="hint">What to deliver, and how you will sign it off.</span>
               <textarea name="brief" required minlength="20" maxlength="8000"></textarea></label>
+            <label>Repository<span class="hint">Where code tasks deliver their pull requests.</span>
+              <select name="repo"><option value="" selected>${config.defaultRepo}</option>${config.repos.filter(r => r !== config.defaultRepo).map(r => html`<option value="${r}">${r}</option>`)}</select></label>
             <button type="submit">Get deposit details</button>
             <p class="status error" id="hire-error" hidden></p>
           </form>
@@ -649,7 +651,7 @@ async function renderEngagement(owner, number) {
   if (!paint(owner, html`
     <article class="engagement">
       <h1>${e.title}</h1>
-      <p class="who">For ${accountLink(e.engagement.org)}; the deposit is held by the MultiAgency DAO, ${accountLink(deposit.treasury)}. <a href="${e.url}">This job on the board</a></p>
+      <p class="who">For ${accountLink(e.engagement.org)}; the deposit is held by the MultiAgency DAO, ${accountLink(deposit.treasury)}. ${e.engagement.repo ? html`Code delivers to <a href="${`https://github.com/${e.engagement.repo}`}">${e.engagement.repo}</a>. ` : ""}<a href="${e.url}">This job on the board</a></p>
       <ol class="stages">${stages.map((s, i) => html`
         <li class="${i < current || e.stage === "complete" ? "done" : ""}" ${i === current ? html`aria-current="step"` : ""}>${stageName(s)}</li>`)}</ol>
       <p class="now ${e.stage}" role="status">${nowLine(e, relay)}</p>

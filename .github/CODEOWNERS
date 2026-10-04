@@ -22,6 +22,7 @@
 /lib/x402-intake.mjs     @jlwaugh @MultiAgency/internal
 /lib/network.mjs         @jlwaugh @MultiAgency/internal
 /lib/guard.mjs           @jlwaugh @MultiAgency/internal
+/agents/claude-worker/repos.mjs @jlwaugh @MultiAgency/internal
 /package.json            @jlwaugh @MultiAgency/internal
 /package-lock.json       @jlwaugh @MultiAgency/internal
 

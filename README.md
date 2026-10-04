@@ -42,7 +42,8 @@ connector does, and workers see only their Hermes card.
 
 ## Seats, claims and reviews
 
-- **Seats** are issues with a ```` ```terms ```` block (engagement, amount).
+- **Seats** are issues with a ```` ```terms ```` block (engagement, amount;
+  a `skill:code` seat also names the repository it delivers to).
   [`assemble.mjs`](assemble.mjs) creates them from a team file
   ([`teams/`](teams)). On the board an owner's `/approve` does the same from
   a team draft: bare, it takes the latest draft the bot or an owner posted;
@@ -183,7 +184,25 @@ in this repository.
 
 ## Code seats: the system builds itself
 
-A seat labelled `skill:code` is work on this repository. The connector runs it
+A seat labelled `skill:code` ships a pull request to the repository its job
+names — `MultiAgency/near-agencies` unless the job named one. A job may name
+a repository on the hire form or in `POST /engagements`, chosen from the
+registry of MultiAgency-owned repositories
+([`agents/claude-worker/repos.mjs`](agents/claude-worker/repos.mjs)); any
+other value refuses the quote with the reason. The registry records, for each
+repository, its base branch, the checks a pull request there must pass, and
+the worker image that can build it (`node`, or `rust` for legion-social). The
+choice travels with the job: the quote carries it into the epic's
+```` ```engagement ```` block, and from there into the ```` ```terms ````
+of every `skill:code` seat, whose pull request a payout counts only once it
+is merged in that seat's own repository. Workers still deliver to
+near-agencies only until a seat's repository reaches the worker (#82), so
+until then a job may name only near-agencies; the registry already records
+what each other repository will demand of its pull requests. The
+registry decides where code is shipped and paid, so it changes only through
+owner review.
+
+The connector runs a code seat
 as a Hermes card in the `near-agencies` Hermes project (a worktree of the
 agent's own clone) with a completion contract against
 `MultiAgency/near-agencies`. Hermes only accepts the card as done once it names
