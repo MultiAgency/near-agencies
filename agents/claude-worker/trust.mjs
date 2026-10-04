@@ -9,6 +9,21 @@
 /** Repository roles whose holder may route change requests, as lib/github.mjs reads them. */
 export const OWNER_ROLES = ["admin", "maintain"];
 
+/** The board role of `login`: what the owner half of the rule reads, or null
+ * when GitHub answers that it has none — a login that is not a collaborator
+ * on the board. worker.mjs probes the bot's role once per run, so a mistyped
+ * BOARD_BOT or a token that cannot read roles is on the log before any round
+ * depends on it. */
+export const boardRole = (github, login) =>
+  github(`/collaborators/${encodeURIComponent(login)}/permission`).then(
+    p => p.role_name,
+    error => {
+      // A login that is not a collaborator has no role (lib/github.mjs).
+      if (String(error.message).endsWith(": 404")) return null;
+      throw error;
+    },
+  );
+
 /** Whether a ```changes comment by `login` opens a revision round: the bot's
  * own, or an owner's (admin or maintain on the board). Logins compare
  * case-insensitively: GitHub logins are not case-sensitive, and the bot's
@@ -24,15 +39,7 @@ export function trustCheck({ github, bot }) {
   // owner's ```changes round, and only the bot's would count.
   const roles = new Map();
   const warned = new Set();
-  const roleOf = login =>
-    github(`/collaborators/${encodeURIComponent(login)}/permission`).then(
-      p => p.role_name,
-      error => {
-        // A login that is not a collaborator has no role (lib/github.mjs).
-        if (String(error.message).endsWith(": 404")) return null;
-        throw error;
-      },
-    );
+  const roleOf = login => boardRole(github, login);
   return async login => {
     if (login.toLowerCase() === bot.toLowerCase()) return true;
     if (!roles.has(login)) {

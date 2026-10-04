@@ -18,6 +18,7 @@ import { z } from "zod";
 
 import { allowedTools, codeAccess, deliversCodeSeat, ship, GIT_CREDENTIAL_HELPER } from "./code-mode.mjs";
 import { nextTask as selectTask } from "./next-task.mjs";
+import { boardRole } from "./trust.mjs";
 
 const env = name => {
   const value = process.env[name];
@@ -124,6 +125,16 @@ function instructions(task) {
 }
 
 async function run() {
+  // Before any round depends on it: a mistyped BOARD_BOT (GitHub answers 404
+  // for a login that is not a collaborator on the board) or a token that
+  // cannot read board roles (an Issues-only one cannot; GitHub answers 403)
+  // would otherwise sit silent until a revision round stalls a seat.
+  boardRole(github, bot).then(
+    role => {
+      if (role === null) console.error(`worker: @${bot} is not a collaborator on ${board}: is BOARD_BOT spelled right?`);
+    },
+    error => console.error(`worker: cannot read board roles (${error.message}): only @${bot}'s own ${"```"}changes rounds will count`),
+  );
   const task = await nextTask();
   if (!task) return console.log("worker: nothing to do");
   console.log(`worker: ${task.action} #${task.seat.number}${task.revision ? " (revision)" : ""}`);

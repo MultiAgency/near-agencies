@@ -8,7 +8,7 @@ import {
   CODE_REFUSAL, GIT_CREDENTIAL_HELPER,
 } from "../agents/claude-worker/code-mode.mjs";
 import { nextTask } from "../agents/claude-worker/next-task.mjs";
-import { trustCheck } from "../agents/claude-worker/trust.mjs";
+import { boardRole, trustCheck } from "../agents/claude-worker/trust.mjs";
 
 const seat = (labels, assignees = []) => ({
   labels: labels.map(name => ({ name })),
@@ -407,6 +407,11 @@ describe("the trust check", () => {
     assert.equal(await trusted("jlwaugh"), true);
     assert.equal(await trusted("second"), true);
     assert.equal(await trusted("reader"), false);
+  });
+
+  test("boardRole reads a role, and a login that is not a collaborator has none", async () => {
+    assert.equal(await boardRole(roles({ jlwaugh: "maintain" }), "jlwaugh"), "maintain");
+    assert.equal(await boardRole(roles({}), "ghost"), null, "GitHub's 404 for a non-collaborator is no role");
   });
 
   test("a failed lookup is not trusted, logged once, and not kept as an answer", async () => {
