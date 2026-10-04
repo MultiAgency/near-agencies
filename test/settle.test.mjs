@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { settledEpicPatch } from "../lib/engagement-state.mjs";
+import { settledEpicPatch, stage } from "../lib/engagement-state.mjs";
 
 // An assembled epic, shaped like assemble.mjs leaves it: a checklist of the
 // team's seats under `## Team`, then the ```team fence, and `blocked` on it
@@ -97,5 +97,21 @@ describe("settling a closed epic", () => {
     const body = patch.body ?? epic().body;
     assert.match(body, /- \[ \] #2 — 1 USDC/);
     assert.match(body, /- \[ \] #3 — 1 USDC/);
+  });
+});
+
+describe("a job's stage", () => {
+  const open = { state: "open", state_reason: null };
+  const seat = (state, amount, payout) => ({ state, amount, payout });
+
+  test("volunteer tasks hold neither accepting nor the close: all delivered, it is paying", () => {
+    assert.equal(stage(open, { committed: "0" }, [seat("closed", "0")]), "paying");
+    assert.equal(stage(open, { committed: "1000000" }, [seat("closed", "0"), seat("closed", "1000000", { proposal_id: 1 })]), "paying",
+      "a volunteer beside a proposed payout does not hold it");
+  });
+
+  test("paid work without a proposal is still accepting, volunteer or not beside it", () => {
+    assert.equal(stage(open, { committed: "1000000" }, [seat("closed", "1000000")]), "accepting");
+    assert.equal(stage(open, { committed: "1000000" }, [seat("closed", "0"), seat("closed", "1000000")]), "accepting");
   });
 });

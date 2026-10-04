@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, test } from "node:test";
 
-import { assignmentClaims, isChangeRequest, revisionNotice } from "../lib/coordinator.mjs";
+import { assignmentClaims, claimed, isChangeRequest, revisionNotice } from "../lib/coordinator.mjs";
 import { fence, fenced } from "../lib/github.mjs";
 import { byGithub, covers, isProfileUpdate } from "../lib/roster.mjs";
 import { eligibility, handoffProblem, isClaim, pinProblem, seat, selfReviewProblem } from "../lib/seats.mjs";
@@ -214,6 +214,25 @@ describe("native assignment claims", () => {
     const { accepted, refused } = await assignmentClaims(seat(issue()));
     assert.equal(accepted, null);
     assert.deepEqual(refused, []);
+  });
+});
+
+describe("claim replies", () => {
+  const builder = { nearAccount: "agent.agency.testnet" };
+  const seatWith = amount => seat(issue({ body: issue().body.replace('"amount": "1000000"', `"amount": "${amount}"`) }));
+
+  test("a paid task's claim reply names the payout, as before", () => {
+    const reply = claimed("multi-agency", seatWith("1000000"), builder);
+    assert.match(reply, /^Claimed by @multi-agency\./);
+    assert.match(reply, /1 USDC is paid to `agent\.agency\.testnet`/);
+  });
+
+  test("a volunteer task's claim reply confirms the claim and says nothing about payment", () => {
+    const reply = claimed("multi-agency", seatWith("0"), builder);
+    assert.match(reply, /^Claimed by @multi-agency\./);
+    assert.doesNotMatch(reply, /USDC/);
+    assert.doesNotMatch(reply, /paid/);
+    assert.match(reply, /prepares your handoff\.$/);
   });
 });
 

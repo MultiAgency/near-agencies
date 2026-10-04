@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { describe, test } from "node:test";
+import { afterEach, describe, test } from "node:test";
 
 import { draftFor, isApproval, namedDraft } from "../lib/coordinator.mjs";
 import { fence, repoUrl } from "../lib/github.mjs";
-import { tasksMade, teamProblem } from "../lib/team.mjs";
+import { assembleTeam, tasksMade, teamProblem } from "../lib/team.mjs";
 
 const job = (overrides = {}) => ({
   number: 28,
@@ -54,6 +54,14 @@ describe("team drafts", () => {
       /pay 3.000001 USDC, more than the 3 USDC deposit/);
   });
 
+  test("accepts a volunteer task, and counts only paid amounts against the deposit", () => {
+    assert.equal(teamProblem(job(), [task("a", { amount: "0" })]), null);
+    assert.equal(teamProblem(job(), [task("a", { amount: "0" }), task("b", { amount: "3000000" })]), null);
+    assert.equal(teamProblem(job(), [task("a", { amount: 0 })]), null, "a draft may write the amount as a JSON number");
+    // Zero volunteers; anything not a whole number of base units is still refused.
+    assert.match(teamProblem(job(), [task("a", { amount: "-1" })]), /whole number/);
+  });
+
   test("finds the tasks an interrupted run already made, by key and job", () => {
     const made = tasksMade([
       { number: 29, body: fence("terms", { engagement: 28, key: "research" }) },
@@ -63,6 +71,37 @@ describe("team drafts", () => {
       { number: 28, body: null },
     ], 28);
     assert.deepEqual([...made], [["research", 29]]);
+  });
+});
+
+describe("assembling a team", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  test("the job's checklist reads a volunteer task as a volunteer, not 0 USDC", async () => {
+    const patched = [];
+    let made = 30;
+    globalThis.fetch = async (url, options = {}) => {
+      const u = new URL(url);
+      const method = options.method ?? "GET";
+      const json = body => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+      if (method === "GET" && u.pathname === "/repos/MultiAgency/kanban-sandbox/issues") return json([]);
+      if (method === "POST" && u.pathname === "/repos/MultiAgency/kanban-sandbox/issues") {
+        return json({ number: ++made, html_url: `https://github.com/MultiAgency/kanban-sandbox/issues/${made}` });
+      }
+      if (method === "PATCH" && u.pathname === "/repos/MultiAgency/kanban-sandbox/issues/28") {
+        patched.push(JSON.parse(options.body));
+        return json({});
+      }
+      throw new Error(`unexpected request: ${method} ${u.pathname}`);
+    };
+    await assembleTeam(job({ labels: [{ name: "engagement" }] }), [
+      task("paid", { labels: ["skill:research", "agent-eligible"] }),
+      task("helping", { amount: "0", labels: ["skill:writing", "agent-eligible"] }),
+    ]);
+    assert.match(patched[0].body, /- \[ \] #\d+ — 1 USDC/);
+    assert.match(patched[0].body, /- \[ \] #\d+ — volunteer/);
+    assert.doesNotMatch(patched[0].body, /0 USDC/);
   });
 });
 

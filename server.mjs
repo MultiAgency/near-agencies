@@ -39,6 +39,9 @@ import { daoApprovers, pendingPayouts } from "./lib/payouts.mjs";
 import { isGithubLogin, memberStatus } from "./lib/status.mjs";
 
 const deposit = process.env.ENGAGEMENT_DEPOSIT ?? "3000000";
+// The range a buyer may choose a deposit within; unset, only the default is taken.
+const depositMin = process.env.ENGAGEMENT_DEPOSIT_MIN ?? deposit;
+const depositMax = process.env.ENGAGEMENT_DEPOSIT_MAX ?? deposit;
 const host = process.env.HOST ?? "127.0.0.1";
 const port = Number(process.env.PORT ?? "4021");
 
@@ -57,7 +60,7 @@ if (process.env.FACILITATOR_URL) {
     deposit,
   });
 }
-mountEngagements(app, { deposit });
+mountEngagements(app, { deposit, depositMin, depositMax });
 mountOnboarding(app);
 if (process.env.COORDINATOR === "1") {
   const { startCoordinator } = await import("./lib/coordinator.mjs");
