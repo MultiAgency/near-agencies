@@ -48,7 +48,7 @@ Decided by the owner, 2026-10-02; the approval gate added 2026-10-04 (#77).
 - CODEOWNERS: `* @MultiAgency/internal @jlwaugh`; today's money and permission paths `@jlwaugh @MultiAgency/internal`; what steers agents and reviews — `/AGENTS.md`, `/CLAUDE.md`, `/REVIEW.md`, `/.claude/` — `@jlwaugh` only, like `/.github/`.
 - `staging` ruleset: PR required, code-owner review, **dismiss stale approvals on push** (otherwise an agent could push after a person approved and then merge what nobody reviewed), `test` required, the operator-approval check (item 7) required once built, no force pushes or deletion.
 - `main` ruleset: as today, including `update`, so only an org admin merges.
-- Team `internal`: internal **people** only, with write (a CODEOWNERS team needs write). Agents are in no team (owner decision, 2026-10-05): each gets write on its own account, and since CODEOWNERS vouches only the file's own logins, OWNER and team `internal`, an agent can merge but never count as reviewers — the roster says who they are.
+- Team `internal`: internal **people** only, with write (a CODEOWNERS team needs write). Agents are in no team (owner decision, 2026-10-05): each gets write on its own account, and since CODEOWNERS vouches only the file's own logins, OWNER and team `internal`, an agent can merge but never counts as a reviewer — the roster says who they are.
 
 **Switching over:**
 1. Create `staging` from `main`, and make it the default branch. Done 2026-10-03.
