@@ -19,9 +19,10 @@ const BOARD = "/repos/MultiAgency/kanban-sandbox";
 
 // One board at a time: the roster fixture (npm test's ROSTER_FILE) knows
 // multi-agency as an agent and jlwaugh as a person; everything else the stub
-// serves. Teams maps `team/login` to 204 (member), 404 (not), or another
-// status (the read failed); roles maps a login to its collaborator role.
-let epics, issues, comments, threads, roles, teams, createFails, self;
+// serves. Teams maps `team/login` to a membership body ({state: "active"} or
+// {state: "pending"}), or to a status (404 not a member, another = the read
+// failed); roles maps a login to its collaborator role.
+let epics, issues, comments, threads, roles, teams, createFails, commentsFail, self;
 
 const reset = () => {
   epics = [];
@@ -31,6 +32,7 @@ const reset = () => {
   roles = {};
   teams = {};
   createFails = 0;
+  commentsFail = 0;
   self = "jlwaugh";
 };
 
@@ -41,6 +43,7 @@ const jobRequest = (number, login, title, block, brief = "Build the internal das
   title,
   state: "open",
   labels: [],
+  created_at: "2026-10-05T00:00:00Z",
   html_url: `https://github.com/MultiAgency/kanban-sandbox/issues/${number}`,
   body: `${brief}\n\n\`\`\`job-request\n${JSON.stringify(block)}\n\`\`\``,
 });
@@ -67,15 +70,17 @@ function serveBoard() {
     }
     if ((m = /^\/orgs\/MultiAgency\/teams\/([\w-]+)\/memberships\/([\w.-]+)$/.exec(u.pathname)) && method === "GET") {
       const answer = teams[`${m[1]}/${m[2]}`];
-      if (answer === 204) return new Response(null, { status: 204 });
-      return json({ message: "boom" }, answer ?? 404);
+      if (answer && typeof answer === "object") return json(answer);
+      if (answer && answer !== 404) return json({ message: "boom" }, answer);
+      return json({ message: "Not Found" }, 404);
     }
     if ((m = /^\/repos\/[^/]+\/[^/]+\/collaborators\/([^/]+)\/permission$/.exec(u.pathname)) && method === "GET") {
       return json({ role_name: roles[m[1]] ?? "read" });
     }
     if (method === "POST" && u.pathname === `${BOARD}/issues`) {
       if (createFails) { createFails -= 1; return json({ message: "boom" }, 500); }
-      const epic = { number: 500 + epics.length, state: "open", user: { login: BOT }, html_url: `https://github.com/MultiAgency/kanban-sandbox/issues/${500 + epics.length}`, ...JSON.parse(options.body) };
+      const opened = JSON.parse(options.body);
+      const epic = { number: 500 + epics.length, state: "open", user: { login: BOT }, html_url: `https://github.com/MultiAgency/kanban-sandbox/issues/${500 + epics.length}`, ...opened, labels: opened.labels.map(name => ({ name })) };
       epic.html_url = `https://github.com/MultiAgency/kanban-sandbox/issues/${epic.number}`;
       epics.push(epic);
       issues[epic.number] = epic;
@@ -84,6 +89,7 @@ function serveBoard() {
     if ((m = /^\/repos\/[^/]+\/[^/]+\/issues\/(\d+)\/comments$/.exec(u.pathname))) {
       const thread = (threads[Number(m[1])] ??= []);
       if (method === "POST") {
+        if (commentsFail) { commentsFail -= 1; return json({ message: "boom" }, 500); }
         const posted = { number: Number(m[1]), user: { login: BOT }, ...JSON.parse(options.body) };
         comments.push(posted);
         thread.push(posted);
@@ -123,6 +129,7 @@ describe("job requests", () => {
     assert.equal(engagement.repo, "MultiAgency/legion-social");
     assert.equal(engagement.deposit.amount, "0");
     assert.equal(engagement.deposit.transaction, undefined);
+    assert.equal(engagement.request, 800, "the block records the request that opened the job");
     assert.match(epic.body, /opened by @jlwaugh with no deposit/);
     assert.match(epic.body, /Build the internal dashboard/);
     assert.ok(comments[0].body.includes(`your job is open with no deposit: ${epic.html_url}.`),
@@ -133,13 +140,24 @@ describe("job requests", () => {
 
   test("an internal member's request opens a job too", async () => {
     reset();
-    teams["internal/intern"] = 204;
+    teams["internal/intern"] = { state: "active" };
     issues[801] = jobRequest(801, "intern", "Build the other thing", {});
     serveBoard();
     await settle();
     assert.equal(epics.length, 1);
     assert.equal(fenced(epics[0].body, "engagement").org, "intern");
     assert.equal("repo" in fenced(epics[0].body, "engagement"), false);
+  });
+
+  test("a pending invite to team internal is not a member yet", async () => {
+    reset();
+    teams["internal/intern"] = { state: "pending" };
+    issues[817] = jobRequest(817, "intern", "Invited, not active", {});
+    serveBoard();
+    await settle();
+    assert.equal(epics.length, 0);
+    assert.match(comments[0].body, /only a MultiAgency owner or an active member of team internal/);
+    assert.equal(issues[817].state_reason, "not_planned");
   });
 
   test("an outsider is refused with the reason, and the request closes as not planned", async () => {
@@ -161,7 +179,7 @@ describe("job requests", () => {
   test("a roster agent is refused even when an owner and on team internal", async () => {
     reset();
     roles[BOT] = "admin";
-    teams[`internal/${BOT}`] = 204;
+    teams[`internal/${BOT}`] = { state: "active" };
     issues[803] = jobRequest(803, BOT, "The agent's own job", {});
     serveBoard();
     await settle();
@@ -252,6 +270,29 @@ describe("job requests", () => {
     assert.equal(epics.length, 1);
     assert.equal(comments.length, 1);
     assert.equal(issues[811].state, "closed");
+  });
+
+  test("an epic whose answer never landed is found by its request, never opened twice", async () => {
+    reset();
+    roles.jlwaugh = "admin";
+    issues[818] = jobRequest(818, "jlwaugh", "Answer lost", {});
+    serveBoard();
+    await settle();
+    assert.equal(epics.length, 1);
+    assert.equal(fenced(epics[0].body, "engagement").request, 818);
+    // GitHub lost the answer comment: the thread holds nothing of the bot's.
+    threads[818] = [];
+    comments.length = 0;
+    issues[818].state = "open";
+    commentsFail = 1;
+    await settle();
+    assert.equal(epics.length, 1, "the epic the block records is found, not opened twice");
+    assert.equal(comments.length, 0);
+    assert.equal(issues[818].state, "open", "the close waits until the answer lands");
+    await settle();
+    assert.equal(epics.length, 1);
+    assert.equal(comments.length, 1);
+    assert.equal(issues[818].state, "closed");
   });
 
   test("GitHub refusing the epic leaves the request open and unanswered for the next cycle", async () => {
