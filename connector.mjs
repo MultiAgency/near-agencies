@@ -43,6 +43,13 @@ const PULL = /https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
 const INTERVAL_MS = 30_000;
 const DELIVERABLE = "**Deliverable**";
 
+// Before any board read: the invocation, for an operator wiring the connector
+// up — no token is read, nothing is fetched.
+if (process.argv.includes("--help")) {
+  console.log("usage: GITHUB_TOKEN_FILE=... node connector.mjs [--once]");
+  process.exit(0);
+}
+
 const login = await me();
 const board = await repoId();
 // The roster may include registry members (a no-op without REGISTRY_URL),
