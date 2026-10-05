@@ -66,12 +66,14 @@ const crossReferenced = (prNumber, at) => ({
   created_at: at,
   source: { issue: { number: prNumber, html_url: `https://github.com/${REG}/pull/${prNumber}`, pull_request: { number: prNumber } } },
 });
-const pull = (number, { state = "open", merged = false, user = "jlwaugh" } = {}) => ({
+const pull = (number, { state = "open", merged = false, user = "jlwaugh", base = "staging", body = `Closes ${SOURCE}` } = {}) => ({
   number,
   state,
   merged,
   user: { login: user },
+  base: { ref: base },
   html_url: `https://github.com/${REG}/pull/${number}`,
+  body,
 });
 
 // An auto job as the sweep leaves it, shaped for the close-on-merge tests:
@@ -485,6 +487,41 @@ describe("closing an auto task on the merge", () => {
     await settle();
     assert.equal(boardIssues[900].state, "open", "another's pull request is not the claimant's delivery");
     assert.equal(boardThreads[`${BOARD}#900`].length, 1, "nothing is said where nothing closes");
+  });
+
+  test("a merged pull request that closes nothing, or merges into another branch, closes nothing", async () => {
+    build({ pr: pull(9, { state: "closed", merged: true, body: "Drive-by refactor, linked to no issue." }) });
+    await settle();
+    assert.equal(boardIssues[900].state, "open", "an unrelated merged pull request is not this task's delivery");
+
+    build({ pr: pull(9, { state: "closed", merged: true, base: "main" }) });
+    await settle();
+    assert.equal(boardIssues[900].state, "open", "the pull request merges into the repository's base branch, or it is not done");
+
+    // A different closing keyword, or a bare issue number, still names the
+    // issue the way GitHub closes it.
+    build({ pr: pull(9, { state: "closed", merged: true, body: "fixes #600" }) });
+    await settle();
+    assert.equal(boardIssues[900].state, "closed");
+  });
+
+  test("a body edited after the label opens nothing until the label is applied again", async () => {
+    reset();
+    roles.jlwaugh = "admin";
+    regIssues[REG] = [registryIssue(615)];
+    regEvents[`${REG}#615`] = [
+      labeled("jlwaugh", "2026-10-05T00:01:00Z"),
+      { event: "edited", actor: { login: "someone" }, created_at: "2026-10-05T00:05:00Z" },
+    ];
+    serveBoard();
+    await settle();
+    assert.equal(created.length, 0);
+    assert.match(autoJobsHealth().skipped.find(s => s.issue === `${REG}#615`).why, /its body changed after the label was applied/);
+    // The owner reviews the edit and applies the label again: that vouches
+    // for the issue as it now stands, and the job opens.
+    regEvents[`${REG}#615`].push(labeled("jlwaugh", "2026-10-05T00:06:00Z"));
+    await settle();
+    assert.equal(created.length, 2);
   });
 
   test("a task without a handoff yet waits, and one with an unreadable handoff is answered", async () => {
