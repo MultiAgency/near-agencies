@@ -4,7 +4,7 @@
 // so a non-zero exit fails the PR.
 //
 //   OWNER       logins whose approval always counts, comma-separated
-//   ORG_TOKEN   a token with the org's "Members: read", for the team reads
+//   ORG_TOKEN   a token with the org's "Members: read", for the team read
 //   ROSTER_URL  the coordinator serving GET /api/roster/:login
 //
 // GITHUB_EVENT_PATH carries the pull_request or pull_request_review event
@@ -31,11 +31,10 @@ import {
 
 const REVIEW_PAGES = 10;
 const TEAM_PAGES = 10;
-// The teams behind CODEOWNERS' `@MultiAgency/internal` entry: a member of
-// `internal` is one of the people whose approvals count, and a member of
-// `internal-agents` is an agent even where a roster record claims a person.
+// The team behind CODEOWNERS' `@MultiAgency/internal` entry: a member of
+// `internal` is one of the people whose approvals count. Agents are in no
+// team; the roster says who they are.
 const INTERNAL_TEAM = "internal";
-const INTERNAL_AGENTS_TEAM = "internal-agents";
 
 try {
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH ?? "", "utf8"));
@@ -45,20 +44,19 @@ try {
   const author = pr.user.login;
   const base = pr.base.ref;
   const org = event.repository?.owner?.login ?? String(process.env.GITHUB_REPOSITORY ?? "").split("/")[0];
-  // A fork's run gets no repository secrets, so its team reads cannot
-  // succeed — GitHub's design, not a read that failed. The unread teams
-  // pass through and the verdict judges the fork on what needs no org
+  // A fork's run gets no repository secrets, so its team read cannot
+  // succeed — GitHub's design, not a read that failed. The unread team
+  // passes through and the verdict judges the fork on what needs no org
   // token (lib/operator-approval.mjs); a same-repo PR fails closed when a
   // team cannot be read.
   const fork = event.pull_request.head.repo?.full_name !== event.repository?.full_name;
 
-  const [reviews, codeowners, builders, fromApi, internal, internalAgents] = await Promise.all([
+  const [reviews, codeowners, builders, fromApi, internal] = await Promise.all([
     allReviews(number),
     textAtBase(".github/CODEOWNERS", base),
     buildersAtBase(base),
     rosterApi(author),
     teamMembers(org, INTERNAL_TEAM),
-    teamMembers(org, INTERNAL_AGENTS_TEAM),
   ]);
   if (codeowners === null) {
     console.log("CODEOWNERS could not be read at the base branch, so only the owner's and the internal team's approvals count");
@@ -74,7 +72,7 @@ try {
   const unvouched = unrecognizedApprovals(standing, codeownerUsers, owners, internal ?? []);
   const roster = combineRoster(builders ? rosterRecord(builders, author) : { status: "unreadable" }, fromApi);
 
-  const { outcome, reason } = operatorApproval({ base, author, roster, owners, approvals, unvouched, internal, internalAgents, fork });
+  const { outcome, reason } = operatorApproval({ base, author, roster, owners, approvals, unvouched, internal, fork });
   console.log(`operator-approval ${outcome}: ${reason}`);
   console.log(`  author @${author}, base ${base}, approvals counted: ${approvals.length ? approvals.map(login => `@${login}`).join(", ") : "none"}, roster: ${roster.status}`);
   process.exit(outcome === "pass" ? 0 : 1);
