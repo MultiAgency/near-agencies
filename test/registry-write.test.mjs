@@ -24,7 +24,7 @@ process.env.REGISTRY_TOKEN = TOKEN;
 const { putMember, putMemberBody, registryHealth } = await import("../lib/roster.mjs");
 const { coordinatorHealth, cycle } = await import("../lib/coordinator.mjs");
 const { joinIssue, joinMessage, newNonce, RECIPIENT } = await import("../lib/onboarding.mjs");
-const { planWrites } = await import("../scripts/registry-backfill.mjs");
+const { planWrites, joinIssueAdmission } = await import("../scripts/registry-backfill.mjs");
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
@@ -371,7 +371,7 @@ const backfillRun = async (args, env, cwd) => {
 };
 
 describe("the registry backfill", () => {
-  test("orders people first with the agents' operators first, agents last; logins lowercase; operator exactly on agents", () => {
+  test("orders people first with the agents' operators first, agents last; logins lowercase; operator exactly on agents", async () => {
     const commitFor = () => ({ url: "https://github.com/MultiAgency/near-agencies/commit/abc", date: "2026-09-27T23:18:01-04:00", sha: "abc" });
     const members = [
       rosterRecord("Stray-Human"),
@@ -380,7 +380,7 @@ describe("the registry backfill", () => {
       rosterRecord("Second-Agent", { kind: "agent", operator: "Operator-Two", nearAccount: "second.agent.testnet" }),
       rosterRecord("Operator-Two"),
     ];
-    const { writes, problems, fallbacks } = planWrites(members, { commitFor });
+    const { writes, problems, fallbacks } = await planWrites(members, { commitFor });
     assert.deepEqual(writes.map(w => w.login), ["operator-one", "operator-two", "stray-human", "some-agent", "second-agent"]);
     assert.equal(fallbacks.length, 10, "every entry without its own proof or stamp uses the commit fallback");
     assert.deepEqual(problems, []);
@@ -391,7 +391,7 @@ describe("the registry backfill", () => {
     assert.deepEqual([...new Set(bodies.map(b => b.network))], ["testnet"]);
   });
 
-  test("records with a join issue keep it; problems are listed, never written", () => {
+  test("records with a join issue keep it; problems are listed, never written", async () => {
     const members = [
       rosterRecord("joined", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/42", admittedAt: "2026-09-29T23:56:41-04:00" }),
       rosterRecord("no-kind", { kind: undefined }),
@@ -400,7 +400,7 @@ describe("the registry backfill", () => {
       rosterRecord("grounded", { nearAccount: undefined }),
       rosterRecord("orphan-agent", { kind: "agent", operator: "grounded", nearAccount: "orphan.testnet", proof: "https://github.com/MultiAgency/kanban-sandbox/issues/9", admittedAt: "2026-09-30T00:00:00.000Z" }),
     ];
-    const { writes, problems } = planWrites(members, { commitFor: () => null });
+    const { writes, problems } = await planWrites(members, { commitFor: () => null });
     assert.deepEqual(writes.map(w => w.login), ["joined"]);
     assert.equal(writes[0].proof.from, "record");
     assert.equal(writes[0].admittedAt.from, "record");
@@ -412,13 +412,13 @@ describe("the registry backfill", () => {
     assert.match(problems[4], /orphan-agent.*grounded has no writable record/, "an agent whose operator will not be written is a problem, not a clean write");
     // An account of the other network is never written for this one: the
     // registry would take it as admitted where it was not.
-    const foreign = planWrites([rosterRecord("mainlander", { nearAccount: "mainlander.near" })], { commitFor: () => null });
+    const foreign = await planWrites([rosterRecord("mainlander", { nearAccount: "mainlander.near" })], { commitFor: () => null });
     assert.deepEqual(foreign.writes, []);
     assert.match(foreign.problems[0], /mainlander\.near is a mainnet account, not testnet/);
     // Nothing can prove an entry with no join issue and no commit history.
-    const unprovable = planWrites([rosterRecord("mystery")], { commitFor: () => null });
+    const unprovable = await planWrites([rosterRecord("mystery")], { commitFor: () => null });
     assert.deepEqual(unprovable.writes, []);
-    assert.match(unprovable.problems[0], /mystery.*no join issue.*no commit/);
+    assert.match(unprovable.problems[0], /mystery: no proof and no admission date on the record, and no commit that added it to roster\.json/, "the problem names both missing halves");
   });
 
   test("a dry run prints every write and the commit fallback and writes nothing; a real run writes people before agents", async () => {
@@ -448,7 +448,7 @@ describe("the registry backfill", () => {
     const rootSha = gitIn("rev-parse", "HEAD").trim();
     rosterIn([
       rosterRecord("pat"),
-      rosterRecord("rob-agent", { kind: "agent", operator: "pat", nearAccount: "rob.agent.testnet", proof: "https://github.com/MultiAgency/kanban-sandbox/issues/18" }),
+      rosterRecord("rob-agent", { kind: "agent", operator: "pat", nearAccount: "rob.agent.testnet", proof: "https://github.com/MultiAgency/kanban-sandbox/issues/18", admittedAt: "2026-09-28T03:00:00.000Z" }),
     ]);
     gitIn("add", ".");
     dated("commit", "-m", "rob-agent joins");
@@ -638,8 +638,8 @@ describe("the registry backfill", () => {
     const env = { REGISTRY_URL: "https://registry.test/api/rpc/builders", ROSTER_FILE: join(shallow, "roster.json"), ADMITTED_FILE: store };
     const dry = await backfillRun(["--dry-run"], env, shallow);
     assert.match(dry, /0 members to write/);
-    assert.match(dry, /dee: no join issue on the record and no commit that added it to roster\.json/);
-    assert.match(dry, /pat: no join issue on the record and no commit that added it to roster\.json/);
+    assert.match(dry, /dee: no proof and no admission date on the record, and no commit that added it to roster\.json/);
+    assert.match(dry, /pat: no proof and no admission date on the record, and no commit that added it to roster\.json/);
     assert.doesNotMatch(dry, /Using the commit fallback/);
     assert.doesNotMatch(dry, /near-agencies\/commit\//);
 
@@ -656,7 +656,7 @@ describe("the registry backfill", () => {
     assert.match(deep, /1 member to write/);
     assert.match(deep, /^1\. pat —/m);
     assert.match(deep, /pat: proof from the commit that added the roster entry/);
-    assert.match(deep, /dee: no join issue on the record and no commit that added it to roster\.json/);
+    assert.match(deep, /dee: no proof and no admission date on the record, and no commit that added it to roster\.json/);
 
     // The same history read whole proves both entries: the fallback credits
     // each to the commit that added it.
@@ -732,5 +732,88 @@ describe("the registry backfill", () => {
     } finally {
       server.close();
     }
+  });
+
+  test("a record whose proof is a board join issue takes its admission date from the issue", async () => {
+    const closed = "2026-09-30T12:34:56.000Z";
+    const issues = {
+      18: { state: "closed", state_reason: "completed", closed_at: closed },
+      19: { state: "open", state_reason: null, closed_at: null },
+      20: { state: "closed", state_reason: "not_planned", closed_at: "2026-10-02T00:00:00.000Z" },
+    };
+    const reads = [];
+    globalThis.fetch = async url => {
+      const match = String(url).match(/^https:\/\/api\.github\.com\/repos\/MultiAgency\/kanban-sandbox\/issues\/(\d+)$/);
+      if (!match) throw new Error(`unexpected fetch: ${url}`);
+      reads.push(match[1]);
+      return new Response(JSON.stringify(issues[match[1]] ?? {}), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    const { writes, problems } = await planWrites([
+      rosterRecord("dated", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/18" }),
+      rosterRecord("waiting", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/19" }),
+      rosterRecord("refused", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/20" }),
+      rosterRecord("own-stamp", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/18", admittedAt: "2026-10-01T00:00:00.000Z" }),
+      rosterRecord("elsewhere", { proof: "https://github.com/MultiAgency/near-agencies/issues/55" }),
+    ], { commitFor: () => null, joinIssueAdmission });
+    assert.deepEqual(reads, ["18", "19", "20"], "only records without their own stamp have their board join issue read — own-stamp and elsewhere's proof is no board join issue");
+    assert.deepEqual(writes.map(w => w.login), ["dated", "own-stamp"]);
+    assert.equal(writes[0].proof.from, "record", "the join issue stays the proof");
+    assert.equal(writes[0].admittedAt.value, closed, "the stamp is the issue's close as completed");
+    assert.equal(writes[0].admittedAt.from, "join issue");
+    assert.equal(writes[1].admittedAt.from, "record", "a record with its own stamp keeps it");
+    assert.equal(problems.length, 3);
+    assert.match(problems[0], /waiting: no admission date — its join issue \(#19\) is still open — not written/);
+    assert.match(problems[1], /refused: no admission date — its join issue \(#20\) was closed as not planned — not written/);
+    assert.match(problems[2], /elsewhere: no admission date on the record, and no commit that added it to roster\.json/, "a proof that names no board join issue gets no date from one");
+  });
+
+  test("a join issue the board cannot answer about is a reported problem, not a crash", async () => {
+    globalThis.fetch = async () => new Response(JSON.stringify({ message: "board is down" }), { status: 500, headers: { "content-type": "application/json" } });
+    const { writes, problems } = await planWrites([
+      rosterRecord("shadowed", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/21" }),
+      rosterRecord("stamped", { proof: "https://github.com/MultiAgency/near-agencies/issues/55", admittedAt: "2026-10-01T00:00:00.000Z" }),
+    ], { commitFor: () => null, joinIssueAdmission });
+    assert.deepEqual(writes.map(w => w.login), ["stamped"], "one unreadable issue does not take the other records down");
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /shadowed: its join issue \(#21\) could not be read to date the admission/);
+    assert.match(problems[0], /board is down/);
+  });
+
+  test("--admitted-store reads the store it is given; a missing one stops the run like the default path", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "backfill-argstore-"));
+    const rosterFile = join(repo, "roster.json");
+    writeFileSync(rosterFile, JSON.stringify({ builders: [rosterRecord("pat", {
+      proof: "https://github.com/MultiAgency/near-agencies/issues/55",
+      admittedAt: "2026-10-01T00:00:00.000Z",
+    })] }));
+    const copy = join(repo, "staging-admitted.json"); // a copy of the coordinator's store
+    writeFileSync(copy, JSON.stringify({ builders: [rosterRecord("boardmate", {
+      proof: "https://github.com/MultiAgency/near-agencies/issues/56",
+      admittedAt: "2026-10-02T00:00:00.000Z",
+    })] }));
+    const missing = join(repo, ".data", "roster-admitted.testnet.json"); // never created
+    // ADMITTED_FILE (the test file's empty scratch store) stays set in the
+    // environment: the flag, not it, names the store these runs read.
+    const env = { REGISTRY_URL: "https://registry.test/api/rpc/builders", ROSTER_FILE: rosterFile };
+
+    const dry = await backfillRun(["--dry-run", "--admitted-store", copy], env, repo);
+    assert.match(dry, /admitted store .*staging-admitted\.json: 1 record/, "the run reads the store the flag names, not ADMITTED_FILE's");
+    assert.match(dry, /2 members to write/);
+    assert.match(dry, /^1\. pat —/m);
+    assert.match(dry, /^2\. boardmate —/m);
+    assert.match(dry, /dry run: nothing was written/);
+
+    const stopped = await backfillRun(["--dry-run", "--admitted-store", missing], env, repo);
+    assert.match(stopped, /the admitted store is missing/);
+    assert.ok(stopped.includes(missing), "the error names the path the flag gave");
+    assert.doesNotMatch(stopped, /members to write/);
+
+    const contradictory = await backfillRun(["--dry-run", "--admitted-store", copy, "--no-admitted-store"], env, repo);
+    assert.match(contradictory, /--admitted-store and --no-admitted-store contradict each other/);
+    assert.doesNotMatch(contradictory, /members to write/);
+
+    const bare = await backfillRun(["--dry-run", "--admitted-store"], env, repo);
+    assert.match(bare, /--admitted-store needs a path/);
+    assert.doesNotMatch(bare, /members to write/);
   });
 });
