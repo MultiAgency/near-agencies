@@ -27,6 +27,15 @@ const seatRepo = seat => {
   }
 };
 
+// Whether a review task waits on task `n`: an open seat labelled
+// skill:review whose "Depends on:" list names it (lib/team.mjs writes
+// `- [ ] #n`). Its sign-off can still ask for a revision, which must land in
+// an open pull request, so a reviewed delivery never turns on auto-merge.
+const reviewedBy = (seats, n) =>
+  seats.some(s => s.number !== n &&
+    (s.labels ?? []).some(label => (label?.name ?? label) === "skill:review") &&
+    [...(s.body ?? "").matchAll(/^- \[[ x]\] #(\d+)/gm)].some(m => Number(m[1]) === n));
+
 // When a task last became claimable: its latest `ready` label, or its creation.
 async function readySince(github, issue) {
   const events = await github(`/issues/${issue.number}/events?per_page=100`);
@@ -39,7 +48,8 @@ async function readySince(github, issue) {
  * the coordinator's login, the only ```changes author a round counts from
  * (trust.mjs). A deliver result carries `round`, the credited ```changes
  * comment a revision is to address, so the delivery prompt can name it
- * instead of "the latest", which a stranger's later block would be. With
+ * instead of "the latest", which a stranger's later block would be, and
+ * `reviewed`, whether a review task waits on this one. With
  * dryRun nothing is posted: --dry-run only names the task. `toolchain` is
  * what this worker's image carries (WORKER_TOOLCHAIN, the Dockerfile's
  * TOOLCHAIN): a code seat whose repository's checks the image cannot run —
@@ -92,7 +102,7 @@ export async function nextTask({ github, comment, login, skills, codeMode, bot, 
         continue;
       }
     }
-    return { action: "deliver", seat, revision: since !== -1, round: since === -1 ? null : thread[since] };
+    return { action: "deliver", seat, revision: since !== -1, round: since === -1 ? null : thread[since], reviewed: reviewedBy(seats, seat.number) };
   }
   for (const seat of seats.filter(s => mayClaim(s, skills))) {
     // A repository this run cannot ship is never claimed: outside the

@@ -93,6 +93,30 @@ describe("accessFor", () => {
   });
 });
 
+describe("whether a review task waits on the delivered task", () => {
+  // The delivered seat's skill doesn't matter to the answer, so a writing
+  // seat keeps code mode (and its repository checks) out of the test.
+  const code = { number: 46, title: "Task", body: "```terms\n{}\n```", labels: [{ name: "skill:writing" }], assignees: [{ login: "agency-builder" }] };
+  const review = deps => ({ number: 47, title: "Review", body: `\`\`\`terms\n{}\n\`\`\`\n\nDepends on:\n${deps}`, labels: [{ name: "skill:review" }, { name: "blocked" }], assignees: [] });
+  const pick = async seats => {
+    const { nextTask } = await import("../agents/claude-worker/next-task.mjs");
+    return nextTask({
+      github: async path => (path.startsWith("/issues?") ? seats : []),
+      comment: async () => {}, login: "agency-builder", skills: ["code"], codeMode: null, bot: "multi-agency",
+    });
+  };
+
+  test("a skill:review seat listing the task in Depends on marks it reviewed", async () => {
+    assert.equal((await pick([code, review("- [ ] #46")])).reviewed, true);
+    assert.equal((await pick([code, review("- [x] #46")])).reviewed, true);
+  });
+
+  test("with no review seat, or one that waits on another task, the task is unreviewed", async () => {
+    assert.equal((await pick([code])).reviewed, false);
+    assert.equal((await pick([code, review("- [ ] #45")])).reviewed, false);
+  });
+});
+
 describe("allowed tools per CODE_ACCESS", () => {
   const n = 14;
   const login = "near-builder";
@@ -114,6 +138,7 @@ describe("allowed tools per CODE_ACCESS", () => {
       "Bash(git push -u origin task-14)",
       "Bash(npm ci)", "Bash(npm run check)", "Bash(npm test)",
       "Bash(gh pr create:*)", "Bash(gh pr view:*)",
+      "Bash(gh pr merge task-14 --repo MultiAgency/near-agencies --auto --squash)",
     ]);
   });
 
@@ -208,6 +233,19 @@ describe("the shipping instructions", () => {
     assert.match(text, /`git clone --branch staging https:\/\/github\.com\/MultiAgency\/near-agencies\.git \.`/);
     assert.match(text, /`git checkout -b task-14`/);
     assert.match(text, /--head task-14 --base staging/);
+  });
+
+  test("a reviewed task in branch mode neither says nor allows auto-merge: a later round needs the pull request open", () => {
+    assert.equal(ship("branch", near, 14, "near-builder", false, true).join("\n").includes("gh pr merge"), false);
+    assert.equal(allowedTools("branch", near, 14, "near-builder", true).some(t => t.includes("gh pr merge")), false);
+  });
+
+  test("branch mode turns on auto-merge for its own pull request; fork mode leaves the merge to a person", () => {
+    assert.match(ship("branch", near, 14, "near-builder", false).join("\n"), /`gh pr merge task-14 --repo MultiAgency\/near-agencies --auto --squash`/);
+    for (const [repo, access] of [[near, "fork"], [legion, "fork"]]) {
+      assert.equal(ship(access, repo, 14, "near-builder", false).join("\n").includes("gh pr merge"), false);
+      assert.equal(allowedTools(access, repo, 14, "near-builder").some(t => t.includes("gh pr merge")), false);
+    }
   });
 
   test("a revision checks out the task branch and opens no second pull request, in either mode", () => {

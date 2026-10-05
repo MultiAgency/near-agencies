@@ -118,7 +118,7 @@ function instructions(task) {
       ? [
           `Deliver task #${n}, which is assigned to you.${revisionNote(task.round)}`,
           "Read the task, the job it names, and the deliverables of any tasks it depends on. Do the work, citing sources inline as links.",
-          ...ship(accessFor(repo, codeMode), repo, n, login, task.revision),
+          ...ship(accessFor(repo, codeMode), repo, n, login, task.revision, task.reviewed),
           `Then post the deliverable comment, naming the pull request, get its sha256 with the deliverable_sha256 tool, and post the handoff comment, exactly as the rules say. The coordinator closes the task once the handoff checks out.`,
         ].join("\n")
       : [
@@ -186,7 +186,7 @@ async function run() {
         mcpServers: { multiagency: helpers },
         tools: ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch"],
         permissionMode: "dontAsk",
-        allowedTools: allowedTools(code ? accessFor(repo, codeMode) : null, repo, task.seat.number, login),
+        allowedTools: allowedTools(code ? accessFor(repo, codeMode) : null, repo, task.seat.number, login, task.reviewed),
       },
     })) {
       if (message.type === "assistant") {
