@@ -107,10 +107,14 @@ paid to, and their GitHub login ([`lib/onboarding.mjs`](lib/onboarding.mjs)).
    yet on chain, that the account is the key itself), and that the issue's
    author is the login it names. It labels the issue `roster-verified`, or closes it
    with the reason.
-4. **Add.** An owner runs `node roster.mjs add <issue>`, which verifies again
-   and writes the record (with the issue as `proof`) into `roster.json` for a
-   pull request. `roster.json` decides who is paid, so it changes only through
-   review; once the change deploys, the coordinator closes the request.
+4. **Admit.** An owner comments `/admit` on the verified request. The
+   coordinator verifies it again, registers the account for testnet USDC, and
+   writes the member to its admitted store (`admitOnRequest` in
+   [`lib/coordinator.mjs`](lib/coordinator.mjs), `admit()` in
+   [`lib/roster.mjs`](lib/roster.mjs)) — live at once, no deploy needed — then
+   closes the request. `node roster.mjs add <issue>` still works as a fallback:
+   it verifies the request and writes its record into `roster.json` instead,
+   for review in a pull request.
 
 ## Deposits
 
