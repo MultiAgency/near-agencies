@@ -8,6 +8,11 @@ import { afterEach, describe, test } from "node:test";
 // /user answers an owner for every test. registry-write.test.mjs covers the
 // run beside the coordinator, whose token is the coordinator's own.
 
+// Pinned before the lib loads: CI has no gh login to fall back to, and the
+// token's value itself reaches nothing — every request this file makes is
+// answered by the stub below.
+process.env.GITHUB_TOKEN = "test-token";
+
 const realFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = realFetch;
