@@ -60,7 +60,6 @@ jobs:
       contents: read
       pull-requests: write
       issues: write
-      id-token: write
     env:
       HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
     steps:
@@ -77,9 +76,11 @@ jobs:
 
       # The reviewer's memory (#116): the findings list its last round left,
       # every inline thread with its replies, and the change since that round.
-      # Read here, not by the model. Only claude[bot] can post the list, so a
-      # pull request can't plant one; a list that doesn't parse means a full
-      # review, never a skipped one.
+      # Read here, not by the model, and only from github-actions[bot], the
+      # account the review posts as; a list that doesn't parse means a full
+      # review, never a skipped one. A same-repo pull request's own workflow
+      # can also post as github-actions[bot], so the list steers the review
+      # but must not be what lets the gate approve (#117).
       - name: Earlier rounds
         if: env.HAS_KEY == 'true' && github.event.pull_request
         env:
@@ -94,7 +95,7 @@ jobs:
           node -e '
             const fs = require("node:fs");
             const summaries = JSON.parse(fs.readFileSync("review/comments.json", "utf8")).flat()
-              .filter(c => c.user.login === "claude[bot]").map(c => c.body).join("\n");
+              .filter(c => c.user.login === "github-actions[bot]").map(c => c.body).join("\n");
             const lists = [...summaries.matchAll(/<!-- ai-review-ledger (\{.*?\}) -->/gs)];
             let ledger = { sha: null, findings: [] };
             try { if (lists.length) ledger = JSON.parse(lists.at(-1)[1]); } catch {}
@@ -115,6 +116,11 @@ jobs:
         if: env.HAS_KEY == 'true'
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # The job's own token, not the Claude app's: Anthropic's token
+          # exchange rejects pull_request_target runs ("Invalid OIDC token",
+          # anthropics/claude-code-action#713). The review posts as
+          # github-actions[bot].
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
