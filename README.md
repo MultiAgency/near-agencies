@@ -301,3 +301,5 @@ with `payout.mjs reconcile`. Before mainnet use:
 - **Two hand-written roster entries:** the first two records predate signed
   joining and carry no `proof`.
 - **Trezu is mainnet-only,** so testnet approvals use `payout.mjs approve`.
+
+Owner decisions: [docs/decisions.md](docs/decisions.md).
