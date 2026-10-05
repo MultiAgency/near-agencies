@@ -13,6 +13,7 @@ import {
   stagingApproval,
   testVerdict,
   uncoveredPath,
+  verdictArtifactNumbers,
   verdictFrom,
 } from "../lib/staging-approval.mjs";
 
@@ -156,16 +157,27 @@ describe("authorAllowed", () => {
 });
 
 describe("openCandidates", () => {
-  test("the event's pull requests and the commit's, deduplicated", () => {
+  test("the event's pull requests, the commit's, and the verdict artifacts', deduplicated", () => {
     assert.deepEqual(
-      openCandidates([{ number: 12 }, { number: 7 }], [{ number: 7, state: "open" }, { number: 9 }]),
-      [12, 7, 9],
+      openCandidates([{ number: 12 }, { number: 7 }], [{ number: 7, state: "open" }, { number: 9 }], [9, 15]),
+      [12, 7, 9, 15],
     );
   });
 
   test("entries without a number count for nothing", () => {
     assert.deepEqual(openCandidates([{}, null], [undefined]), []);
     assert.deepEqual(openCandidates(), []);
+  });
+});
+
+describe("verdictArtifactNumbers", () => {
+  test("reads the pull request number out of artifacts named for it", () => {
+    assert.deepEqual(
+      verdictArtifactNumbers([{ name: "ai-review-verdict-108" }, { name: "ai-review-verdict-12" }, { name: "other" }, { name: "ai-review-verdict-x" }, {}]),
+      [108, 12],
+    );
+    assert.deepEqual(verdictArtifactNumbers([]), []);
+    assert.deepEqual(verdictArtifactNumbers(null), []);
   });
 });
 

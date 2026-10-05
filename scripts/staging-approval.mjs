@@ -31,10 +31,12 @@ import {
   openCandidates,
   stagingApproval,
   testVerdict,
+  verdictArtifactNumbers,
   verdictFrom,
 } from "../lib/staging-approval.mjs";
 
 const FILE_PAGES = 50;
+const FILE_MAX = 3000;
 const CHECK_PAGES = 10;
 const REVIEW_PAGES = 10;
 const RECENT_RUNS = 30;
@@ -53,12 +55,17 @@ try {
   const sha = event.workflow_run?.head_sha;
   if (!sha) throw new Error("the event carries no workflow run with a head SHA");
   // The triggering run's SHA is the pull request's head only for some
-  // events: a pull_request_target run carries the base branch's head
-  // instead. So the candidates come from the event's own association and
-  // GitHub's commit association together, and each is judged on the head
-  // SHA it answers with now, never on this run's.
+  // events: a pull_request_target run carries the base branch's head, and
+  // GitHub matches workflow_run.pull_requests against that SHA, so the run
+  // that finished an AI review names its pull request only through the
+  // verdict artifact it just uploaded. Candidates come from all three
+  // places, and each pull request is judged on the head SHA it answers
+  // with now, never on this run's.
   const commitPulls = await github("GET", `/commits/${sha}/pulls?per_page=100`);
-  const numbers = openCandidates(event.workflow_run.pull_requests, commitPulls);
+  const artifactNumbers = event.workflow_run.name === AI_REVIEW_WORKFLOW.replace(/\.yml$/, "")
+    ? verdictArtifactNumbers(await github("GET", `/actions/runs/${event.workflow_run.id}/artifacts?per_page=100`))
+    : [];
+  const numbers = openCandidates(event.workflow_run.pull_requests, commitPulls, artifactNumbers);
   if (numbers.length === 0) {
     console.log(`staging-approval: no pull request is associated with ${sha}`);
     process.exit(0);
@@ -90,7 +97,7 @@ async function decide(pr) {
   const repo = String(process.env.SANDBOX_REPO ?? "").toLowerCase();
   const org = repo.split("/")[0];
   const [paths, internal, internalAgents, codeowners, test] = await Promise.all([
-    changedFiles(number),
+    changedFiles(pr),
     readTeam(org, INTERNAL_TEAM),
     readTeam(org, INTERNAL_AGENTS_TEAM),
     textAtBase(".github/CODEOWNERS", pr.base.ref),
@@ -143,15 +150,26 @@ async function decide(pr) {
 
 // The pull request's changed files, base against head, every page. A rename
 // lists both its paths: the old one leaves its owner's protection and the
-// new one enters the allowlist, so both must be covered.
-async function changedFiles(number) {
+// new one enters the allowlist, so both must be covered. GitHub lists at
+// most 3000 files and answers nothing for the pages past that, so a change
+// set that large, or one where the pages read do not add up to the pull
+// request's own count, is a read that cannot be completed — it throws, and
+// nothing is approved on a change set nobody saw whole.
+async function changedFiles(pr) {
   const found = [];
+  const names = new Set();
   for (let page = 1; page <= FILE_PAGES; page++) {
-    const batch = await github("GET", `/pulls/${number}/files?per_page=100&page=${page}`);
+    const batch = await github("GET", `/pulls/${pr.number}/files?per_page=100&page=${page}`);
     found.push(...batch.flatMap(file => [file.filename, file.previous_filename]).filter(Boolean));
-    if (batch.length < 100) return found;
+    for (const file of batch) if (file.filename) names.add(file.filename);
+    if (batch.length < 100) {
+      if ((pr.changed_files ?? 0) >= FILE_MAX || names.size !== pr.changed_files) {
+        throw new Error(`pull request #${pr.number} lists ${pr.changed_files} changed files but only ${names.size} were read, so the change set cannot be judged whole`);
+      }
+      return found;
+    }
   }
-  throw new Error(`more than ${FILE_PAGES * 100} changed files on pull request #${number}`);
+  throw new Error(`more than ${FILE_PAGES * 100} changed files on pull request #${pr.number}`);
 }
 
 // A team's members as GitHub answers for it. Team `internal` returning null
