@@ -793,7 +793,7 @@ describe("the registry backfill", () => {
       if (u.includes("/collaborators/")) return new Response(JSON.stringify({ role_name: "read" }), { status: 200, headers: { "content-type": "application/json" } });
       throw new Error(`unexpected fetch: ${url}`);
     };
-    const { writes, problems } = await planWrites([
+    const { writes, problems, fallbacks } = await planWrites([
       rosterRecord("dated", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/18" }),
       rosterRecord("waiting", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/19" }),
       rosterRecord("refused", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/20" }),
@@ -808,22 +808,24 @@ describe("the registry backfill", () => {
       joinIssueAdmission,
     });
     assert.deepEqual(reads, ["18", "19", "20", "22", "23", "24", "25"], "only records without their own stamp have their board join issue read — own-stamp's and elsewhere's proof is no unread board join issue");
-    assert.deepEqual(writes.map(w => w.login), ["dated", "redated", "own-stamp", "elsewhere"]);
+    assert.deepEqual(writes.map(w => w.login), ["dated", "selfclosed", "redated", "overruled", "own-stamp", "elsewhere"]);
     assert.equal(writes[0].proof.from, "record", "the join issue stays the proof");
     assert.equal(writes[0].admittedAt.value, admittedOn18, "the stamp is the board's **Admitted** comment's time");
     assert.equal(writes[0].admittedAt.from, "join issue");
-    assert.equal(writes[1].admittedAt.value, admittedAt, "the stamp is the admission, however the joiner has closed and reopened the issue since");
-    assert.equal(writes[1].admittedAt.from, "join issue");
-    assert.equal(writes[2].admittedAt.from, "record", "a record with its own stamp keeps it");
-    assert.equal(writes[3].proof.from, "record", "a proof outside the board repo is kept");
-    assert.equal(writes[3].admittedAt.value, "2026-09-29T00:00:00.000Z", "its stamp is the commit fallback's, the path rob-agent's stamp once exercised end to end");
-    assert.equal(writes[3].admittedAt.from, "commit");
-    assert.equal(problems.length, 5);
+    assert.equal(writes[1].admittedAt.value, "2026-09-29T00:00:00.000Z", "a stranger's forged **Admitted** comment dates nothing — the commit that added the roster entry does");
+    assert.equal(writes[1].admittedAt.from, "commit");
+    assert.equal(writes[2].admittedAt.value, admittedAt, "the stamp is the admission, however the joiner has closed and reopened the issue since");
+    assert.equal(writes[2].admittedAt.from, "join issue");
+    assert.equal(writes[3].admittedAt.from, "commit", "the owner's refusal left no **Admitted** comment, and the joiner's later completed close dates nothing either");
+    assert.equal(writes[4].admittedAt.from, "record", "a record with its own stamp keeps it");
+    assert.equal(writes[5].proof.from, "record", "a proof outside the board repo is kept");
+    assert.equal(writes[5].admittedAt.value, "2026-09-29T00:00:00.000Z", "its stamp is the commit fallback's, the path rob-agent's stamp once exercised end to end");
+    assert.equal(writes[5].admittedAt.from, "commit");
+    assert.equal(problems.length, 3);
     assert.match(problems[0], /waiting: no admission date — its join issue \(#19\) is still open and has no admission on it — not written/);
     assert.match(problems[1], /refused: no admission date — its join issue \(#20\) was closed as not planned — not written/);
     assert.match(problems[2], /doubled: no admission date — its join issue \(#22\) was closed as duplicate — not written/, "the problem names the close's actual reason, not assumed not-planned");
-    assert.match(problems[3], /selfclosed: no admission date — its join issue \(#23\) has no admission the board records — not written/, "a stranger's **Admitted** comment is not the board's voice");
-    assert.match(problems[4], /overruled: no admission date — its join issue \(#25\) has no admission the board records — not written/, "the owner's refusal stands; the joiner's later completed close dates nothing");
+    assert.match(fallbacks.join("\n"), /selfclosed: its join issue \(#23\) has \*\*Admitted\*\* comments this run cannot vouch for — set COORDINATOR_LOGIN if this run should hear the board; the commit dates it instead/, "an unvouched-for comment is named, with the remedy, not silently ignored");
   });
 
   test("a join issue the board cannot answer about is a reported problem, not a crash", async () => {

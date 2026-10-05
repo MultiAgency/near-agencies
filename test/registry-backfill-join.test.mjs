@@ -48,7 +48,7 @@ describe("the admission a join issue records", () => {
     // The bot holds no admin this run could read: without the pin, its
     // comment is nobody the run can vouch for.
     board({ roles: { "multi-agency": "read" }, issues, threads });
-    assert.deepEqual(await joinIssueAdmission("18"), { why: "has no admission the board records" });
+    assert.deepEqual(await joinIssueAdmission("18"), { fallback: true, spoken: 1 }, "an unvouched-for comment is no admission, and the commit fallback may date the record instead");
     // Named, it is the board's voice, and its comment's time is the stamp.
     process.env.COORDINATOR_LOGIN = "multi-agency";
     assert.deepEqual(await joinIssueAdmission("18"), { at: ADMITTED });
@@ -66,7 +66,7 @@ describe("the admission a join issue records", () => {
       threads: { 20: [{ user: { login: "self-closer" }, body: "**Admitted** by @self-closer.", created_at: "2026-09-01T00:00:00.000Z" }] },
     });
     process.env.COORDINATOR_LOGIN = "multi-agency";
-    assert.deepEqual(await joinIssueAdmission("20"), { why: "has no admission the board records" });
+    assert.deepEqual(await joinIssueAdmission("20"), { fallback: true, spoken: 1 }, "the forgery is ignored either way — it dates nothing and stops nothing but the board's own voice");
   });
 
   test("the latest **Admitted** comment wins: a re-admission re-stamps", async () => {
@@ -92,6 +92,6 @@ describe("the admission a join issue records", () => {
     process.env.COORDINATOR_LOGIN = "multi-agency";
     assert.deepEqual(await joinIssueAdmission("22"), { why: "is still open and has no admission on it" });
     assert.deepEqual(await joinIssueAdmission("23"), { why: "was closed as not planned" });
-    assert.deepEqual(await joinIssueAdmission("24"), { why: "has no admission the board records" });
+    assert.deepEqual(await joinIssueAdmission("24"), { fallback: true, spoken: 0 }, "closed as done with no word of when: the commit fallback may date it");
   });
 });

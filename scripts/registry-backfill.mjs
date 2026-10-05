@@ -270,13 +270,21 @@ const boardVoice = login => {
  * opened the issue can close and reopen it whenever they like. A comment
  * counts only from the board's own voice, so a stranger cannot forge one,
  * and an issue the board cannot answer about throws — the caller reports the
- * record rather than guessing.
+ * record rather than guessing. An issue closed as completed that carries no
+ * comment the board's voice vouches for answers `{fallback}`: the board
+ * closed it as done without saying when it admitted the member — a profile
+ * update, or an entry older than the note — and the commit fallback may
+ * date that.
  */
 export async function joinIssueAdmission(number) {
   const joined = await issue(number);
+  const spoken = [];
   const admitted = [];
   for (const comment of await comments(number)) {
-    if (String(comment.body ?? "").startsWith(ADMITTED_PREFIX) && (await boardVoice(comment.user?.login))) admitted.push(comment);
+    if (String(comment.body ?? "").startsWith(ADMITTED_PREFIX)) {
+      spoken.push(comment);
+      if (await boardVoice(comment.user?.login)) admitted.push(comment);
+    }
   }
   const admission = admitted.at(-1);
   if (admission) {
@@ -287,7 +295,7 @@ export async function joinIssueAdmission(number) {
   if (joined.state_reason && joined.state_reason !== "completed") {
     return { why: `was closed as ${joined.state_reason.replaceAll("_", " ")}` };
   }
-  return { why: "has no admission the board records" };
+  return { fallback: true, spoken: spoken.length };
 }
 
 // --- the plan ----------------------------------------------------------------
@@ -347,9 +355,11 @@ export async function planWrites(members, { commitFor, joinIssueAdmission: admis
     // comment there is the admission — the coordinator posts it as it admits
     // the member, in the same breath it stamps the roster record — so its
     // time is the admission date a record without its own stamp takes. Where
-    // the issue records no admission, no commit is substituted for it — the
-    // plan reports the record instead of dating an admission that never
-    // happened.
+    // the issue says the member was never admitted (still open, or closed as
+    // something else), no commit is substituted — the plan reports the record
+    // instead of dating an admission that never happened. Where the issue
+    // closed as done but says nothing about when, the commit fallback below
+    // dates it.
     const joinIssue = proof && !stamp ? joinIssueOf(proof.value) : null;
     if (joinIssue) {
       let admission;
@@ -359,11 +369,20 @@ export async function planWrites(members, { commitFor, joinIssueAdmission: admis
         problems.push(`${login}: its join issue (#${joinIssue}) could not be read to date the admission (${error.message}) — not written`);
         continue;
       }
-      if (!admission.at) {
+      if (admission.at) {
+        stamp = { value: admission.at, from: "join issue", issue: Number(joinIssue) };
+      } else if (admission.why) {
         problems.push(`${login}: no admission date — its join issue (#${joinIssue}) ${admission.why} — not written`);
         continue;
+      } else if (admission.spoken) {
+        // The issue closed as done, but every **Admitted** comment on it is
+        // one this run cannot vouch for: said so, so a full-clone run that
+        // forgot COORDINATOR_LOGIN sees why its dates come from git.
+        fallbacks.push(`${login}: its join issue (#${joinIssue}) has **Admitted** comments this run cannot vouch for${process.env.COORDINATOR_LOGIN ? "" : " — set COORDINATOR_LOGIN if this run should hear the board"}; the commit dates it instead`);
       }
-      stamp = { value: admission.at, from: "join issue", issue: Number(joinIssue) };
+      // Otherwise the issue closed as completed with no admission the
+      // board's voice records — a profile update, or an entry older than
+      // the note — and the commit fallback below may date it.
     }
     if (!proof || !stamp) {
       const commit = commitFor(login);
