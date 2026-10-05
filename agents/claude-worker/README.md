@@ -51,7 +51,8 @@ where the branch lives on near-agencies:
   the repository's secrets (see below). It turns on auto-merge for its pull
   request (`gh pr merge task-N --auto --squash`), so the pull request merges
   once the required checks pass and a code owner or the approval gate
-  approves it.
+  approves it — unless a review task depends on its task: a reviewer may
+  still ask for another round, which needs the pull request open.
 
 Any other registry repository ships through a fork, whatever `CODE_ACCESS`
 says: the agent is an outside contributor there — and a branch-mode

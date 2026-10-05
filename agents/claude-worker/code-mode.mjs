@@ -142,6 +142,10 @@ export async function refusalPosted(thread, login, trusted, firstLine = CODE_REF
     c.user.login.toLowerCase() === login.toLowerCase() && c.body.startsWith(firstLine));
 }
 
+// Branch mode's own pull request merges by itself, unless a review task
+// waits on it; fork mode's waits for a person.
+const autoMerges = (access, reviewed) => access === "branch" && !reviewed;
+
 /** The instructions Claude is given for shipping a code task; worker.mjs
  * folds them into its prompt. Every mode names the repository's base branch:
  * branch mode clones upstream with it checked out; fork mode clones its own
@@ -154,9 +158,12 @@ export async function refusalPosted(thread, login, trusted, firstLine = CODE_REF
  * against each other: every command the instructions give must be one the
  * allowlist allows. `access` is fork or branch (accessFor), `repo` the
  * registry entry the task's terms name, `n` the task's number, `login` the
- * agent's GitHub login, which names its fork, and `revision` says the pull
- * request exists: another round pushes to it and never opens a second one. */
-export function ship(access, repo, n, login, revision) {
+ * agent's GitHub login, which names its fork, `revision` says the pull
+ * request exists: another round pushes to it and never opens a second one,
+ * and `reviewed` says a review task waits on this one. Branch mode turns on
+ * auto-merge only when nothing reviews the task: a reviewer's request for
+ * another round must find the pull request still open. */
+export function ship(access, repo, n, login, revision, reviewed) {
   const fork = access === "fork";
   const branch = `task-${n}`;
   const name = repo.name.split("/")[1];
@@ -181,9 +188,9 @@ export function ship(access, repo, n, login, revision) {
     `\`git add\` only the files you changed, \`git commit\`, and \`git push -u origin ${branch}\`${fork ? " — origin is your fork" : ""}. If ${pulls} shows a pull request already, push to its branch instead of opening another.`,
     ...(revision ? [] : [
       `Open the pull request: write its body to a file first, then \`gh pr create --repo ${repo.name} --head ${fork ? `${login}:` : ""}${branch} --base ${repo.base} --title "Task #${n}: <what changed>" --body-file <file>\`. The body links task #${n} and says what changed and how you verified it.`,
-      ...(fork ? [] : [
-        `Then \`gh pr merge ${branch} --repo ${repo.name} --auto --squash\`: it merges by itself once the required checks pass and a code owner or the approval gate approves it, and waits until then.`,
-      ]),
+      ...(autoMerges(access, reviewed) ? [
+        `Then \`gh pr merge ${branch} --repo ${repo.name} --auto --squash\`: it returns at once, and GitHub merges the pull request by itself once the required checks pass and a code owner or the approval gate approves it. You need not wait for it.`,
+      ] : []),
     ]),
   ];
 }
@@ -209,8 +216,9 @@ export function ship(access, repo, n, login, revision) {
  * deliverable, is the worker's own deliverable_sha256 tool (worker.mjs).
  * `access` is fork or branch (accessFor), `repo` the registry entry the
  * task's terms name, `n` the task's number, `login` the agent's GitHub login,
- * which names its fork. */
-export function allowedTools(access, repo, n, login) {
+ * which names its fork, and `reviewed` whether a review task waits on this
+ * one (no auto-merge then). */
+export function allowedTools(access, repo, n, login, reviewed) {
   const tools = [
     "Read(./**)", "Write(./**)", "Edit(./**)", "Glob", "Grep", "WebSearch", "WebFetch",
     "Bash(gh issue view:*)", "Bash(gh issue comment:*)",
@@ -231,6 +239,6 @@ export function allowedTools(access, repo, n, login) {
     `Bash(git push -u origin task-${n})`,
     ...repo.checks.map(c => `Bash(${c})`),
     "Bash(gh pr create:*)", "Bash(gh pr view:*)",
-    ...(access === "fork" ? [] : [`Bash(gh pr merge task-${n} --repo ${repo.name} --auto --squash)`]),
+    ...(autoMerges(access, reviewed) ? [`Bash(gh pr merge task-${n} --repo ${repo.name} --auto --squash)`] : []),
   );
 }
