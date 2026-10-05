@@ -13,6 +13,9 @@ process.env.GITHUB_TOKEN = "test-token";
 // The bot's identity is a deployment fact (BOARD_BOT), not the caller's token:
 // every stub below answers /user with a stranger's login to prove it.
 process.env.BOARD_BOT = "multi-agency";
+// A team's 404 says "not a member" only from the token the org granted; the
+// stub serves memberships either way, and one test below drops the grant.
+process.env.ORG_TOKEN ??= "org-token";
 
 const BOT = "multi-agency";
 const BOARD = "/repos/MultiAgency/kanban-sandbox";
@@ -211,6 +214,39 @@ describe("job requests", () => {
     await settle();
     assert.deepEqual(epics.map(e => e.title), ["Job: Owner, unreadable internal team"]);
     assert.match(comments[1].body, /team internal could not be read, so only owners can open a job/);
+  });
+
+  test("a refusal lifted, the fixed and reopened request opens its job", async () => {
+    reset();
+    issues[819] = jobRequest(819, "intern", "Fixed later", {});
+    serveBoard();
+    await settle();
+    assert.equal(epics.length, 0);
+    assert.match(comments[0].body, /no job was opened from this request/);
+    // The invite was accepted, and the author reopened their refused request:
+    // the refusal no longer holds, so it is checked again.
+    issues[819].state = "open";
+    teams["internal/intern"] = { state: "active" };
+    await settle();
+    assert.equal(epics.length, 1);
+    assert.equal(fenced(epics[0].body, "engagement").org, "intern");
+    assert.equal(issues[819].state, "closed");
+    assert.equal(issues[819].state_reason, "completed");
+  });
+
+  test("a team read on a token the org was not granted fails closed", async () => {
+    reset();
+    delete process.env.ORG_TOKEN;
+    try {
+      issues[821] = jobRequest(821, "intern", "Unreadable without the org token", {});
+      serveBoard();
+      await settle();
+      assert.equal(epics.length, 0);
+      assert.match(comments[0].body, /team internal could not be read, so only owners can open a job/);
+      assert.equal(issues[821].state_reason, "not_planned");
+    } finally {
+      process.env.ORG_TOKEN = "org-token";
+    }
   });
 
   test("a malformed block is refused", async () => {
