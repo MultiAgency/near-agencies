@@ -543,6 +543,24 @@ describe("closing an auto task on the merge", () => {
     assert.equal(created.length, 2);
   });
 
+  test("a title renamed after the label opens nothing until the label is applied again", async () => {
+    reset();
+    roles.jlwaugh = "admin";
+    regIssues[REG] = [registryIssue(617)];
+    regEvents[`${REG}#617`] = [
+      labeled("jlwaugh", "2026-10-05T00:01:00Z"),
+      { event: "renamed", actor: { login: "someone" }, created_at: "2026-10-05T00:04:00Z" },
+    ];
+    serveBoard();
+    await settle();
+    assert.equal(created.length, 0);
+    assert.match(autoJobsHealth().skipped.find(s => s.issue === `${REG}#617`).why, /its title changed after the label was applied/);
+    // The owner reviews the rename and applies the label again.
+    regEvents[`${REG}#617`].push(labeled("jlwaugh", "2026-10-05T00:06:00Z"));
+    await settle();
+    assert.equal(created.length, 2);
+  });
+
   test("an issue whose edits cannot be read opens nothing", async () => {
     reset();
     roles.jlwaugh = "admin";
@@ -550,12 +568,21 @@ describe("closing an auto task on the merge", () => {
     regEvents[`${REG}#616`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
     serveBoard();
     const served = globalThis.fetch;
+    // GitHub answers a GraphQL error with HTTP 200 and an errors list: that
+    // is unreadable all the same, never an issue that was never edited.
+    const answers = [
+      new Response(JSON.stringify({ message: "boom" }), { status: 500, headers: { "content-type": "application/json" } }),
+      new Response(JSON.stringify({ errors: [{ message: "boom" }] }), { status: 200, headers: { "content-type": "application/json" } }),
+    ];
     globalThis.fetch = async (url, options = {}) => {
-      if (new URL(url).pathname === "/graphql") return new Response(JSON.stringify({ message: "boom" }), { status: 500, headers: { "content-type": "application/json" } });
+      if (new URL(url).pathname === "/graphql") return answers.shift() ?? new Response(JSON.stringify({ message: "boom" }), { status: 500, headers: { "content-type": "application/json" } });
       return served(url, options);
     };
     await settle();
     assert.equal(created.length, 0, "an unreadable edit fails closed, as an unreadable team does");
+    assert.match(autoJobsHealth().skipped.find(s => s.issue === `${REG}#616`).why, /its edits could not be read/);
+    await settle();
+    assert.equal(created.length, 0);
     assert.match(autoJobsHealth().skipped.find(s => s.issue === `${REG}#616`).why, /its edits could not be read/);
   });
 
