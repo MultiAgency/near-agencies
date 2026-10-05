@@ -300,6 +300,11 @@ describe("profile updates", () => {
     assert.equal(isProfileUpdate(member, { ...member, skills: ["research", "writing"], name: "Alice B" }), true);
   });
 
+  test("the operator compares without case: the stored copy is the registry's lowercased one, the request keeps the case as typed", () => {
+    assert.equal(isProfileUpdate({ ...member, operator: "bob" }, { ...member, operator: "Bob" }), true);
+    assert.equal(isProfileUpdate({ ...member, operator: "Bob" }, { ...member, operator: "bob" }), true);
+  });
+
   test("anything else needs an owner: a new member, account, kind or operator", () => {
     assert.equal(isProfileUpdate(null, member), false);
     assert.equal(isProfileUpdate(member, { ...member, nearAccount: "other.testnet" }), false);
