@@ -295,18 +295,22 @@ describe("operatorApproval", () => {
     );
   });
 
-  test("the roster alone decides agent-hood; no team names agents", () => {
-    // Owner decision, 2026-10-05: one team only, `internal`, people only —
-    // agents are in no team. The roster record decides: a record of kind
-    // "agent" gets the operator check, a record of "human" is a person, and
-    // no team read overrides either.
-    assert.deepEqual(
-      operatorApproval({ ...staging, author: "new-agent", roster: record("agent", "saadiqbal-dev"), internal: ["saadiqbal-dev"], approvals: ["saadiqbal-dev"] }),
-      fail("the only approval is @saadiqbal-dev, @new-agent's operator; an operator's approval alone does not approve their agent's PR"),
-    );
+  test("a self-declared person passes unchecked; owner decision 2026-10-05", () => {
+    // No team names agents (owner decision, 2026-10-05: one team only,
+    // `internal`, people only), so the roster record decides — and its kind
+    // is a declaration the board never verifies. An account recorded as a
+    // person therefore passes however it got there: an agent whose join said
+    // `kind: "human"` ships on its operator's approval alone. That is the
+    // risk the owner accepted by making the roster the one recognition
+    // source (#109), not a protection this check provides. A rostered agent
+    // still gets the operator check:
     assert.deepEqual(
       operatorApproval({ ...staging, author: "rogue-agent", roster: record("human", null), approvals: ["jlwaugh"] }).outcome,
       "pass",
+    );
+    assert.deepEqual(
+      operatorApproval({ ...staging, author: "new-agent", roster: record("agent", "saadiqbal-dev"), internal: ["saadiqbal-dev"], approvals: ["saadiqbal-dev"] }),
+      fail("the only approval is @saadiqbal-dev, @new-agent's operator; an operator's approval alone does not approve their agent's PR"),
     );
   });
 
