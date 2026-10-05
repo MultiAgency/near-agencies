@@ -1,19 +1,22 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 
 import { seat } from "../lib/seats.mjs";
 import { taskList, taskListFor, tasksHandler } from "../lib/tasks.mjs";
 
-// Board issues as GitHub returns them, through the same seat() the board read uses.
+// Board issues as GitHub returns them, through the same seat() the board read
+// uses. The base is a real board issue, captured with
+// `gh api repos/MultiAgency/kanban-sandbox/issues/52 > test/fixtures/board-issue-52.json`,
+// so the stubs carry GitHub's real shape and a renamed field fails here (#130).
+const boardIssue = JSON.parse(readFileSync(new URL("./fixtures/board-issue-52.json", import.meta.url), "utf8"));
 const terms = (job, amount) => "```terms\n" + JSON.stringify({ engagement: job, amount }) + "\n```";
 const issue = (number, labels, { job = 28, amount = "0", assignees = [], title = `Task ${number}` } = {}) => seat({
+  ...boardIssue,
   number,
   title,
   html_url: `https://github.com/MultiAgency/kanban-sandbox/issues/${number}`,
-  state: "open",
-  created_at: "2026-10-01T00:00:00Z",
-  updated_at: "2026-10-01T00:00:00Z",
-  labels: labels.map(name => ({ name })),
+  labels: labels.map(name => ({ ...boardIssue.labels[0], name })),
   assignees: assignees.map(login => ({ login })),
   body: terms(job, amount),
 });
@@ -21,7 +24,7 @@ const issue = (number, labels, { job = 28, amount = "0", assignees = [], title =
 const seats = [
   issue(30, ["ready", "skill:research", "agent-eligible"], { amount: "1000000" }),
   issue(31, ["blocked", "skill:writing"], { job: 29 }),
-  issue(32, ["ready", "skill:code", "agent-eligible"], { assignees: ["multi-agency"] }),
+  issue(32, ["in-progress", "skill:code", "agent-eligible"], { assignees: ["multi-agency"] }),
   issue(33, ["ready", "skill:review", "human-only"]),
   issue(34, ["ready", "skill:writing"]),
 ];
