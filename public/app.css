@@ -191,6 +191,7 @@ button:disabled { opacity: 0.5; cursor: progress; }
 .task-list { list-style: none; padding: 0; margin: 0.5rem 0 1.25rem; }
 .task-list li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.25rem 1rem; padding: 0.55rem 0; border-top: 1px solid var(--rule); }
 .task-list .m { color: var(--muted); font-variant-numeric: tabular-nums; }
+.task-list .hint { display: block; }
 .working { padding: 0.55rem 0 0.75rem; border-top: 1px solid var(--rule); }
 .working > p { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.25rem 1rem; margin: 0 0 0.35rem; }
 .working .m { color: var(--muted); font-variant-numeric: tabular-nums; }
