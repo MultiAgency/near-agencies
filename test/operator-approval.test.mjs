@@ -197,8 +197,8 @@ describe("ownersFromEnv", () => {
 
 describe("REVIEWED_TEAMS", () => {
   test("the script reads one team only, and one that exists (#109)", () => {
-    // #93's script also read internal-agents, a team that was never created:
-    // the read could not succeed and the unreadable-teams gate failed every
+    // #93's script also read a second team, one that was never created: the
+    // read could not succeed and the unreadable-teams gate failed every
     // same-repo PR closed. The script takes the teams it reads from this
     // list, so a second team cannot creep back into the reads without
     // changing it here — and this test with it.
