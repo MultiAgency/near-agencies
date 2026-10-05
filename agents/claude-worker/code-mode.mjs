@@ -28,6 +28,13 @@ import { latestChangesRound } from "./trust.mjs";
  * does not exist, so without the '!' every push fails. */
 export const GIT_CREDENTIAL_HELPER = "!gh auth git-credential";
 
+// The Claude Code settings worker.mjs passes to query(). Without them the
+// SDK adds its own attribution to commits (a Co-Authored-By trailer, which a
+// squash merge keeps) and to pull request bodies, and AGENTS.md allows
+// neither: the change's own description only. An empty string hides each
+// (#141). settingSources stays [], so nothing else reaches the run.
+export const SDK_SETTINGS = { attribution: { commit: "", pr: "" } };
+
 const labelsOf = issue => issue.labels.map(label => label.name);
 
 /** Whether an agent with `skills` may claim `issue`: skill.md § 2's claim
@@ -185,7 +192,7 @@ export function ship(access, repo, n, login, revision, reviewed) {
         ? `\`git checkout -b ${branch} FETCH_HEAD\`: the fetch left ${repo.base}'s tip in FETCH_HEAD, and the task branch starts there.`
         : `\`git checkout -b ${branch}\`: it starts at ${repo.base}, which the clone checked out.`,
     `Make the change there: keep it focused, add tests, and make ${pass} pass.`,
-    `\`git add\` only the files you changed, \`git commit\`, and \`git push -u origin ${branch}\`${fork ? " — origin is your fork" : ""}. If ${pulls} shows a pull request already, push to its branch instead of opening another.`,
+    `\`git add\` only the files you changed, \`git commit\`, and \`git push -u origin ${branch}\`${fork ? " — origin is your fork" : ""}. Every commit carries part of the change: never an empty or probe commit, and no tool attribution in a commit message or the pull request body (AGENTS.md). If ${pulls} shows a pull request already, push to its branch instead of opening another.`,
     ...(revision ? [] : [
       `Open the pull request: write its body to a file first, then \`gh pr create --repo ${repo.name} --head ${fork ? `${login}:` : ""}${branch} --base ${repo.base} --title "Task #${n}: <what changed>" --body-file <file>\`. The body links task #${n} and says what changed and how you verified it.`,
       ...(autoMerges(access, reviewed) ? [
