@@ -2,6 +2,13 @@
 import { network } from "./lib/network.mjs";
 import { payAndVerify } from "./lib/pay.mjs";
 
+// Before anything is fetched: the invocation, and what it reads from the
+// environment.
+if (process.argv.includes("--help")) {
+  console.log("usage: PAYER_ACCOUNT=... RESOURCE_URL=... PAY_TO=... AMOUNT=... node agent.mjs");
+  process.exit(0);
+}
+
 const payer = process.env.PAYER_ACCOUNT ?? "agency.testnet";
 
 const indexed = await fetch(`${network.fastnearApi}/v1/account/${payer}/ft`).then(r => r.json());
