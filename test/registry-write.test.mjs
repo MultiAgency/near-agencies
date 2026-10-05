@@ -233,7 +233,7 @@ const board = ({ join, registry = [] } = {}) => {
     if (u.includes("/issues?state=closed&labels=")) return json([]);
     if (u.includes(`/issues/${join.issue.number}/comments?per_page`) && method === "GET") return json([join.command]);
     if (u.endsWith(`/issues/${join.issue.number}/comments`) && method === "POST") {
-      state.comments.push({ number: join.issue.number, body: JSON.parse(options.body).body });
+      state.comments.push({ number: join.issue.number, body: JSON.parse(options.body).body, created_at: new Date().toISOString() });
       return json({});
     }
     if (u.endsWith(`/issues/${join.issue.number}`) && method === "PATCH") {
@@ -343,6 +343,24 @@ describe("/admit writes the shared registry", () => {
     } finally {
       process.env.REGISTRY_TOKEN = TOKEN;
     }
+  });
+
+  test("the backfill reads the admission's date from the comment this cycle posts", async () => {
+    const { state } = await admitRun();
+    const posted = state.comments.find(c => c.body.startsWith("**Admitted**"));
+    assert.ok(posted, "the cycle posted the board's **Admitted** note");
+    // The board as the backfill reads it: the join issue this cycle just
+    // admitted, carrying exactly the comment the coordinator posted — the
+    // two spell the note with one constant, so a rewording cannot split them.
+    globalThis.fetch = async url => {
+      const u = String(url);
+      const json = body => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+      if (u === "https://api.github.com/user") return json({ login: "multi-agency" });
+      if (u.endsWith("/repos/MultiAgency/kanban-sandbox/issues/7")) return json({ state: "closed", state_reason: "completed", closed_at: posted.created_at });
+      if (u.includes("/issues/7/comments?")) return json([{ user: { login: "multi-agency" }, body: posted.body, created_at: posted.created_at }]);
+      throw new Error(`unexpected fetch: ${u}`);
+    };
+    assert.deepEqual(await joinIssueAdmission("7"), { at: posted.created_at }, "the comment the coordinator itself wrote is the one the backfill dates admissions by");
   });
 });
 
@@ -737,9 +755,9 @@ describe("the registry backfill", () => {
   });
 
   test("a record whose proof is a board join issue takes its admission date from the issue", async () => {
-    const closed = "2026-09-30T12:34:56.000Z";
+    const admittedOn18 = "2026-09-30T12:34:56.000Z";
     const issues = {
-      18: { state: "closed", state_reason: "completed", closed_at: closed },
+      18: { state: "closed", state_reason: "completed", closed_at: admittedOn18 },
       19: { state: "open", state_reason: null, closed_at: null },
       20: { state: "closed", state_reason: "not_planned", closed_at: "2026-10-02T00:00:00.000Z" },
       22: { state: "closed", state_reason: "duplicate", closed_at: "2026-10-03T00:00:00.000Z" },
@@ -753,7 +771,7 @@ describe("the registry backfill", () => {
     };
     const admittedAt = "2026-10-01T00:00:00.000Z";
     const thread = {
-      18: [{ user: { login: "multi-agency" }, body: `**Admitted** by @owner-jl.`, created_at: closed }],
+      18: [{ user: { login: "multi-agency" }, body: `**Admitted** by @owner-jl.`, created_at: admittedOn18 }],
       20: [],
       22: [],
       // A stranger cannot forge the board's voice, however the issue is closed.
@@ -792,7 +810,7 @@ describe("the registry backfill", () => {
     assert.deepEqual(reads, ["18", "19", "20", "22", "23", "24", "25"], "only records without their own stamp have their board join issue read — own-stamp's and elsewhere's proof is no unread board join issue");
     assert.deepEqual(writes.map(w => w.login), ["dated", "redated", "own-stamp", "elsewhere"]);
     assert.equal(writes[0].proof.from, "record", "the join issue stays the proof");
-    assert.equal(writes[0].admittedAt.value, closed, "the stamp is the board's **Admitted** comment's time");
+    assert.equal(writes[0].admittedAt.value, admittedOn18, "the stamp is the board's **Admitted** comment's time");
     assert.equal(writes[0].admittedAt.from, "join issue");
     assert.equal(writes[1].admittedAt.value, admittedAt, "the stamp is the admission, however the joiner has closed and reopened the issue since");
     assert.equal(writes[1].admittedAt.from, "join issue");

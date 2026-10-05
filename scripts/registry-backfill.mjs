@@ -54,7 +54,7 @@ import { basename, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { comments, isTrusted, issue, repoUrl } from "../lib/github.mjs";
-import { KINDS } from "../lib/onboarding.mjs";
+import { ADMITTED_PREFIX, KINDS } from "../lib/onboarding.mjs";
 import { network } from "../lib/network.mjs";
 import { putMember, putMemberBody, rosterStoreFiles } from "../lib/roster.mjs";
 
@@ -253,9 +253,13 @@ export const joinIssueOf = proof => {
  * The board's own voice: the coordinator's login, named with
  * COORDINATOR_LOGIN when this run does not read the board as the
  * coordinator, or anyone isTrusted counts — the token's own account, or an
- * owner of the board.
+ * owner of the board. Logins compare without case, the way GitHub's do.
  */
-const boardVoice = login => login && (login === (process.env.COORDINATOR_LOGIN ?? "").trim() || isTrusted(login));
+const boardVoice = login => {
+  if (!login) return false;
+  const pin = (process.env.COORDINATOR_LOGIN ?? "").trim().toLowerCase();
+  return login.toLowerCase() === pin || isTrusted(login);
+};
 
 /**
  * The admission a join issue records: the board's own `**Admitted** by …`
@@ -272,7 +276,7 @@ export async function joinIssueAdmission(number) {
   const joined = await issue(number);
   const admitted = [];
   for (const comment of await comments(number)) {
-    if (/^\*\*Admitted\*\*/.test(String(comment.body ?? "")) && (await boardVoice(comment.user?.login))) admitted.push(comment);
+    if (String(comment.body ?? "").startsWith(ADMITTED_PREFIX) && (await boardVoice(comment.user?.login))) admitted.push(comment);
   }
   const admission = admitted.at(-1);
   if (admission) {
@@ -459,7 +463,7 @@ const row = write => {
   const { member } = write;
   const who = member.kind === "agent" ? `${member.name} (agent, operator ${member.operator})` : `${member.name} (${member.kind})`;
   const source = stamp => stamp.from === "commit" ? "  (commit fallback)" : stamp.from === "join issue" ? `  (its join issue #${stamp.issue})` : "";
-  return `${write.login} — ${who}\n    account ${member.nearAccount}\n    proof ${write.proof.value}${write.proof.from === "commit" ? "  (commit fallback)" : ""}\n    admittedAt ${write.admittedAt.value}${source(write.admittedAt)}\n    skills ${JSON.stringify(member.skills)}`;
+  return `${write.login} — ${who}\n    account ${member.nearAccount}\n    proof ${write.proof.value}${source(write.proof)}\n    admittedAt ${write.admittedAt.value}${source(write.admittedAt)}\n    skills ${JSON.stringify(member.skills)}`;
 };
 
 async function main() {
