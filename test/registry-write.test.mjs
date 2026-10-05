@@ -407,6 +407,11 @@ describe("the registry backfill", () => {
     assert.deepEqual(bodies.filter(b => b.kind === "agent").map(b => b.operatorGithubLogin), ["operator-one", "operator-two"]);
     assert.ok(bodies.filter(b => b.kind === "human").every(b => b.operatorGithubLogin === undefined));
     assert.deepEqual([...new Set(bodies.map(b => b.network))], ["testnet"]);
+    assert.equal(
+      bodies[0].admission.admittedAt,
+      "2026-09-28T03:18:01.000Z",
+      "a commit-fallback date in offset form goes into the body as its UTC \"Z\" equivalent — the offset form is what the registry's validation refused with HTTP 400",
+    );
   });
 
   test("records with a join issue keep it; problems are listed, never written", async () => {
@@ -423,6 +428,7 @@ describe("the registry backfill", () => {
     assert.deepEqual(writes.map(w => w.login), ["joined"]);
     assert.equal(writes[0].proof.from, "record");
     assert.equal(writes[0].admittedAt.from, "record");
+    assert.equal(writes[0].admittedAt.value, "2026-09-30T03:56:41.000Z", "a record's offset-form stamp is normalized to UTC the same way");
     assert.equal(problems.length, 6);
     assert.match(problems[0], /no-kind.*kind must be one of/);
     assert.match(problems[1], /lonely-agent.*not among the members/);
@@ -485,6 +491,7 @@ describe("the registry backfill", () => {
     assert.match(dry, new RegExp(`commit/${rootSha.slice(0, 8)}`), "pat's proof is the commit that added the entry");
     assert.match(dry, /pat: proof from the commit that added the roster entry/);
     assert.match(dry, /Using the commit fallback/);
+    assert.match(dry, /admittedAt 2026-09-28T03:18:01\.000Z {2}\(commit fallback\)/, "the dry run prints the stamp normalized, as the writes carry it");
     assert.ok(!/^\s*sam:/m.test(dry.split("Using the commit fallback")[1] ?? ""), "sam keeps its own proof and stamp");
     assert.match(dry, /dry run: nothing was written/);
     assert.match(dry, /"githubLogin":"pat"/);
@@ -529,7 +536,7 @@ describe("the registry backfill", () => {
       assert.ok(writes.every(w => w.token === TOKEN && w.url === "/api/rpc/builders/putMember"));
       assert.equal(writes[2].body.operatorGithubLogin, "pat");
       assert.equal(writes[1].body.admission.admittedAt, "2026-10-01T00:00:00.000Z", "a record keeps its own stamp");
-      assert.match(writes[0].body.admission.admittedAt, /^2026-09-2/, "pat's stamp is the commit's date");
+      assert.equal(writes[0].body.admission.admittedAt, "2026-09-28T03:18:01.000Z", "pat's stamp is the commit's offset-form date, sent in its UTC \"Z\" form");
     } finally {
       server.close();
     }
