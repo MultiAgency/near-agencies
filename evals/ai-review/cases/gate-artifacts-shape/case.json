@@ -1,0 +1,17 @@
+{
+ "what": "round 1 of #108 at e10a756: the gate passed the artifacts API's response object where the array was needed (live reviews missed it; it crashed every ai-review-triggered gate run)",
+ "pr": 108,
+ "base": "35b323529b41461fdc1ddfd1809a41cef79b89f0",
+ "head": "e10a7565fa6cd482f4df0cd8d2781dbdff436a5a",
+ "expect": {
+  "importantMin": 1,
+  "mustFlag": [
+   {
+    "path": "scripts/staging-approval.mjs",
+    "from": 65,
+    "to": 80,
+    "what": "artifacts response object passed where the array is needed"
+   }
+  ]
+ }
+}

@@ -1,0 +1,13 @@
+[
+ {
+  "id": 4180941622,
+  "user": {
+   "login": "github-actions[bot]"
+  },
+  "created_at": "2026-10-05T05:22:03Z",
+  "body": "Security, Nit: this is accurate for `ai-review.yml`, but \"closed\" reads as if the whole class of risk is gone. Two other workflows still run on `pull_request`, from the PR's own merge commit, and hold secrets: `private-review.yml` (`NEARAI_API_KEY`) and `operator-approval.yml` (`ORG_TOKEN`, the org Members: read token). A same-repo push that edits either workflow could still read that secret before anyone reviews it. Agent tokens can't edit workflows, but a person with write can. Consider adding \"for ai-review.yml; private-review.yml and operator-approval.yml still run on `pull_request`\", or recording those two as accepted risks.",
+  "path": "docs/plans/internal-agents.md",
+  "line": null,
+  "original_line": 65
+ }
+]

@@ -1,0 +1,999 @@
+diff --git a/lib/staging-approval.mjs b/lib/staging-approval.mjs
+new file mode 100644
+index 0000000..fdbf0e7
+--- /dev/null
++++ b/lib/staging-approval.mjs
+@@ -0,0 +1,250 @@
++// Whether a pull request to staging may be approved in code, as the
++// reviewer account, with nobody's judgment involved at that step (issue
++// #77): the approval posts only when every check in the issue holds for
++// the pull request's current head SHA.
++//
++// Pure logic — no GitHub calls. scripts/staging-approval.mjs reads GitHub
++// (the pull request and its files, team `internal`, the roster, CODEOWNERS
++// at the base branch, the `test` check, the ai-review verdict artifact
++// named for the pull request) and resolves what it finds into the shapes
++// decided on here. The decision
++// never checks out or runs the pull request's code, and the verdict can
++// only hold an approval back — the deterministic checks carry it.
++
++const same = (a, b) => String(a ?? "").toLowerCase() === String(b ?? "").toLowerCase();
++
++/** The account the approval posts as, named by the CODEOWNERS allowlist. */
++export const REVIEWER = "multai-builder";
++
++/** The agency account whose authorship needs no team membership. */
++export const AGENCY = "multi-agency";
++
++/** The base branch approvals are for; nothing else qualifies. */
++export const BASE = "staging";
++
++/** The ai-review run artifact that carries a pull request's verdict, named for the pull request it reviewed. */
++const VERDICT_ARTIFACT = "ai-review-verdict";
++
++/** The verdict artifact's whole name for one pull request: `ai-review-verdict-<number>`. */
++export const verdictArtifactName = number => `${VERDICT_ARTIFACT}-${number}`;
++
++/**
++ * CODEOWNERS as the base branch holds it, in file order: each rule's
++ * pattern with the owners it names, comments aside, case-normalized. A
++ * rule naming no owner selects nothing (GitHub ignores such lines), and a
++ * team entry keeps its name — matching decides a rule, not who is on the
++ * team, so a team's members are never resolved here.
++ */
++export function codeownersRules(text) {
++  const rules = [];
++  for (const line of String(text ?? "").split("\n")) {
++    const entry = line.replace(/#.*/, "").trim();
++    if (!entry) continue;
++    const [pattern, ...owners] = entry.split(/\s+/);
++    if (!pattern || owners.length === 0) continue;
++    rules.push({ pattern, owners: owners.map(owner => owner.replace(/^@/, "").toLowerCase()).filter(Boolean) });
++  }
++  return rules;
++}
++
++/**
++ * Whether a CODEOWNERS pattern selects `path`: gitignore rules, as
++ * CODEOWNERS matches. A trailing / selects the directory's contents; a
++ * leading / anchors at the root, and so does any other slash in the
++ * pattern; a pattern with no slash matches the name at any depth; * and ?
++ * stand for wildcards within one segment, and ** crosses them, as
++ * gitignore reads it: a leading double-star selects at any depth, a
++ * middle double-star any number of directories, and a trailing
++ * double-star everything inside. Under-matching a later rule would let
++ * an earlier, wider one decide, so ** is matched the way GitHub does.
++ */
++export function codeownersMatches(pattern, path) {
++  const file = String(path ?? "").replace(/^\//, "");
++  let pattern1 = String(pattern ?? "").trim().replace(/\/+$/, "");
++  if (!file || !pattern1) return false;
++  const parts = pattern1.replace(/^\//, "").split("/");
++  const segment = part => new RegExp(`^${part.split("*").map(s => s.split("?").map(s2 => s2.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[^/]")).join("[^/]*")}$`);
++  if (!parts.includes("**") && !(pattern1.startsWith("/") || pattern1.includes("/"))) {
++    return file.split("/").some(name => segment(parts[0]).test(name));
++  }
++  // Anchored, root first: each segment matches one level, and a shorter
++  // pattern selects the directory's contents. ** emits zero or more whole
++  // levels, so it crosses directories whatever its place in the pattern.
++  const wanted = "^" + parts.map(part => part === "**" ? "(?:[^/]+/)*" : segment(part).source.slice(1, -1) + "/").join("");
++  return new RegExp(wanted).test(`${file}/`);
++}
++
++/** The owners of the last rule matching `path`, or none: GitHub counts the last match only. */
++export function ownersForPath(rules, path) {
++  for (const rule of [...(rules ?? [])].reverse()) {
++    if (codeownersMatches(rule.pattern, path)) return rule.owners;
++  }
++  return [];
++}
++
++/** The first changed file whose last matching CODEOWNERS rule does not name the reviewer, or null. */
++export function uncoveredPath(rules, paths) {
++  for (const path of paths ?? []) {
++    if (!ownersForPath(rules, path).includes(REVIEWER)) return path;
++  }
++  return null;
++}
++
++/**
++ * Whether every changed file sits on the reviewer's allowlist: its last
++ * matching rule names @multai-builder. Any file outside it — including
++ * every new module — fails closed, and a pull request changing no file at
++ * all approves nothing.
++ */
++export function reviewerCovers(rules, paths) {
++  return (paths ?? []).length > 0 && uncoveredPath(rules, paths) === null;
++}
++
++/**
++ * The verdict an ai-review run uploaded: `{"sha": "...", "important": 0}`,
++ * or null when it is missing, not JSON, or carries no head SHA and a
++ * non-negative count of Important findings. The head SHA comes from the
++ * workflow, not from the model, and an integer is the only shape a count
++ * can take.
++ */
++export function verdictFrom(text) {
++  try {
++    const verdict = JSON.parse(String(text ?? ""));
++    if (typeof verdict?.sha !== "string" || verdict.sha === "") return null;
++    if (!Number.isInteger(verdict?.important) || verdict.important < 0) return null;
++    return { sha: verdict.sha, important: verdict.important };
++  } catch {
++    return null;
++  }
++}
++
++/**
++ * Whether the pull request's author is one the issue lets the code approve:
++ * the agency account, a member of team `internal`, or a rostered agent
++ * whose operator is in team `internal` (#109 — agents are in no team of
++ * their own; the roster says who they are and who answers for them). A
++ * team that cannot be read holds nobody in, and no roster record reads as
++ * no agent.
++ */
++export function authorAllowed({ author, internal = [], roster = null } = {}) {
++  return (
++    same(author, AGENCY) ||
++    (internal ?? []).some(member => same(member, author)) ||
++    (roster?.status === "record" &&
++      roster.kind === "agent" &&
++      Boolean(roster.operator) &&
++      (internal ?? []).some(member => same(member, roster.operator)))
++  );
++}
++
++/** How the `test` check for the head SHA stands: "passed", "pending", or the conclusion it ended with; null when none ran. */
++export const testVerdict = check =>
++  check == null ? null : check.status !== "completed" ? "pending" : check.conclusion === "success" ? "passed" : check.conclusion ?? "completed";
++
++/**
++ * The open pull requests a completed run could be deciding: the ones the
++ * event names for its triggering run — a pull_request_target run carries
++ * the pull request there, while its head SHA is the base branch's, useless
++ * for finding the pull request — together with the ones GitHub associates
++ * with the run's head commit. Deduplicated; the caller reads each pull
++ * request itself and judges it on its own current head SHA.
++ */
++export function openCandidates(eventPullRequests = [], commitPulls = [], artifactNumbers = []) {
++  const numbers = new Set([
++    ...(eventPullRequests ?? []).map(pull => pull?.number),
++    ...(commitPulls ?? []).map(pull => pull?.number),
++    ...(artifactNumbers ?? []),
++  ]);
++  return [...numbers].filter(number => Number.isInteger(number));
++}
++
++/** The pull request numbers in artifacts named for the pull request they reviewed: `ai-review-verdict-<number>`. */
++export function verdictArtifactNumbers(artifacts) {
++  const named = new RegExp(`^${VERDICT_ARTIFACT}-(\\d+)$`);
++  return (artifacts ?? [])
++    .map(artifact => named.exec(artifact?.name ?? "")?.[1])
++    .filter(Boolean)
++    .map(Number);
++}
++
++/**
++ * The verdict artifact that decides a pull request's approval: the newest
++ * one still held whose name carries the pull request's number and that
++ * knows the run which uploaded it. Nothing a workflow run reports names
++ * the pull request it reviewed — a `pull_request_target` run answers with
++ * the base branch as its head_branch and head_sha — so the artifact's name
++ * is what ties a verdict to its pull request, and the verdict.json inside
++ * it is what names the head SHA the review judged. Expired artifacts and
++ * artifacts with no run behind them decide nothing.
++ */
++export function newestVerdictArtifact(artifacts = [], number) {
++  const name = verdictArtifactName(number);
++  return (
++    (artifacts ?? [])
++      .filter(artifact => artifact?.name === name && !artifact.expired && Number.isInteger(artifact?.workflow_run?.id))
++      .sort((a, b) => (b.id ?? 0) - (a.id ?? 0))[0] ?? null
++  );
++}
++
++/**
++ * The code approval's verdict. `paths` are the pull request's changed
++ * files, `rules` the CODEOWNERS rules read from the base branch, `test`
++ * what testVerdict resolved for the head SHA, `verdict` what the ai-review
++ * run uploaded for it, and `roster` the author's roster record as
++ * lib/operator-approval.mjs resolves it (`{status: "record"|"absent"|
++ * "unreadable", kind, operator}`). Everything but a pull request to
++ * staging from this repository holds; so does an author outside team
++ * `internal`, the agency account, and the roster's agents whose operator
++ * is in team `internal` — a team `internal` that cannot be read fails
++ * closed for every author, and a roster that cannot be read fails closed
++ * for every author the team read alone cannot allow. A `test` check that
++ * has not passed, any file off the allowlist, and a verdict that is
++ * missing, malformed, for another SHA, or counting any Important finding
++ * hold too. The verdict can only hold an approval back: it never stands in
++ * for the others.
++ */
++export function stagingApproval({ base, fork = false, author, internal = [], roster = null, paths = [], rules = [], test = null, verdict = null, sha } = {}) {
++  if (String(base ?? "").toLowerCase() !== BASE) {
++    return hold(`the pull request targets ${base || "no branch"}, not ${BASE}`);
++  }
++  if (fork) {
++    return hold("the pull request comes from a fork, not a branch of this repository");
++  }
++  if (!Array.isArray(internal)) {
++    return hold("team internal could not be read, so the author cannot be checked; failing closed");
++  }
++  if (roster?.status === "unreadable" && !authorAllowed({ author, internal })) {
++    return hold("the roster could not be read, so the author cannot be checked against it; failing closed");
++  }
++  if (!authorAllowed({ author, internal, roster })) {
++    return hold(`@${author} is not in team internal, @${AGENCY}, or a rostered agent whose operator is in team internal`);
++  }
++  if (test === null) {
++    return hold("no test check ran for this head SHA");
++  }
++  if (test !== "passed") {
++    return hold(test === "pending" ? "the test check has not finished for this head SHA" : `the test check ended ${test}`);
++  }
++  if ((paths ?? []).length === 0) {
++    return hold("the pull request changes no file, so the allowlist approves nothing");
++  }
++  const uncovered = uncoveredPath(rules, paths);
++  if (uncovered !== null) {
++    return hold(`${uncovered}'s last matching CODEOWNERS rule does not name @${REVIEWER}`);
++  }
++  if (!verdict) {
++    return hold("the ai-review run left no verdict for this head SHA, or one that does not parse");
++  }
++  if (!same(verdict.sha, sha)) {
++    return hold(`the ai-review verdict is for ${verdict.sha}, not this head SHA`);
++  }
++  if (verdict.important !== 0) {
++    return hold(`the ai-review verdict counts ${verdict.important} Important finding${verdict.important === 1 ? "" : "s"}`);
++  }
++  return {
++    outcome: "approve",
++    reason: `${BASE}, this repository, @${author} allowed, test passed, @${REVIEWER} owns every changed file, ai-review counts 0 Important findings`,
++  };
++}
++
++const hold = reason => ({ outcome: "hold", reason });
+diff --git a/scripts/staging-approval.mjs b/scripts/staging-approval.mjs
+new file mode 100644
+index 0000000..865ee2a
+--- /dev/null
++++ b/scripts/staging-approval.mjs
+@@ -0,0 +1,373 @@
++// The code approval for staging pull requests (issue #77): approve, as the
++// reviewer account, when every check in the issue holds for the pull
++// request's current head SHA — staging, a branch of this repository, an
++// allowed author, a passed `test` check, @multai-builder owning every
++// changed file, and an ai-review verdict counting 0 Important findings.
++//
++//   REVIEWER_TOKEN  the reviewer account's token; the workflow maps it to
++//                   GITHUB_TOKEN and ORG_TOKEN for lib/github.mjs, so reads
++//                   and the approving review all act as @multai-builder
++//   SANDBOX_REPO    the repository, for lib/github.mjs
++//   ROSTER_URL      the coordinator serving GET /api/roster/:login — with
++//                   roster.json at the base branch it answers who an author
++//                   is beyond team `internal`: a rostered agent counts when
++//                   their operator is in team `internal` (#109)
++//
++// The workflow starts from `workflow_run` after `ci` and `ai-review` finish,
++// and checks out the base branch: it never checks out or runs the pull
++// request's code, and the verdict comes from the ai-review run's own
++// artifact, named for the pull request it reviewed, never from a comment,
++// which a pull request can fake. Each pull request is judged on its own
++// current head SHA, whatever run started this one. The decision lives in
++// lib/staging-approval.mjs, pure. A check that fails is a hold, not an
++// error: the job log says which one, nothing is approved, and no "changes
++// requested" is ever posted. Only a read that breaks — no pull request
++// answerable, a page that will not end — exits non-zero.
++import { mkdtempSync, readFileSync, rmSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { execFileSync } from "node:child_process";
++import { join } from "node:path";
++
++import { github, orgApi } from "../lib/github.mjs";
++import { combineRoster, rosterFromApi, rosterRecord } from "../lib/operator-approval.mjs";
++import {
++  BASE,
++  REVIEWER,
++  codeownersRules,
++  newestVerdictArtifact,
++  openCandidates,
++  stagingApproval,
++  testVerdict,
++  verdictArtifactName,
++  verdictArtifactNumbers,
++  verdictFrom,
++} from "../lib/staging-approval.mjs";
++
++const FILE_PAGES = 50;
++const FILE_MAX = 3000;
++const CHECK_PAGES = 10;
++const REVIEW_PAGES = 10;
++const VERDICT_FILE = "verdict.json";
++const TEST_CHECK = "test";
++// The team behind CODEOWNERS' entry, as operator-approval reads it:
++// membership in `internal` allows an author outright (#109 — agents are in
++// no team; the roster, read beside it, says who they are).
++const INTERNAL_TEAM = "internal";
++// The workflow whose verdict artifacts name the pull requests they reviewed.
++const AI_REVIEW = "ai-review";
++
++try {
++  const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH ?? "", "utf8"));
++  const sha = event.workflow_run?.head_sha;
++  if (!sha) throw new Error("the event carries no workflow run with a head SHA");
++  // The triggering run's SHA is the pull request's head only for some
++  // events: a pull_request_target run carries the base branch's head, and
++  // GitHub matches workflow_run.pull_requests against that SHA, so the run
++  // that finished an AI review names its pull request only through the
++  // verdict artifact it just uploaded. Candidates come from all three
++  // places, and each pull request is judged on the head SHA it answers
++  // with now, never on this run's.
++  const commitPulls = await github("GET", `/commits/${sha}/pulls?per_page=100`);
++  const artifactNumbers = event.workflow_run.name === AI_REVIEW
++    ? verdictArtifactNumbers(await github("GET", `/actions/runs/${event.workflow_run.id}/artifacts?per_page=100`))
++    : [];
++  const numbers = openCandidates(event.workflow_run.pull_requests, commitPulls, artifactNumbers);
++  if (numbers.length === 0) {
++    console.log(`staging-approval: no pull request is associated with ${sha}`);
++    process.exit(0);
++  }
++  let failed = false;
++  for (const number of numbers) {
++    try {
++      const pr = await github("GET", `/pulls/${number}`);
++      if (pr.state === "open") await decide(pr);
++    } catch (error) {
++      console.error(`staging-approval: pull request #${number}: ${error.message}`);
++      failed = true;
++    }
++  }
++  process.exit(failed ? 1 : 0);
++} catch (error) {
++  console.error(`staging-approval: ${error.message}`);
++  process.exit(1);
++}
++
++// One pull request, all six checks, an approval only when all hold. The
++// heavy reads run together; the artifact read stays last so a long scan
++// never sits inside the per-pull-request fan-out. The head SHA is this
++// pull request's own, as it answers right now — a verdict, a test check or
++// an approval pinned to any other SHA decides nothing here.
++async function decide(pr) {
++  const number = pr.number;
++  const sha = pr.head.sha;
++  const author = pr.user?.login;
++  const repo = String(process.env.SANDBOX_REPO ?? "").toLowerCase();
++  const org = repo.split("/")[0];
++  const [paths, internal, codeowners, test, builders, fromApi] = await Promise.all([
++    changedFiles(pr),
++    readTeam(org, INTERNAL_TEAM),
++    textAtBase(".github/CODEOWNERS", pr.base.ref),
++    latestTest(sha),
++    rosterAtBase(pr.base.ref),
++    rosterApi(author),
++  ]);
++  if (codeowners === null) {
++    console.log(`staging-approval: CODEOWNERS could not be read at ${pr.base.ref}, so no file can be covered`);
++  }
++  // The roster's two homes resolved as operator-approval resolves them: the
++  // coordinator's record wins when it has one, roster.json answers when the
++  // coordinator does not know the login, and neither readable fails closed
++  // in the verdict (lib/staging-approval.mjs).
++  const roster = combineRoster(builders ? rosterRecord(builders, author) : { status: "unreadable" }, fromApi);
++  // head.repo is GitHub's own word for where the branch lives; a null one
++  // (a deleted fork) reads as a fork, which fails the same check.
++  const fork = pr.head?.repo?.full_name?.toLowerCase() !== repo;
++  const verdict = await verdictFor(number);
++  const { outcome, reason } = stagingApproval({
++    base: pr.base.ref,
++    fork,
++    author,
++    internal,
++    roster,
++    paths,
++    rules: codeownersRules(codeowners ?? ""),
++    test: testVerdict(test),
++    verdict,
++    sha,
++  });
++  console.log(`staging-approval ${outcome} on #${number} at ${sha}: ${reason}`);
++  console.log(`  author @${author}, head ${pr.head?.repo?.full_name ?? "unknown"}, files ${paths.length}, teams: internal ${describe(internal)}, roster ${roster.status}, test ${testVerdict(test) ?? "missing"}, verdict ${verdict ? `from an ai-review run (${verdict.important} Important)` : "none"}`);
++  if (outcome !== "approve") return;
++  // The reads above take time, and a push in between moves the head the
++  // checks were judged on. The approval names one SHA: re-read the pull
++  // request and hold when it moved — the push's own run decides the new
++  // head, and staging's ruleset dismisses whatever was posted for the old.
++  const now = await github("GET", `/pulls/${number}`);
++  if (now.head?.sha !== sha) {
++    console.log(`staging-approval: #${number} moved to ${now.head?.sha} while it was judged, so the next run decides`);
++    return;
++  }
++  if (await alreadyApproved(number, sha)) {
++    console.log(`staging-approval: @${REVIEWER} has already approved #${number} at ${sha}`);
++    return;
++  }
++  await github("POST", `/pulls/${number}/reviews`, {
++    commit_id: sha,
++    event: "APPROVE",
++    body: [
++      "**Approved in code** (issue #77), nobody's judgment involved at this step:",
++      "",
++      `- targets \`${pr.base.ref}\`;`,
++      "- comes from a branch of this repository;",
++      `- @${pr.user?.login} is allowed to be approved in code;`,
++      "- the `test` check passed;",
++      `- @${REVIEWER} is the last matching CODEOWNERS rule for every changed file;`,
++      "- the ai-review run for this head counts 0 Important findings.",
++      "",
++      "A push dismisses this approval (staging ruleset) and the next run decides again.",
++    ].join("\n"),
++  });
++  console.log(`staging-approval: approved #${number} as @${REVIEWER} at ${sha}`);
++}
++
++// The pull request's changed files, base against head, every page. A rename
++// lists both its paths: the old one leaves its owner's protection and the
++// new one enters the allowlist, so both must be covered. GitHub lists at
++// most 3000 files and answers nothing for the pages past that, so a change
++// set that large, or one where the pages read do not add up to the pull
++// request's own count, is a read that cannot be completed — it throws, and
++// nothing is approved on a change set nobody saw whole.
++async function changedFiles(pr) {
++  const found = [];
++  const names = new Set();
++  for (let page = 1; page <= FILE_PAGES; page++) {
++    const batch = await github("GET", `/pulls/${pr.number}/files?per_page=100&page=${page}`);
++    found.push(...batch.flatMap(file => [file.filename, file.previous_filename]).filter(Boolean));
++    for (const file of batch) if (file.filename) names.add(file.filename);
++    if (batch.length < 100) {
++      if ((pr.changed_files ?? 0) >= FILE_MAX || names.size !== pr.changed_files) {
++        throw new Error(`pull request #${pr.number} lists ${pr.changed_files} changed files but only ${names.size} were read, so the change set cannot be judged whole`);
++      }
++      return found;
++    }
++  }
++  throw new Error(`more than ${FILE_PAGES * 100} changed files on pull request #${pr.number}`);
++}
++
++// Team `internal`'s members, as GitHub answers for it. Null when it cannot
++// be read — a failed read or a team that does not exist — which fails the
++// approval closed (lib/staging-approval.mjs): an unreadable team can only
++// ever keep an author out, never let one past. One retry, as the roster
++// read gets: runners share their egress with the rest of GitHub.
++async function readTeam(org, slug, tries = 2) {
++  const path = slug => `/orgs/${encodeURIComponent(org)}/teams/${encodeURIComponent(slug)}/members?per_page=100&page=`;
++  for (let attempt = 1; attempt <= tries; attempt++) {
++    try {
++      const found = [];
++      for (let page = 1; page <= 10; page++) {
++        const batch = await orgApi("GET", `${path(slug)}${page}`);
++        found.push(...batch.map(user => user?.login ?? "").filter(Boolean));
++        if (batch.length < 100) return found;
++      }
++      throw new Error("more than 1000 members");
++    } catch (error) {
++      if (attempt < tries) {
++        await new Promise(resolve => setTimeout(resolve, 3000));
++        continue;
++      }
++      console.error(`team ${slug} could not be read: ${error.message}`);
++      return null;
++    }
++  }
++}
++
++// A file's text as the base branch has it — never the pull request's copy.
++// Null when it cannot be read.
++async function textAtBase(path, ref) {
++  try {
++    const file = await github("GET", `/contents/${path}?ref=${encodeURIComponent(ref)}`);
++    return Buffer.from(file.content ?? "", "base64").toString("utf8");
++  } catch {
++    return null;
++  }
++}
++
++// The roster as the base branch holds it — never the pull request's copy.
++// Null builders when the file cannot be read as one; combineRoster then
++// lets the coordinator's answer stand alone (lib/operator-approval.mjs).
++async function rosterAtBase(ref) {
++  try {
++    const parsed = JSON.parse(await textAtBase("roster.json", ref));
++    return Array.isArray(parsed?.builders) ? parsed.builders : null;
++  } catch {
++    return null;
++  }
++}
++
++// The coordinator's roster record for one login: roster.json as deployed,
++// plus members an owner admitted on the board, which the file alone does
++// not know. One retry on a rejected or throttled answer, as operator-approval's
++// read gets: a required decision should not turn on one 429.
++async function rosterApi(login, tries = 2) {
++  const url = `${process.env.ROSTER_URL ?? "https://demo.multiagency.ai"}/api/roster/${encodeURIComponent(login)}`;
++  for (let attempt = 1; attempt <= tries; attempt++) {
++    try {
++      const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(10_000) });
++      if (response.ok) return rosterFromApi(await response.json());
++      if (attempt < tries) {
++        const wait = Math.min(Number(response.headers.get("retry-after")) * 1000 || 3000, 10_000);
++        await new Promise(resolve => setTimeout(resolve, wait));
++      }
++    } catch {
++      if (attempt < tries) await new Promise(resolve => setTimeout(resolve, 3000));
++    }
++  }
++  return { status: "unreadable" };
++}
++
++// The `test` check's newest run for this exact head SHA, or null when none
++// ran: check ids only grow, so the largest id is the newest.
++async function latestTest(sha) {
++  for (let page = 1; page <= CHECK_PAGES; page++) {
++    const batch = await github("GET", `/commits/${sha}/check-runs?per_page=100&page=${page}`);
++    const runs = (batch.check_runs ?? []).filter(run => run.name === TEST_CHECK);
++    if (runs.length > 0) return runs.sort((a, b) => b.id - a.id)[0];
++    if (batch.total_count <= page * 100) return null;
++  }
++  return null;
++}
++
++// The verdict for this pull request, from the ai-review run's own artifact
++// — never from a comment, which a pull request can fake. Nothing a
++// workflow run reports names the pull request the run reviewed: a
++// `pull_request_target` run answers with the base branch as its head_branch
++// and head_sha, so the run is found through its verdict artifact, whose
++// name carries the pull request's number (ai-review-verdict-<number>) and
++// whose verdict.json carries the head SHA the review judged — compared
++// against the head SHA the pull request answers with now, in the verdict
++// (stagingApproval). The newest verdict artifact still held decides,
++// whatever run left it: a run still going holds (its verdict is coming),
++// one that failed, was cancelled, or succeeded without a verdict artifact
++// leaves nothing newer to trust, and only a succeeded run's artifact
++// decides — through a download with `gh run download`, which unzips the
++// artifact GitHub stores. The run's own head_sha is still read for one
++// check, the one about the run and not the pull request: its verdict
++// counts only when the base branch carries that commit, so a run from a
++// side branch's modified copy of the workflow — even one a pull request to
++// the base branch carries on its head — decides nothing.
++async function verdictFor(number) {
++  const name = verdictArtifactName(number);
++  let artifact = null;
++  try {
++    const listed = await github("GET", `/actions/artifacts?name=${encodeURIComponent(name)}&per_page=100`);
++    artifact = newestVerdictArtifact(listed.artifacts, number);
++  } catch (error) {
++    console.log(`staging-approval: the verdict artifacts for #${number} could not be read: ${error.message}`);
++    return null;
++  }
++  if (!artifact) {
++    console.log(`staging-approval: no ai-review run has left a verdict artifact for #${number}, so nothing is approved`);
++    return null;
++  }
++  let run = null;
++  try {
++    run = await github("GET", `/actions/runs/${artifact.workflow_run.id}`);
++  } catch (error) {
++    console.log(`staging-approval: the run behind #${number}'s verdict artifact could not be read: ${error.message}`);
++    return null;
++  }
++  if (run.conclusion == null) {
++    console.log(`staging-approval: the ai-review run ${run.id} behind #${number}'s verdict is still running, so #${number} waits for it`);
++    return null;
++  }
++  if (run.conclusion !== "success") {
++    console.log(`staging-approval: the newest ai-review run ${run.id} with a verdict for #${number} ended ${run.conclusion}, so nothing is approved`);
++    return null;
++  }
++  let offBase = `${BASE} does not carry ${run.head_sha}`;
++  try {
++    const compare = await github("GET", `/compare/${BASE}...${run.head_sha}`);
++    if (["behind", "identical"].includes(String(compare?.status ?? ""))) offBase = null;
++  } catch (error) {
++    offBase = `comparing ${run.head_sha} with ${BASE} failed: ${error.message}`;
++  }
++  if (offBase) {
++    console.log(`staging-approval: ai-review run ${run.id} ran from a commit ${offBase}, so its verdict counts for nothing`);
++    return null;
++  }
++  const dir = mkdtempSync(join(tmpdir(), "staging-approval-"));
++  try {
++    execFileSync("gh", ["run", "download", String(run.id), "--name", name, "--repo", process.env.SANDBOX_REPO, "--dir", dir], {
++      stdio: "ignore",
++      env: { ...process.env, GH_TOKEN: process.env.GITHUB_TOKEN },
++    });
++    const verdict = verdictFrom(readFileSync(join(dir, VERDICT_FILE), "utf8"));
++    if (verdict) {
++      console.log(`staging-approval: verdict from ai-review run ${run.id} (${run.created_at})`);
++      return verdict;
++    }
++    console.log(`staging-approval: ai-review run ${run.id} uploaded a verdict that does not parse`);
++    return null;
++  } catch (error) {
++    // The newest verdict for this pull request that cannot be read is a
++    // hold, never a fallback to an older run's verdict.
++    console.log(`staging-approval: the verdict artifact of ai-review run ${run.id} could not be read: ${error.message}`);
++    return null;
++  } finally {
++    rmSync(dir, { recursive: true, force: true });
++  }
++}
++
++// Whether the reviewer's approval already stands at this exact SHA: the
++// workflow fires once per completed run, so the second of two firings for
++// one head sees the first's approval and leaves it.
++async function alreadyApproved(number, sha) {
++  for (let page = 1; page <= REVIEW_PAGES; page++) {
++    const batch = await github("GET", `/pulls/${number}/reviews?per_page=100&page=${page}`);
++    if (batch.some(review => review.user?.login?.toLowerCase() === REVIEWER && review.state === "APPROVED" && review.commit_id === sha)) return true;
++    if (batch.length < 100) return false;
++  }
++  return false;
++}
++
++const describe = members => (members === null ? "unreadable" : `${members.length} member${members.length === 1 ? "" : "s"}`);
+diff --git a/test/staging-approval.test.mjs b/test/staging-approval.test.mjs
+new file mode 100644
+index 0000000..b2a5293
+--- /dev/null
++++ b/test/staging-approval.test.mjs
+@@ -0,0 +1,358 @@
++import assert from "node:assert/strict";
++import { describe, test } from "node:test";
++
++import {
++  AGENCY,
++  REVIEWER,
++  authorAllowed,
++  codeownersMatches,
++  codeownersRules,
++  newestVerdictArtifact,
++  openCandidates,
++  ownersForPath,
++  reviewerCovers,
++  stagingApproval,
++  testVerdict,
++  uncoveredPath,
++  verdictArtifactName,
++  verdictArtifactNumbers,
++  verdictFrom,
++} from "../lib/staging-approval.mjs";
++
++// The base branch's CODEOWNERS as #77's owner edits would leave it: `*`
++// first, the allowlist after, money and permission paths keeping their own
++// rules — the last match decides.
++const CODEOWNERS = [
++  "*                        @MultiAgency/internal @jlwaugh",
++  "/lib/pay.mjs            @jlwaugh @MultiAgency/internal",
++  "/docs/                  @MultiAgency/internal @jlwaugh @multai-builder",
++  "/lib/brief.mjs          @MultiAgency/internal @jlwaugh @multai-builder",
++].join("\n");
++
++const rules = () => codeownersRules(CODEOWNERS);
++const verdict = sha => ({ sha, important: 0 });
++const SHA = "5e0a1f2a3b4c5d6e7f8091011121314151617181";
++const passing = (over = {}) => ({
++  base: "staging",
++  fork: false,
++  author: "saadiqbal-dev",
++  internal: ["saadiqbal-dev"],
++  roster: { status: "absent" },
++  paths: ["docs/setup.md", "lib/brief.mjs"],
++  rules: rules(),
++  test: "passed",
++  verdict: verdict(SHA),
++  sha: SHA,
++  ...over,
++});
++
++describe("stagingApproval", () => {
++  test("check 1: a pull request not targeting staging holds", () => {
++    for (const base of ["main", "release", ""]) {
++      const { outcome, reason } = stagingApproval(passing({ base }));
++      assert.equal(outcome, "hold");
++      assert.match(reason, /not staging/);
++    }
++  });
++
++  test("check 2: a fork's pull request holds", () => {
++    const { outcome, reason } = stagingApproval(passing({ fork: true }));
++    assert.equal(outcome, "hold");
++    assert.match(reason, /fork/);
++  });
++
++  test("check 3: an author outside team internal, the agency account and the roster holds", () => {
++    const { outcome, reason } = stagingApproval(passing({ author: "drive-by", internal: ["saadiqbal-dev"] }));
++    assert.equal(outcome, "hold");
++    assert.match(reason, /@drive-by is not in team internal/);
++  });
++
++  test("check 3: a team internal that cannot be read fails closed, whoever the author is", () => {
++    const { outcome, reason } = stagingApproval(passing({ internal: null }));
++    assert.equal(outcome, "hold");
++    assert.match(reason, /internal could not be read/);
++  });
++
++  test("check 3: a rostered agent whose operator is in team internal passes", () => {
++    const agent = passing({ author: "agency-builder", internal: ["jlwaugh"], roster: { status: "record", kind: "agent", operator: "jlwaugh" } });
++    assert.equal(stagingApproval(agent).outcome, "approve");
++  });
++
++  test("check 3: a rostered agent whose operator is outside team internal holds", () => {
++    const { outcome, reason } = stagingApproval(passing({ author: "agency-builder", internal: ["saadiqbal-dev"], roster: { status: "record", kind: "agent", operator: "someone-else" } }));
++    assert.equal(outcome, "hold");
++    assert.match(reason, /@agency-builder is not in team internal/);
++  });
++
++  test("check 3: a rostered agent with no operator, or a record naming no kind, holds", () => {
++    for (const roster of [{ status: "record", kind: "agent", operator: null }, { status: "record", kind: null, operator: "jlwaugh" }]) {
++      const { outcome } = stagingApproval(passing({ author: "agency-builder", internal: ["saadiqbal-dev"], roster }));
++      assert.equal(outcome, "hold");
++    }
++  });
++
++  test("check 3: a roster that cannot be read fails closed for an author the team alone cannot allow", () => {
++    const { outcome, reason } = stagingApproval(passing({ author: "drive-by", internal: ["saadiqbal-dev"], roster: { status: "unreadable" } }));
++    assert.equal(outcome, "hold");
++    assert.match(reason, /roster could not be read/);
++  });
++
++  test("check 3: an unreadable roster does not hold an author team internal allows", () => {
++    const { outcome } = stagingApproval(passing({ roster: { status: "unreadable" } }));
++    assert.equal(outcome, "approve");
++  });
++
++  test("check 4: a test check that has not passed holds", () => {
++    for (const test of ["pending", "failure", null, undefined]) {
++      const { outcome, reason } = stagingApproval(passing({ test }));
++      assert.equal(outcome, "hold");
++      assert.match(reason, /test/);
++    }
++  });
++
++  test("check 5: one changed file off the allowlist holds, and the log names it", () => {
++    const { outcome, reason } = stagingApproval(passing({ paths: ["docs/setup.md", "lib/github.mjs"] }));
++    assert.equal(outcome, "hold");
++    assert.match(reason, /lib\/github\.mjs/);
++    assert.match(reason, /multai-builder/);
++  });
++
++  test("check 5: a pull request changing no file approves nothing", () => {
++    const { outcome } = stagingApproval(passing({ paths: [] }));
++    assert.equal(outcome, "hold");
++  });
++
++  test("check 6: no verdict, or one that does not parse, holds", () => {
++    for (const v of [null, {}, { sha: SHA }, { sha: SHA, important: "none" }, { sha: SHA, important: -1 }]) {
++      const { outcome, reason } = stagingApproval(passing({ verdict: v }));
++      assert.equal(outcome, "hold");
++      assert.match(reason, /ai-review/);
++    }
++  });
++
++  test("check 6: a verdict for an older SHA holds", () => {
++    const { outcome, reason } = stagingApproval(passing({ verdict: verdict("0000000000000000000000000000000000000000") }));
++    assert.equal(outcome, "hold");
++    assert.match(reason, /not this head SHA/);
++  });
++
++  test("check 6: a verdict counting Important findings holds", () => {
++    const { outcome, reason } = stagingApproval(passing({ verdict: { sha: SHA, important: 2 } }));
++    assert.equal(outcome, "hold");
++    assert.match(reason, /2 Important findings/);
++  });
++
++  test("the passing case: every check holds, so the approval posts", () => {
++    const { outcome, reason } = stagingApproval(passing());
++    assert.equal(outcome, "approve");
++    assert.match(reason, new RegExp(`@${REVIEWER} owns every changed file`));
++    assert.match(reason, /0 Important findings/);
++  });
++
++  test("a pull request is judged on both paths of a rename", () => {
++    // A rename lands as two changed paths: the old one leaves its owner's
++    // protection and the new one enters the allowlist. Moving a money or
++    // permission file into an allowlisted directory must hold.
++    const moved = passing({ paths: ["docs/roster.json", "roster.json"] });
++    const { outcome, reason } = stagingApproval(moved);
++    assert.equal(outcome, "hold");
++    assert.match(reason, /roster\.json/);
++    assert.equal(stagingApproval(passing({ paths: ["docs/new.md", "docs/old.md"] })).outcome, "approve");
++  });
++
++  test("a second allowlist line after the reviewer's keeps a file off the allowlist", () => {
++    const overridden = codeownersRules(`${CODEOWNERS}\n/lib/brief.mjs          @jlwaugh @MultiAgency/internal`);
++    const { outcome } = stagingApproval(passing({ rules: overridden }));
++    assert.equal(outcome, "hold");
++  });
++
++  test("a later ** rule that does not name the reviewer keeps its deep paths off the allowlist", () => {
++    const narrowed = codeownersRules(`${CODEOWNERS}\n/test/private/**        @jlwaugh`);
++    assert.equal(uncoveredPath(narrowed, ["test/private/deep/unit.test.mjs"]), "test/private/deep/unit.test.mjs");
++    const { outcome } = stagingApproval(passing({ rules: narrowed, paths: ["test/private/deep/unit.test.mjs"] }));
++    assert.equal(outcome, "hold");
++  });
++});
++
++describe("authorAllowed", () => {
++  test("the names the issue allows, case apart", () => {
++    assert.equal(authorAllowed({ author: AGENCY }), true);
++    assert.equal(authorAllowed({ author: "jlwaugh", internal: ["jlwaugh"] }), true);
++    assert.equal(authorAllowed({ author: "agency-builder", internal: ["jlwaugh"], roster: { status: "record", kind: "agent", operator: "jlwaugh" } }), true);
++    assert.equal(authorAllowed({ author: "JLWAUGH", internal: ["jlwaugh"] }), true);
++  });
++
++  test("nobody else, and an unreadable team or roster holds nobody in", () => {
++    assert.equal(authorAllowed({ author: "stranger" }), false);
++    assert.equal(authorAllowed({ author: "stranger", internal: null }), false);
++    assert.equal(authorAllowed({ author: "stranger", roster: { status: "unreadable" } }), false);
++    assert.equal(authorAllowed({ author: "agency-builder", internal: ["jlwaugh"], roster: { status: "record", kind: "agent", operator: "someone-else" } }), false);
++    assert.equal(authorAllowed({ author: "agency-builder", internal: ["jlwaugh"], roster: { status: "record", kind: "agent", operator: null } }), false);
++    assert.equal(authorAllowed({ author: "agency-builder", internal: ["jlwaugh"], roster: { status: "record", kind: "human", operator: "jlwaugh" } }), false);
++    assert.equal(authorAllowed({ author: "agency-builder", internal: ["jlwaugh"], roster: { status: "absent" } }), false);
++  });
++
++  test("the roster answers for who the agent is, never for who answers for it", () => {
++    // The operator counts only as a member GitHub's own team read names;
++    // the roster pairing agent with operator is not itself the membership.
++    assert.equal(authorAllowed({ author: "agency-builder", internal: [], roster: { status: "record", kind: "agent", operator: "jlwaugh" } }), false);
++  });
++});
++
++describe("openCandidates", () => {
++  test("the event's pull requests, the commit's, and the verdict artifacts', deduplicated", () => {
++    assert.deepEqual(
++      openCandidates([{ number: 12 }, { number: 7 }], [{ number: 7, state: "open" }, { number: 9 }], [9, 15]),
++      [12, 7, 9, 15],
++    );
++  });
++
++  test("entries without a number count for nothing", () => {
++    assert.deepEqual(openCandidates([{}, null], [undefined]), []);
++    assert.deepEqual(openCandidates(), []);
++  });
++});
++
++describe("verdictArtifactNumbers", () => {
++  test("reads the pull request number out of artifacts named for it", () => {
++    assert.deepEqual(
++      verdictArtifactNumbers([{ name: "ai-review-verdict-108" }, { name: "ai-review-verdict-12" }, { name: "other" }, { name: "ai-review-verdict-x" }, {}]),
++      [108, 12],
++    );
++    assert.deepEqual(verdictArtifactNumbers([]), []);
++    assert.deepEqual(verdictArtifactNumbers(null), []);
++  });
++});
++
++describe("newestVerdictArtifact", () => {
++  test("the newest artifact still held and named for the pull request decides", () => {
++    const artifacts = [
++      { id: 31, name: "ai-review-verdict-108", expired: false, workflow_run: { id: 901 } },
++      { id: 30, name: "ai-review-verdict-108", expired: false, workflow_run: { id: 900 } },
++      { id: 29, name: "ai-review-verdict-12", expired: false, workflow_run: { id: 899 } },
++      { id: 28, name: "ai-review-verdict-108", expired: true, workflow_run: { id: 898 } },
++      { id: 27, name: "other", expired: false, workflow_run: { id: 897 } },
++      { name: "ai-review-verdict-108" },
++    ];
++    assert.equal(newestVerdictArtifact(artifacts, 108)?.workflow_run?.id, 901);
++    assert.equal(newestVerdictArtifact(artifacts, 12)?.workflow_run?.id, 899);
++    assert.deepEqual(verdictArtifactName(108), "ai-review-verdict-108");
++  });
++
++  test("a pull_request_target run's head_branch names the base branch, and the artifact decides anyway", () => {
++    // GitHub answers a pull_request_target run with head_branch "staging"
++    // and staging's head as its head_sha, so nothing the run reports names
++    // the pull request it reviewed. The artifact's name ties the verdict to
++    // #108, and the run behind it is read from the artifact itself.
++    const found = newestVerdictArtifact([{ id: 31, name: "ai-review-verdict-108", expired: false, workflow_run: { id: 901 } }], 108);
++    assert.equal(found.workflow_run.id, 901);
++  });
++
++  test("nothing held, nothing named for the pull request, or no run behind it, is no artifact", () => {
++    assert.equal(newestVerdictArtifact([], 108), null);
++    assert.equal(newestVerdictArtifact(null, 108), null);
++    assert.equal(newestVerdictArtifact([{ id: 31, name: "ai-review-verdict-108", expired: true, workflow_run: { id: 901 } }], 108), null);
++    assert.equal(newestVerdictArtifact([{ id: 31, name: "ai-review-verdict-108", expired: false }], 108), null);
++    assert.equal(newestVerdictArtifact([{ id: 31, name: "ai-review-verdict-12", expired: false, workflow_run: { id: 901 } }], 108), null);
++  });
++});
++
++describe("codeownersRules", () => {
++  test("keeps file order, drops comments and ownerless lines, lowercases owners", () => {
++    assert.deepEqual(codeownersRules("# note\n*.md @Jlwaugh\n/no-owners\n"), [
++      { pattern: "*.md", owners: ["jlwaugh"] },
++    ]);
++  });
++
++  test("no text, no rules", () => {
++    assert.deepEqual(codeownersRules(null), []);
++    assert.deepEqual(codeownersRules(""), []);
++  });
++});
++
++describe("codeownersMatches", () => {
++  test("a trailing slash selects the directory's contents, and nothing outside it", () => {
++    assert.equal(codeownersMatches("/docs/", "docs/setup.md"), true);
++    assert.equal(codeownersMatches("/docs/", "docs/deep/setup.md"), true);
++    assert.equal(codeownersMatches("/docs/", "src/docs/setup.md"), false);
++    assert.equal(codeownersMatches("/docs/", "docs.md"), false);
++  });
++
++  test("a leading slash anchors at the root", () => {
++    assert.equal(codeownersMatches("/README.md", "README.md"), true);
++    assert.equal(codeownersMatches("/README.md", "docs/README.md"), false);
++  });
++
++  test("a pattern with no slash matches the name at any depth", () => {
++    assert.equal(codeownersMatches("README.md", "README.md"), true);
++    assert.equal(codeownersMatches("README.md", "docs/README.md"), true);
++    assert.equal(codeownersMatches("README.md", "docs/deep/README.md"), true);
++  });
++
++  test("a wildcard covers one segment only", () => {
++    assert.equal(codeownersMatches("/lib/*.mjs", "lib/brief.mjs"), true);
++    assert.equal(codeownersMatches("/lib/*.mjs", "lib/deep/brief.mjs"), false);
++  });
++
++  test("** crosses directories, as gitignore and GitHub match it", () => {
++    assert.equal(codeownersMatches("**/logs", "logs"), true);
++    assert.equal(codeownersMatches("**/logs", "a/b/logs"), true);
++    assert.equal(codeownersMatches("**/logs", "a/b/logs/under"), true);
++    assert.equal(codeownersMatches("**/logs", "a/b/logsname"), false);
++    assert.equal(codeownersMatches("docs/**", "docs/x/y"), true);
++    assert.equal(codeownersMatches("docs/**", "other/x"), false);
++    assert.equal(codeownersMatches("a/**/b", "a/b"), true);
++    assert.equal(codeownersMatches("a/**/b", "a/x/y/b"), true);
++    assert.equal(codeownersMatches("a/**/b", "a/x/c"), false);
++  });
++
++  test("garbage matches nothing", () => {
++    assert.equal(codeownersMatches("", "README.md"), false);
++    assert.equal(codeownersMatches("/docs/", ""), false);
++    assert.equal(codeownersMatches("/docs/", null), false);
++  });
++});
++
++describe("ownersForPath and uncoveredPath", () => {
++  test("the last matching rule decides who owns a file", () => {
++    assert.deepEqual(ownersForPath(rules(), "lib/pay.mjs"), ["jlwaugh", "multiagency/internal"]);
++    assert.deepEqual(ownersForPath(rules(), "README.md"), ["multiagency/internal", "jlwaugh"]);
++    assert.deepEqual(ownersForPath(rules(), "lib/other.mjs"), ["multiagency/internal", "jlwaugh"]);
++  });
++
++  test("uncoveredPath names the first file the reviewer does not own", () => {
++    assert.equal(uncoveredPath(rules(), ["docs/setup.md", "lib/pay.mjs"]), "lib/pay.mjs");
++    assert.equal(uncoveredPath(rules(), ["docs/setup.md", "lib/brief.mjs"]), null);
++  });
++});
++
++describe("reviewerCovers", () => {
++  test("true only when every changed file's last rule names the reviewer", () => {
++    assert.equal(reviewerCovers(rules(), ["docs/setup.md", "lib/brief.mjs"]), true);
++    assert.equal(reviewerCovers(rules(), ["docs/setup.md", "lib/pay.mjs"]), false);
++    assert.equal(reviewerCovers(rules(), []), false);
++    assert.equal(reviewerCovers(null, ["README.md"]), false);
++  });
++});
++
++describe("testVerdict", () => {
++  test("resolves the check run to passed, pending, or the conclusion", () => {
++    assert.equal(testVerdict({ status: "completed", conclusion: "success" }), "passed");
++    assert.equal(testVerdict({ status: "in_progress" }), "pending");
++    assert.equal(testVerdict({ status: "completed", conclusion: "failure" }), "failure");
++    assert.equal(testVerdict(null), null);
++  });
++});
++
++describe("verdictFrom", () => {
++  test("parses a verdict with a SHA and a non-negative count", () => {
++    assert.deepEqual(verdictFrom(`{"sha":"${SHA}","important":0}`), { sha: SHA, important: 0 });
++    assert.deepEqual(verdictFrom(`{"sha":"${SHA}","important":2}`), { sha: SHA, important: 2 });
++  });
++
++  test("anything else is no verdict", () => {
++    for (const text of ["", "not json", "{}", '{"sha":"","important":0}', `{"sha":"${SHA}"}`, `{"sha":"${SHA}","important":1.5}`, `{"sha":"${SHA}","important":"0"}`, "null"]) {
++      assert.equal(verdictFrom(text), null, text);
++    }
++  });
++});
