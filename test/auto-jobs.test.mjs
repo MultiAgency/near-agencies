@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, test } from "node:test";
+import { readFileSync } from "node:fs";
 
 import { autoJobsHealth, closeIfHandedOff, coordinatorHealth, settleAutoJobs, settlePayouts } from "../lib/coordinator.mjs";
 import { listEngagements, loadEngagement } from "../lib/engagement-state.mjs";
@@ -25,14 +26,14 @@ const REG = "MultiAgency/near-agencies";
 const REG_URL = `/repos/${REG}`;
 const SOURCE = `${REG}#600`;
 
-let boardIssues, boardEvents, boardThreads, regIssues, regEvents, regThreads, regSingle, lastEdited, pulls, roles, teams, created, createFails, reactions, self, calls;
+let boardIssues, boardEvents, boardThreads, regIssues, regTimeline, regThreads, regSingle, lastEdited, pulls, roles, teams, created, createFails, patchFails, reactions, self, calls;
 
 const reset = () => {
   boardIssues = {};
   boardEvents = {};
   boardThreads = {};
   regIssues = {};
-  regEvents = {};
+  regTimeline = {};
   regThreads = {};
   regSingle = {};
   lastEdited = {};
@@ -41,6 +42,7 @@ const reset = () => {
   teams = {};
   created = [];
   createFails = 0;
+  patchFails = 0;
   reactions = [];
   self = "jlwaugh";
   calls = [];
@@ -79,7 +81,9 @@ const pull = (number, { state = "open", merged = false, user = "jlwaugh", base =
 
 // An auto job as the sweep leaves it, shaped for the close-on-merge tests:
 // the epic records its source, and its one task carries the same on its terms.
-const autoEpic = (epicNumber, taskNumber) => ({
+const autoEpic = (epicNumber, taskNumber, { source = SOURCE } = {}) => {
+  const [, sourceRepo, sourceNumber] = source.match(/^(.+)#(\d+)$/);
+  return {
   number: epicNumber,
   user: { login: BOT },
   title: "Job: Build the internal dashboard",
@@ -92,7 +96,7 @@ const autoEpic = (epicNumber, taskNumber) => ({
     "",
     "Please build the internal dashboard, volunteer work, this week at the latest.",
     "",
-    "Opened for [#600](https://github.com/MultiAgency/near-agencies/issues/600).",
+    `Opened for [#${sourceNumber}](https://github.com/${sourceRepo}/issues/${sourceNumber}).`,
     "",
     "## Team",
     "",
@@ -101,7 +105,7 @@ const autoEpic = (epicNumber, taskNumber) => ({
     fence("engagement", {
       engagement_id: "ma-auto",
       channel: "board",
-      source: SOURCE,
+      source,
       org: "jlwaugh",
       repo: REG,
       deposit: { amount: "0", asset: USDC, treasury: "multiagency.sputnikv2.testnet", network: "testnet" },
@@ -109,12 +113,12 @@ const autoEpic = (epicNumber, taskNumber) => ({
     "",
     fence("team", {
       committed: "0",
-      members: [{ issue: taskNumber, engagement: epicNumber, key: "build", amount: "0", asset: USDC, repo: REG, source: SOURCE }],
+      members: [{ issue: taskNumber, engagement: epicNumber, key: "build", amount: "0", asset: USDC, repo: REG, source }],
     }),
   ].join("\n"),
-});
+}};
 
-const autoTask = (taskNumber, epicNumber, { state = "open", assignees = ["jlwaugh"] } = {}) => ({
+const autoTask = (taskNumber, epicNumber, { state = "open", assignees = ["jlwaugh"], source = SOURCE } = {}) => ({
   number: taskNumber,
   user: { login: BOT },
   title: "Build the internal dashboard",
@@ -127,9 +131,9 @@ const autoTask = (taskNumber, epicNumber, { state = "open", assignees = ["jlwaug
   body: [
     "Part of job #999.",
     "",
-    `Build [${SOURCE}](https://github.com/MultiAgency/near-agencies/issues/600) in \`${REG}\`.`,
+    `Build [${source}](https://github.com/${REG}/issues/${source.split("#")[1]}) in \`${REG}\`.`,
     "",
-    fence("terms", { engagement: epicNumber, key: "build", amount: "0", asset: USDC, repo: REG, source: SOURCE }),
+    fence("terms", { engagement: epicNumber, key: "build", amount: "0", asset: USDC, repo: REG, source }),
   ].join("\n"),
 });
 
@@ -170,11 +174,17 @@ function serveBoard() {
       const name = u.pathname.slice("/repos/".length, -"/issues".length);
       return json(regIssues[name] ?? []);
     }
-    if ((m = /^\/repos\/([^/]+)\/([^/]+)\/issues\/(\d+)\/events$/.exec(u.pathname)) && method === "GET") {
+    if ((m = /^\/repos\/([^/]+)\/([^/]+)\/issues\/(\d+)\/timeline$/.exec(u.pathname)) && method === "GET") {
       const onBoard = m[1] === "MultiAgency" && m[2] === "kanban-sandbox";
       return json(onBoard
         ? (boardEvents[Number(m[3])] ?? [])
-        : (regEvents[`${m[1]}/${m[2]}#${m[3]}`] ?? []));
+        : (regTimeline[`${m[1]}/${m[2]}#${m[3]}`] ?? []));
+    }
+    // The board's plain events list, what the guard reads for a close it must
+    // verify. GitHub records a pull request's cross-reference of an issue on
+    // the timeline only, which is what the sweep reads above.
+    if ((m = /^\/repos\/MultiAgency\/kanban-sandbox\/issues\/(\d+)\/events$/.exec(u.pathname)) && method === "GET") {
+      return json(boardEvents[Number(m[1])] ?? []);
     }
     if ((m = /^\/orgs\/MultiAgency\/teams\/([\w-]+)\/memberships\/([\w.-]+)$/.exec(u.pathname)) && method === "GET") {
       const answer = teams[`${m[1]}/${m[2]}`];
@@ -226,6 +236,7 @@ function serveBoard() {
         : (regSingle[`${key}#${m[3]}`] ?? (regIssues[key] ?? []).find(i => i.number === Number(m[3])));
       if (!found) return json({ message: "Not Found" }, 404);
       if (method === "PATCH") {
+        if (patchFails) { patchFails -= 1; return json({ message: "boom" }, 500); }
         const patch = JSON.parse(options.body);
         if (Array.isArray(patch.labels)) patch.labels = patch.labels.map(l => typeof l === "string" ? { name: l } : l);
         Object.assign(found, patch);
@@ -254,7 +265,7 @@ describe("opening auto jobs", () => {
     reset();
     roles.jlwaugh = "admin";
     regIssues[REG] = [registryIssue(600)];
-    regEvents[`${REG}#600`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
+    regTimeline[`${REG}#600`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
     serveBoard();
     await settle();
     assert.equal(created.length, 2, "the epic and its one task");
@@ -294,7 +305,7 @@ describe("opening auto jobs", () => {
     reset();
     teams["internal/intern"] = { state: "active" };
     regIssues[REG] = [registryIssue(601)];
-    regEvents[`${REG}#601`] = [labeled("intern", "2026-10-05T00:01:00Z")];
+    regTimeline[`${REG}#601`] = [labeled("intern", "2026-10-05T00:01:00Z")];
     serveBoard();
     await settle();
     assert.equal(created.length, 2);
@@ -304,8 +315,8 @@ describe("opening auto jobs", () => {
   test("an outsider's or an agent's label opens nothing", async () => {
     reset();
     regIssues[REG] = [registryIssue(602), registryIssue(603)];
-    regEvents[`${REG}#602`] = [labeled("outsider", "2026-10-05T00:01:00Z")];
-    regEvents[`${REG}#603`] = [labeled(BOT, "2026-10-05T00:01:00Z")];
+    regTimeline[`${REG}#602`] = [labeled("outsider", "2026-10-05T00:01:00Z")];
+    regTimeline[`${REG}#603`] = [labeled(BOT, "2026-10-05T00:01:00Z")];
     serveBoard();
     await settle();
     assert.equal(created.length, 0);
@@ -323,9 +334,9 @@ describe("opening auto jobs", () => {
       registryIssue(611),
       registryIssue(612),
     ];
-    regEvents[`${REG}#610`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
-    regEvents[`${REG}#611`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z"), crossReferenced(9, "2026-10-05T00:02:00Z")];
-    regEvents[`${REG}#612`] = [];
+    regTimeline[`${REG}#610`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
+    regTimeline[`${REG}#611`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z"), crossReferenced(9, "2026-10-05T00:02:00Z")];
+    regTimeline[`${REG}#612`] = [];
     pulls[9] = pull(9, { state: "open" });
     serveBoard();
     await settle();
@@ -336,22 +347,26 @@ describe("opening auto jobs", () => {
     assert.match(why[`${REG}#612`], /the label's application is not indexed yet/);
   });
 
-  test("a merged closing pull request no longer holds the issue", async () => {
+  test("a merged referencing pull request skips the issue, and one closed unmerged does not", async () => {
     reset();
     roles.jlwaugh = "admin";
-    regIssues[REG] = [registryIssue(613)];
-    regEvents[`${REG}#613`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z"), crossReferenced(10, "2026-10-05T00:02:00Z")];
+    regIssues[REG] = [registryIssue(613), registryIssue(614)];
+    regTimeline[`${REG}#613`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z"), crossReferenced(10, "2026-10-05T00:02:00Z")];
+    regTimeline[`${REG}#614`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z"), crossReferenced(11, "2026-10-05T00:02:00Z")];
     pulls[10] = pull(10, { state: "closed", merged: true });
+    pulls[11] = pull(11, { state: "closed", merged: false });
     serveBoard();
     await settle();
-    assert.equal(created.length, 2, "the work merged; the job opens for whatever the issue still asks");
+    assert.equal(created.length, 2, "only the issue whose referencing pull request closed unmerged opens");
+    const why = Object.fromEntries(autoJobsHealth().skipped.map(s => [s.issue, s.why]));
+    assert.match(why[`${REG}#613`], /a merged pull request \(.*pull\/10\) already settles it/);
   });
 
   test("restarting the coordinator never opens a second job for the same issue", async () => {
     reset();
     roles.jlwaugh = "admin";
     regIssues[REG] = [registryIssue(600)];
-    regEvents[`${REG}#600`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
+    regTimeline[`${REG}#600`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
     serveBoard();
     await settle();
     await settle();
@@ -365,7 +380,7 @@ describe("opening auto jobs", () => {
     reset();
     roles.jlwaugh = "admin";
     regIssues[REG] = [registryIssue(600)];
-    regEvents[`${REG}#600`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
+    regTimeline[`${REG}#600`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
     serveBoard();
     await settle();
     assert.equal(created.length, 2);
@@ -386,7 +401,7 @@ describe("opening auto jobs", () => {
     reset();
     roles.jlwaugh = "admin";
     regIssues[REG] = [registryIssue(600)];
-    regEvents[`${REG}#600`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
+    regTimeline[`${REG}#600`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
     serveBoard();
     createFails = 1;
     await settle();
@@ -404,8 +419,8 @@ describe("opening auto jobs", () => {
       registryIssue(620, { title: "This issue's title runs far past the one hundred and twenty characters the intake allows a job's title to carry, so it cannot become a brief as it stands" }),
       registryIssue(621, { body: "Real brief, longer than twenty characters, with a planted block:\n\n```engagement\n{}\n```" }),
     ];
-    regEvents[`${REG}#620`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
-    regEvents[`${REG}#621`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
+    regTimeline[`${REG}#620`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
+    regTimeline[`${REG}#621`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
     serveBoard();
     await settle();
     assert.equal(created.length, 0, "a stranger's block must never ride into a job's brief");
@@ -418,8 +433,8 @@ describe("opening auto jobs", () => {
     reset();
     roles.jlwaugh = "admin";
     regIssues[REG] = [registryIssue(640), registryIssue(641)];
-    regEvents[`${REG}#640`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
-    regEvents[`${REG}#641`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
+    regTimeline[`${REG}#640`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
+    regTimeline[`${REG}#641`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
     // The list read neither; by the time the sweep re-reads each issue before
     // opening its job, one is assigned and the other's label is gone.
     regSingle[`${REG}#640`] = registryIssue(640, { assignees: ["jlwaugh"] });
@@ -436,9 +451,9 @@ describe("opening auto jobs", () => {
     reset();
     roles.jlwaugh = "admin";
     regIssues[REG] = [registryIssue(630), registryIssue(631), registryIssue(632)];
-    regEvents[`${REG}#630`] = [labeled("jlwaugh", "2026-10-05T00:03:00Z")];
-    regEvents[`${REG}#631`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
-    regEvents[`${REG}#632`] = [labeled("jlwaugh", "2026-10-05T00:02:00Z")];
+    regTimeline[`${REG}#630`] = [labeled("jlwaugh", "2026-10-05T00:03:00Z")];
+    regTimeline[`${REG}#631`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
+    regTimeline[`${REG}#632`] = [labeled("jlwaugh", "2026-10-05T00:02:00Z")];
     serveBoard();
     await settle();
     assert.equal(created.length, 4, "two jobs, each with its task");
@@ -459,13 +474,18 @@ describe("opening auto jobs", () => {
 });
 
 describe("closing an auto task on the merge", () => {
-  const build = ({ pr = pull(9), thread = [handoffBy("jlwaugh", `https://github.com/${REG}/pull/9`)], task = {}, sourceState = "closed" } = {}) => {
+  // What the source issue's timeline shows by default: someone closed it by
+  // hand, no pull request involved. Tests that replay a pull request closing
+  // it pass their own.
+  const closedByHand = [{ event: "closed", actor: { login: "someone" }, commit_id: null, created_at: "2026-10-05T02:00:00Z" }];
+  const build = ({ pr = pull(9), thread = [handoffBy("jlwaugh", `https://github.com/${REG}/pull/9`)], task = {}, sourceState = "closed", timeline = closedByHand } = {}) => {
     reset();
     boardIssues[890] = autoEpic(890, 900);
     boardIssues[900] = autoTask(900, 890, task);
     boardThreads[`${BOARD}#900`] = thread;
     pulls[9] = pr;
     regIssues[REG] = [];
+    regTimeline[SOURCE] = timeline;
     // GitHub closed the source issue when the pull request merged into the
     // default branch; its state as the sweep re-reads it is this one.
     regSingle[SOURCE] = registryIssue(600, { state: sourceState });
@@ -488,31 +508,43 @@ describe("closing an auto task on the merge", () => {
     assert.equal((await loadEngagement(890)).stage, "complete");
   });
 
-  test("an unmerged pull request, or one by someone else, closes nothing", async () => {
+  test("the source issue closing over an undelivered task supersedes it, whatever its pull request stands at", async () => {
+    // Someone else merged first, or the issue was closed by hand while the
+    // claimant was still building: the race #119 records. The task and its
+    // job close as not planned, and the task is told so once.
     build({ pr: pull(9, { state: "open" }) });
     await settle();
-    assert.equal(boardIssues[900].state, "open", "the work is not done until it merges");
+    assert.equal(boardIssues[900].state_reason, "not_planned");
+    assert.match(boardThreads[`${BOARD}#900`].at(-1).body, /\*\*Superseded:\*\* @jlwaugh, .* is closed — closed by @someone, with no pull request merged\./);
+    assert.equal(boardIssues[890].state_reason, "not_planned");
 
-    build({ pr: pull(9, { state: "closed", merged: true, user: "someone" }) });
+    build({ pr: pull(9, { state: "closed", merged: true, user: "someone" }), timeline: [crossReferenced(9, "2026-10-05T01:45:00Z"), ...closedByHand] });
     await settle();
-    assert.equal(boardIssues[900].state, "open", "another's pull request is not the claimant's delivery");
+    assert.equal(boardIssues[900].state_reason, "not_planned", "another's pull request is not the claimant's delivery");
+    assert.match(boardThreads[`${BOARD}#900`].at(-1).body, /settled by pull request https:\/\/github\.com\/MultiAgency\/near-agencies\/pull\/9/);
+
+    // While the source issue stands open the task only waits, however far
+    // from done it is.
+    build({ pr: pull(9, { state: "open" }), sourceState: "open" });
+    await settle();
+    assert.equal(boardIssues[900].state, "open", "the work is not done until it merges");
     assert.equal(boardThreads[`${BOARD}#900`].length, 1, "nothing is said where nothing closes");
   });
 
-  test("a merged pull request that closes nothing, or merges into another branch, closes nothing", async () => {
+  test("a merged pull request that closes nothing, or merges into another branch, supersedes nothing but itself", async () => {
     build({ pr: pull(9, { state: "closed", merged: true, body: "Drive-by refactor, linked to no issue." }) });
     await settle();
-    assert.equal(boardIssues[900].state, "open", "an unrelated merged pull request is not this task's delivery");
+    assert.equal(boardIssues[900].state_reason, "not_planned", "an unrelated merged pull request is not this task's delivery");
 
     build({ pr: pull(9, { state: "closed", merged: true, base: "main" }) });
     await settle();
-    assert.equal(boardIssues[900].state, "open", "the pull request merges into the repository's base branch, or it is not done");
+    assert.equal(boardIssues[900].state_reason, "not_planned", "the pull request merges into the repository's base branch, or it is not done");
 
     // A different closing keyword, or a bare issue number, still names the
-    // issue the way GitHub closes it.
+    // issue the way GitHub closes it: delivered, the normal way.
     build({ pr: pull(9, { state: "closed", merged: true, body: "fixes #600" }) });
     await settle();
-    assert.equal(boardIssues[900].state, "closed");
+    assert.equal(boardIssues[900].state_reason, "completed");
   });
 
   test("a pull request whose closing reference was written after the merge closes nothing", async () => {
@@ -528,7 +560,7 @@ describe("closing an auto task on the merge", () => {
     reset();
     roles.jlwaugh = "admin";
     regIssues[REG] = [registryIssue(615)];
-    regEvents[`${REG}#615`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
+    regTimeline[`${REG}#615`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
     // GitHub's events record no body edit; the issue's own lastEditedAt is
     // what an edit after the label is judged from.
     lastEdited[`${REG}#615`] = "2026-10-05T00:05:00Z";
@@ -538,7 +570,7 @@ describe("closing an auto task on the merge", () => {
     assert.match(autoJobsHealth().skipped.find(s => s.issue === `${REG}#615`).why, /its body changed after the label was applied/);
     // The owner reviews the edit and applies the label again: that vouches
     // for the issue as it now stands, and the job opens.
-    regEvents[`${REG}#615`].push(labeled("jlwaugh", "2026-10-05T00:06:00Z"));
+    regTimeline[`${REG}#615`].push(labeled("jlwaugh", "2026-10-05T00:06:00Z"));
     await settle();
     assert.equal(created.length, 2);
   });
@@ -547,7 +579,7 @@ describe("closing an auto task on the merge", () => {
     reset();
     roles.jlwaugh = "admin";
     regIssues[REG] = [registryIssue(617)];
-    regEvents[`${REG}#617`] = [
+    regTimeline[`${REG}#617`] = [
       labeled("jlwaugh", "2026-10-05T00:01:00Z"),
       { event: "renamed", actor: { login: "someone" }, created_at: "2026-10-05T00:04:00Z" },
     ];
@@ -556,7 +588,7 @@ describe("closing an auto task on the merge", () => {
     assert.equal(created.length, 0);
     assert.match(autoJobsHealth().skipped.find(s => s.issue === `${REG}#617`).why, /its title changed after the label was applied/);
     // The owner reviews the rename and applies the label again.
-    regEvents[`${REG}#617`].push(labeled("jlwaugh", "2026-10-05T00:06:00Z"));
+    regTimeline[`${REG}#617`].push(labeled("jlwaugh", "2026-10-05T00:06:00Z"));
     await settle();
     assert.equal(created.length, 2);
   });
@@ -565,7 +597,7 @@ describe("closing an auto task on the merge", () => {
     reset();
     roles.jlwaugh = "admin";
     regIssues[REG] = [registryIssue(616)];
-    regEvents[`${REG}#616`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
+    regTimeline[`${REG}#616`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
     serveBoard();
     const served = globalThis.fetch;
     // GitHub answers a GraphQL error with HTTP 200 and an errors list: that
@@ -586,16 +618,28 @@ describe("closing an auto task on the merge", () => {
     assert.match(autoJobsHealth().skipped.find(s => s.issue === `${REG}#616`).why, /its edits could not be read/);
   });
 
-  test("a task without a handoff yet waits, and one with an unreadable handoff is answered", async () => {
+  test("an undelivered task waits only while its source issue stands open, and a delivery the sweep cannot read holds the supersede", async () => {
+    // No handoff yet, and the issue closed by hand: the race #119 records,
+    // claimed or not.
     build({ thread: [] });
     await settle();
-    assert.equal(boardIssues[900].state, "open");
+    assert.equal(boardIssues[900].state_reason, "not_planned");
+    assert.match(boardThreads[`${BOARD}#900`].at(-1).body, /\*\*Superseded:\*\*/);
 
+    // A delivery the sweep cannot read decides nothing: the pull request the
+    // handoff links cannot be fetched, so nothing closes this sweep.
+    build({ thread: [handoffBy("jlwaugh", `https://github.com/${REG}/pull/9`)], pr: pull(9, { state: "open" }) });
+    delete pulls[9];
+    await settle();
+    assert.equal(boardIssues[900].state, "open", "an unreadable pull request holds every decision");
+  });
+
+  test("a handoff the board cannot read protects nothing once the source issue closes", async () => {
     const unreadable = handoffBy("jlwaugh", `https://github.com/${REG}/pull/9`);
     unreadable.body = "**Handoff:** it is done, trust me.";
-    build({ thread: [unreadable] });
+    build({ thread: [unreadable], pr: pull(9, { state: "open" }) });
     await settle();
-    assert.equal(boardIssues[900].state, "open");
+    assert.equal(boardIssues[900].state_reason, "not_planned");
   });
 
   test("an auto task's handoff alone closes nothing, where any other seat's closes it", async () => {
@@ -647,5 +691,141 @@ describe("closing an auto task on the merge", () => {
     const spec = { key: "build", title: "Build it", body: "Build the dashboard.", amount: "1000000", labels: ["skill:code", "agent-eligible"] };
     assert.match(teamProblem(bare, [spec]), /more than the 0 USDC deposit/);
     assert.equal(teamProblem(bare, [{ ...spec, amount: "0" }]), null);
+  });
+});
+
+describe("the race problem #119 recorded", () => {
+  // The real shapes, captured 2026-10-05 and trimmed to the fields the sweep
+  // reads: near-agencies#61's timeline — owner-labelled at 07:02Z, an outside
+  // contributor's pull request cross-referencing it at 07:20Z and merging at
+  // 08:27Z, the claimant agency-builder's own pull request cross-referencing
+  // at 08:25Z — and the two pull requests themselves
+  // (test/fixtures/auto-issue-61-*).
+  const fixture = name => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
+  const timeline61 = fixture("auto-issue-61-timeline.json");
+  const pulls61 = fixture("auto-issue-61-pulls.json");
+  const SOURCE61 = `${REG}#61`;
+
+  // Board job #49 and task #50 as they stood at 08:27Z: claimed, building, no
+  // handoff yet, and the source issue just closed over them. The fixture
+  // caught pull request 137 after its later hand close; at the moment the
+  // sweep ran, it stood open.
+  const race = () => {
+    reset();
+    boardIssues[890] = autoEpic(890, 900, { source: SOURCE61 });
+    boardIssues[900] = autoTask(900, 890, { assignees: ["agency-builder"], source: SOURCE61 });
+    boardThreads[`${BOARD}#900`] = [];
+    regIssues[REG] = [];
+    regTimeline[SOURCE61] = timeline61;
+    regSingle[SOURCE61] = registryIssue(61, { state: "closed" });
+    pulls[136] = pulls61["136"];
+    pulls[137] = { ...pulls61["137"], state: "open" };
+    serveBoard();
+  };
+
+  test("the captured timeline skips the issue, for a referencing pull request open or merged", async () => {
+    reset();
+    roles.jlwaugh = "admin";
+    regIssues[REG] = [registryIssue(61)];
+    regTimeline[SOURCE61] = timeline61;
+    Object.assign(pulls, pulls61, { 136: { ...pulls61["136"], state: "open" } });
+    serveBoard();
+    await settle();
+    assert.equal(created.length, 0);
+    assert.match(autoJobsHealth().skipped.find(s => s.issue === SOURCE61).why,
+      /an open pull request \(https:\/\/github\.com\/MultiAgency\/near-agencies\/pull\/136\) already closes it/);
+    // As captured — merged — the same timeline skips the issue still, and the
+    // issue's own cross-reference of problem #119 never counts.
+    pulls[136] = pulls61["136"];
+    await settle();
+    assert.equal(created.length, 0);
+    assert.match(autoJobsHealth().skipped.find(s => s.issue === SOURCE61).why,
+      /a merged pull request \(https:\/\/github\.com\/MultiAgency\/near-agencies\/pull\/136\) already settles it/);
+  });
+
+  test("the #61 sequence closes the task and job as superseded, one comment each, and tells the claimant's pull request", async () => {
+    race();
+    await settle();
+    assert.equal(boardIssues[900].state, "closed");
+    assert.equal(boardIssues[900].state_reason, "not_planned");
+    const said = boardThreads[`${BOARD}#900`].filter(c => c.user.login === BOT);
+    assert.equal(said.length, 1, "the task heard it once");
+    assert.match(said[0].body, /\*\*Superseded:\*\* @agency-builder, MultiAgency\/near-agencies#61, the issue this task builds, is closed — settled by pull request https:\/\/github\.com\/MultiAgency\/near-agencies\/pull\/136\./);
+    assert.equal(boardIssues[890].state, "closed");
+    assert.equal(boardIssues[890].state_reason, "not_planned", "nothing was delivered on the board, so the job closes not planned");
+    // The claimant's own open pull request hears the same, once, and closing
+    // it is left to its author or an owner.
+    const onPull = regThreads[`${REG}#137`] ?? [];
+    assert.equal(onPull.length, 1, "the pull request heard it once");
+    assert.match(onPull[0].body, /\*\*Superseded:\*\* @agency-builder, MultiAgency\/near-agencies#61, the issue this pull request targets, is closed/);
+    assert.match(onPull[0].body, /MultiAgency\/kanban-sandbox#900/);
+    assert.ok(!calls.includes(`PATCH /repos/${REG}/pulls/137`), "the coordinator closes no one's pull request");
+  });
+
+  test("a restart never comments twice", async () => {
+    race();
+    await settle();
+    // A coordinator that died between its writes comes back to a closed task
+    // and an open job, and says nothing again anywhere.
+    boardIssues[890].state = "open";
+    await settle();
+    await settle();
+    assert.equal(boardThreads[`${BOARD}#900`].length, 1);
+    assert.equal((regThreads[`${REG}#137`] ?? []).length, 1, "the pull request was not told again");
+    assert.equal(boardIssues[890].state, "closed");
+    assert.equal(boardIssues[890].state_reason, "not_planned");
+  });
+
+  test("a referencing pull request the sweep cannot read holds the supersede", async () => {
+    // One unreadable reference could be the claimant's own merged pull
+    // request, the one fact that holds a supersede: read them all, or close
+    // nothing this sweep.
+    race();
+    delete pulls[136];
+    await settle();
+    assert.equal(boardIssues[900].state, "open", "nothing closes on a read that failed");
+    assert.equal(boardThreads[`${BOARD}#900`].length, 0);
+    assert.equal(boardIssues[890].state, "open");
+  });
+
+  test("a task close GitHub refuses holds the job open for the next sweep", async () => {
+    race();
+    patchFails = 1;
+    await settle();
+    assert.equal(boardIssues[900].state, "open", "the refused close is retried, not stranded under a closed job");
+    assert.equal(boardIssues[890].state, "open", "the job closes only once its tasks did");
+    await settle();
+    assert.equal(boardIssues[900].state_reason, "not_planned");
+    assert.equal(boardIssues[890].state_reason, "not_planned");
+    assert.equal(boardThreads[`${BOARD}#900`].filter(c => c.body.includes("**Superseded:**")).length, 1, "still one comment");
+  });
+
+  test("the claimant's own merge closes the source issue before any handoff, and the task waits for it", async () => {
+    // A branch-mode worker turns on auto-merge (#131): the pull request can
+    // merge and close the issue while the run is still going, before any
+    // handoff lands. The task waits for that handoff, and the sweep that
+    // sees it closes the task the normal way.
+    race();
+    pulls[137] = { ...pulls61["137"], state: "closed", merged: true, merged_at: "2026-10-05T08:40:00Z" };
+    await settle();
+    assert.equal(boardIssues[900].state, "open", "no supersede under the claimant's own merged pull request");
+    assert.equal(boardThreads[`${BOARD}#900`].length, 0, "nothing is said");
+    assert.equal(boardIssues[890].state, "open");
+    boardThreads[`${BOARD}#900`] = [handoffBy("agency-builder", `https://github.com/${REG}/pull/137`)];
+    await settle();
+    assert.equal(boardIssues[900].state_reason, "completed");
+    assert.equal(boardIssues[890].state, "open", "the job completes through the payout sweep, not this one");
+  });
+
+  test("the claimant's own merge still completes the job normally", async () => {
+    race();
+    boardThreads[`${BOARD}#900`] = [handoffBy("agency-builder", `https://github.com/${REG}/pull/137`)];
+    pulls[137] = { ...pulls61["137"], state: "closed", merged: true, merged_at: "2026-10-05T09:00:00Z" };
+    await settle();
+    assert.equal(boardIssues[900].state, "closed");
+    assert.equal(boardIssues[900].state_reason, "completed");
+    assert.match(boardThreads[`${BOARD}#900`].at(-1).body, /@agency-builder, the pull request your handoff links is merged, so this task is done\./);
+    assert.equal(boardIssues[890].state, "open", "the job completes through the payout sweep, not this one");
+    assert.equal(boardThreads[`${BOARD}#900`].filter(c => c.body.includes("**Superseded:**")).length, 0);
   });
 });

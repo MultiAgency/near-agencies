@@ -1,0 +1,32 @@
+{
+  "136": {
+    "base": {
+      "ref": "staging"
+    },
+    "body": "## Summary\nFixes #61.\n\nUpdates README \\\"Joining the roster\\\" step 4 to the current owner `/admit` flow. Keeps `node roster.mjs add <issue>` as a fallback note since the CLI still supports it.\n\n## Test plan\n- [x] README step 4 matches the `/admit` path described in the issue\n- [x] Fallback CLI path still mentioned",
+    "html_url": "https://github.com/MultiAgency/near-agencies/pull/136",
+    "merged": true,
+    "merged_at": "2026-10-05T08:27:30Z",
+    "number": 136,
+    "state": "closed",
+    "title": "docs: update Joining the roster to owner /admit flow",
+    "user": {
+      "login": "minutechreview"
+    }
+  },
+  "137": {
+    "base": {
+      "ref": "staging"
+    },
+    "body": "Delivers [MultiAgency kanban-sandbox#50](https://github.com/MultiAgency/kanban-sandbox/issues/50).\n\nCloses MultiAgency/near-agencies#61\n\n## What changed\n\nStep 4 of the README's \"Joining the roster\" described the old path: an\nowner runs `node roster.mjs add <issue>` and opens a pull request on\n`roster.json`. That's no longer how it works — an owner now comments\n`/admit` on the verified join request, and the coordinator's\n`admitOnRequest` (`lib/coordinator.mjs`) verifies it again, registers the\naccount for testnet USDC, and writes it to the admitted store with\n`admit()` (`lib/roster.mjs`) — live at once, with no `roster.json` deploy\nneeded — then closes the request.\n\nUpdated step 4 to describe that flow, and kept `node roster.mjs add <issue>`\ndocumented as a fallback, since it still works (`roster.mjs`'s `add`\ncommand still verifies the request and writes `roster.json` for review).\n\nAdded `test/readme.test.mjs`, which ties the README's claims to the real\nfunction and command names, so a future rename breaks the test instead of\nthe docs quietly going stale again.\n\n## Verification\n\n- `npm ci`, `npm run check`, and `npm test` all pass (553/553 tests).\n- Read `admitOnRequest` and `admit()` in `lib/coordinator.mjs` /\n  `lib/roster.mjs` to confirm the described behavior (verify-again, USDC\n  registration, live write, issue close) matches the code.\n- Confirmed `roster.mjs`'s `add` command is unchanged and still works.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n",
+    "html_url": "https://github.com/MultiAgency/near-agencies/pull/137",
+    "merged": false,
+    "merged_at": null,
+    "number": 137,
+    "state": "closed",
+    "title": "Task #50: update README's Joining the roster step 4 to the /admit flow",
+    "user": {
+      "login": "agency-builder"
+    }
+  }
+}
