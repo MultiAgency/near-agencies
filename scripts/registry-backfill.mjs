@@ -35,9 +35,10 @@
 //   when the record carries no stamp of its own; an older roster.json entry
 //   with no join issue uses the GitHub URL of the commit that added it to
 //   roster.json as both proofUrl and the account proof, and that commit's
-//   date as admittedAt. No signature is ever invented: an entry nothing can
-//   prove is reported and skipped, named by the half it lacks — its proof,
-//   its admission date, or both;
+//   date as admittedAt — every stamp normalized to UTC ISO before it is
+//   sent, the only form the registry's validation takes. No signature is
+//   ever invented: an entry nothing can prove is reported and skipped,
+//   named by the half it lacks — its proof, its admission date, or both;
 // - writes carry each record's own admission stamp, so re-running the script
 //   produces the same writes — and the registry's putMember is idempotent;
 // - a record older than the registry's own admission of that login stays
@@ -301,6 +302,19 @@ export async function joinIssueAdmission(number) {
 // --- the plan ----------------------------------------------------------------
 
 /**
+ * An admission stamp the registry takes: UTC ISO (`…Z`). The sources name
+ * other forms — git's `%cI`, what the commit fallback reads, names the
+ * offset (`2026-09-27T23:18:01-04:00`) — and the registry's validation
+ * refuses every one of them with HTTP 400 where the `Z` form of the same
+ * moment passes. Every stamp is normalized here, before it is sent or
+ * printed; a date no `Date` can read is no stamp.
+ */
+const stampOf = (value, from, extra = {}) => {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : { value: date.toISOString(), from, ...extra };
+};
+
+/**
  * Turn the members into ordered, checked registry writes. People first — the
  * operators the agents name, then the rest — then agents. Each write carries
  * a proof and an admission stamp: the record's own when it has them, else the
@@ -350,7 +364,7 @@ export async function planWrites(members, { commitFor, joinIssueAdmission: admis
       }
     }
     let proof = member.proof ? { value: member.proof, from: "record" } : null;
-    let stamp = member.admittedAt ? { value: member.admittedAt, from: "record" } : null;
+    let stamp = member.admittedAt ? stampOf(member.admittedAt, "record") : null;
     // The record's proof names its join issue: the board's own `**Admitted**`
     // comment there is the admission — the coordinator posts it as it admits
     // the member, in the same breath it stamps the roster record — so its
@@ -370,7 +384,7 @@ export async function planWrites(members, { commitFor, joinIssueAdmission: admis
         continue;
       }
       if (admission.at) {
-        stamp = { value: admission.at, from: "join issue", issue: Number(joinIssue) };
+        stamp = stampOf(admission.at, "join issue", { issue: Number(joinIssue) });
       } else if (admission.why) {
         problems.push(`${login}: no admission date — its join issue (#${joinIssue}) ${admission.why} — not written`);
         continue;
@@ -400,8 +414,12 @@ export async function planWrites(members, { commitFor, joinIssueAdmission: admis
         fallbacks.push(`${login}: proof from the commit that added the roster entry (${commit.sha.slice(0, 12)})`);
       }
       if (!stamp) {
-        stamp = { value: commit.date, from: "commit" };
-        fallbacks.push(`${login}: admittedAt from that commit's date (${commit.date})`);
+        stamp = stampOf(commit.date, "commit");
+        if (!stamp) {
+          problems.push(`${login}: the commit that added it (${commit.sha.slice(0, 12)}) carries no readable date to stamp the admission with — not written`);
+          continue;
+        }
+        fallbacks.push(`${login}: admittedAt from that commit's date (${stamp.value})`);
       }
     }
     proofs.set(login, proof);
