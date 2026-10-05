@@ -110,7 +110,7 @@ async function decide(pr) {
   // head.repo is GitHub's own word for where the branch lives; a null one
   // (a deleted fork) reads as a fork, which fails the same check.
   const fork = pr.head?.repo?.full_name?.toLowerCase() !== repo;
-  const verdict = await verdictFor(sha, number);
+  const verdict = await verdictFor(sha, number, pr.head?.ref);
   const { outcome, reason } = stagingApproval({
     base: pr.base.ref,
     fork,
@@ -242,53 +242,70 @@ async function latestTest(sha) {
 // The verdict for this head SHA, from the ai-review run's own artifact —
 // never from a comment. The artifact is named for the pull request it
 // reviewed (ai-review-verdict-<number>), so one pull request's verdict can
-// never decide another's, and whichever of two concurrent reviews finished
-// last holds only its own. Runs come newest first; the first run carrying
-// this pull request's unexpired verdict decides, and a verdict for an older
-// SHA holds (a newer review is still running or never finished). A newest
-// verdict that cannot be read holds too — an older run's verdict never
-// decides, because the newer review may be the one that found something.
-// Downloaded with `gh run download`, which unzips the artifact GitHub stores.
-async function verdictFor(sha, number) {
+// never decide another's. The newest ai-review run of this pull request's
+// own branch decides, whatever it left: one still running holds (its
+// verdict is coming), one that failed, was cancelled, or succeeded without
+// a verdict artifact holds, and only a succeeded one decides, through its
+// artifact — an older run's verdict never stands in, because the newer
+// review may be the one that found something. The run's head SHA is its
+// base branch's head, so the verdict counts only when the base branch
+// carries that commit: a run from a side branch's modified copy of the
+// workflow — even one a pull request to the base branch carries on its
+// head — decides nothing. Downloaded with `gh run download`, which unzips
+// the artifact GitHub stores.
+async function verdictFor(sha, number, branch) {
   const name = `${VERDICT_ARTIFACT}-${number}`;
   const runs = await github("GET", `/actions/workflows/${AI_REVIEW_WORKFLOW}/runs?event=pull_request_target&per_page=${RECENT_RUNS}`);
-  for (const run of (runs.workflow_runs ?? []).filter(run => run.conclusion === "success")) {
-    const listed = await github("GET", `/actions/runs/${run.id}/artifacts?per_page=100`);
-    const artifact = (listed.artifacts ?? []).find(a => a.name === name && !a.expired);
-    if (!artifact) continue;
-    // The run's head SHA is its base branch's head, and a commit the base
-    // branch carries is one a pull request to it names. A run based on a
-    // side branch — where a modified copy of the workflow could have
-    // written itself a verdict — decides nothing here.
-    const basePulls = await github("GET", `/commits/${run.head_sha}/pulls?per_page=100`);
-    if (!(basePulls ?? []).some(pull => String(pull?.base?.ref ?? "").toLowerCase() === BASE)) {
-      console.log(`staging-approval: ai-review run ${run.id} did not run for ${BASE}, so its verdict counts for nothing`);
-      return null;
-    }
-    const dir = mkdtempSync(join(tmpdir(), "staging-approval-"));
-    try {
-      execFileSync("gh", ["run", "download", String(run.id), "--name", name, "--repo", process.env.SANDBOX_REPO, "--dir", dir], {
-        stdio: "ignore",
-        env: { ...process.env, GH_TOKEN: process.env.GITHUB_TOKEN },
-      });
-      const verdict = verdictFrom(readFileSync(join(dir, VERDICT_FILE), "utf8"));
-      if (verdict) {
-        console.log(`staging-approval: verdict from ai-review run ${run.id} (${run.created_at})`);
-        return verdict;
-      }
-      console.log(`staging-approval: ai-review run ${run.id} uploaded a verdict that does not parse`);
-      return null;
-    } catch (error) {
-      // The newest verdict for this pull request that cannot be read is a
-      // hold, never a fallback to an older run's verdict.
-      console.log(`staging-approval: the verdict artifact of ai-review run ${run.id} could not be read: ${error.message}`);
-      return null;
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  const run = (runs.workflow_runs ?? []).find(candidate => candidate.head_branch === branch);
+  if (!run) {
+    console.log(`staging-approval: no ai-review run has reviewed a branch named ${branch}`);
+    return null;
   }
-  console.log(`staging-approval: no ai-review run left a verdict artifact for #${number}`);
-  return null;
+  if (run.conclusion == null) {
+    console.log(`staging-approval: the ai-review run ${run.id} for branch ${branch} is still running, so #${number} waits for its verdict`);
+    return null;
+  }
+  if (run.conclusion !== "success") {
+    console.log(`staging-approval: the newest ai-review run ${run.id} for branch ${branch} ended ${run.conclusion}, so nothing is approved`);
+    return null;
+  }
+  let offBase = `${BASE} does not carry ${run.head_sha}`;
+  try {
+    const compare = await github("GET", `/compare/${BASE}...${run.head_sha}`);
+    if (["behind", "identical"].includes(String(compare?.status ?? ""))) offBase = null;
+  } catch (error) {
+    offBase = `comparing ${run.head_sha} with ${BASE} failed: ${error.message}`;
+  }
+  if (offBase) {
+    console.log(`staging-approval: ai-review run ${run.id} ran from a commit ${offBase}, so its verdict counts for nothing`);
+    return null;
+  }
+  const listed = await github("GET", `/actions/runs/${run.id}/artifacts?per_page=100`);
+  if (!(listed.artifacts ?? []).some(artifact => artifact.name === name && !artifact.expired)) {
+    console.log(`staging-approval: ai-review run ${run.id} left no verdict artifact for #${number}, so nothing is approved`);
+    return null;
+  }
+  const dir = mkdtempSync(join(tmpdir(), "staging-approval-"));
+  try {
+    execFileSync("gh", ["run", "download", String(run.id), "--name", name, "--repo", process.env.SANDBOX_REPO, "--dir", dir], {
+      stdio: "ignore",
+      env: { ...process.env, GH_TOKEN: process.env.GITHUB_TOKEN },
+    });
+    const verdict = verdictFrom(readFileSync(join(dir, VERDICT_FILE), "utf8"));
+    if (verdict) {
+      console.log(`staging-approval: verdict from ai-review run ${run.id} (${run.created_at})`);
+      return verdict;
+    }
+    console.log(`staging-approval: ai-review run ${run.id} uploaded a verdict that does not parse`);
+    return null;
+  } catch (error) {
+    // The newest verdict for this pull request that cannot be read is a
+    // hold, never a fallback to an older run's verdict.
+    console.log(`staging-approval: the verdict artifact of ai-review run ${run.id} could not be read: ${error.message}`);
+    return null;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 // Whether the reviewer's approval already stands at this exact SHA: the
