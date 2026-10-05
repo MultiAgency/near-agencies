@@ -24,7 +24,7 @@ process.env.REGISTRY_TOKEN = TOKEN;
 const { putMember, putMemberBody, registryHealth } = await import("../lib/roster.mjs");
 const { coordinatorHealth, cycle } = await import("../lib/coordinator.mjs");
 const { joinIssue, joinMessage, newNonce, RECIPIENT } = await import("../lib/onboarding.mjs");
-const { planWrites } = await import("../scripts/registry-backfill.mjs");
+const { planWrites, joinIssueAdmission } = await import("../scripts/registry-backfill.mjs");
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
@@ -233,7 +233,7 @@ const board = ({ join, registry = [] } = {}) => {
     if (u.includes("/issues?state=closed&labels=")) return json([]);
     if (u.includes(`/issues/${join.issue.number}/comments?per_page`) && method === "GET") return json([join.command]);
     if (u.endsWith(`/issues/${join.issue.number}/comments`) && method === "POST") {
-      state.comments.push({ number: join.issue.number, body: JSON.parse(options.body).body });
+      state.comments.push({ number: join.issue.number, body: JSON.parse(options.body).body, created_at: new Date().toISOString() });
       return json({});
     }
     if (u.endsWith(`/issues/${join.issue.number}`) && method === "PATCH") {
@@ -344,6 +344,24 @@ describe("/admit writes the shared registry", () => {
       process.env.REGISTRY_TOKEN = TOKEN;
     }
   });
+
+  test("the backfill reads the admission's date from the comment this cycle posts", async () => {
+    const { state } = await admitRun();
+    const posted = state.comments.find(c => c.body.startsWith("**Admitted**"));
+    assert.ok(posted, "the cycle posted the board's **Admitted** note");
+    // The board as the backfill reads it: the join issue this cycle just
+    // admitted, carrying exactly the comment the coordinator posted — the
+    // two spell the note with one constant, so a rewording cannot split them.
+    globalThis.fetch = async url => {
+      const u = String(url);
+      const json = body => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+      if (u === "https://api.github.com/user") return json({ login: "multi-agency" });
+      if (u.endsWith("/repos/MultiAgency/kanban-sandbox/issues/7")) return json({ state: "closed", state_reason: "completed", closed_at: posted.created_at });
+      if (u.includes("/issues/7/comments?")) return json([{ user: { login: "multi-agency" }, body: posted.body, created_at: posted.created_at }]);
+      throw new Error(`unexpected fetch: ${u}`);
+    };
+    assert.deepEqual(await joinIssueAdmission("7"), { at: posted.created_at }, "the comment the coordinator itself wrote is the one the backfill dates admissions by");
+  });
 });
 
 // --- the backfill script -----------------------------------------------------
@@ -371,7 +389,7 @@ const backfillRun = async (args, env, cwd) => {
 };
 
 describe("the registry backfill", () => {
-  test("orders people first with the agents' operators first, agents last; logins lowercase; operator exactly on agents", () => {
+  test("orders people first with the agents' operators first, agents last; logins lowercase; operator exactly on agents", async () => {
     const commitFor = () => ({ url: "https://github.com/MultiAgency/near-agencies/commit/abc", date: "2026-09-27T23:18:01-04:00", sha: "abc" });
     const members = [
       rosterRecord("Stray-Human"),
@@ -380,7 +398,7 @@ describe("the registry backfill", () => {
       rosterRecord("Second-Agent", { kind: "agent", operator: "Operator-Two", nearAccount: "second.agent.testnet" }),
       rosterRecord("Operator-Two"),
     ];
-    const { writes, problems, fallbacks } = planWrites(members, { commitFor });
+    const { writes, problems, fallbacks } = await planWrites(members, { commitFor });
     assert.deepEqual(writes.map(w => w.login), ["operator-one", "operator-two", "stray-human", "some-agent", "second-agent"]);
     assert.equal(fallbacks.length, 10, "every entry without its own proof or stamp uses the commit fallback");
     assert.deepEqual(problems, []);
@@ -391,7 +409,7 @@ describe("the registry backfill", () => {
     assert.deepEqual([...new Set(bodies.map(b => b.network))], ["testnet"]);
   });
 
-  test("records with a join issue keep it; problems are listed, never written", () => {
+  test("records with a join issue keep it; problems are listed, never written", async () => {
     const members = [
       rosterRecord("joined", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/42", admittedAt: "2026-09-29T23:56:41-04:00" }),
       rosterRecord("no-kind", { kind: undefined }),
@@ -399,26 +417,28 @@ describe("the registry backfill", () => {
       rosterRecord("ghost-agent", { kind: "agent", operator: "no-kind", nearAccount: "ghost.testnet" }),
       rosterRecord("grounded", { nearAccount: undefined }),
       rosterRecord("orphan-agent", { kind: "agent", operator: "grounded", nearAccount: "orphan.testnet", proof: "https://github.com/MultiAgency/kanban-sandbox/issues/9", admittedAt: "2026-09-30T00:00:00.000Z" }),
+      rosterRecord("undated", { proof: "https://github.com/MultiAgency/near-agencies/issues/54" }),
     ];
-    const { writes, problems } = planWrites(members, { commitFor: () => null });
+    const { writes, problems } = await planWrites(members, { commitFor: () => null });
     assert.deepEqual(writes.map(w => w.login), ["joined"]);
     assert.equal(writes[0].proof.from, "record");
     assert.equal(writes[0].admittedAt.from, "record");
-    assert.equal(problems.length, 5);
+    assert.equal(problems.length, 6);
     assert.match(problems[0], /no-kind.*kind must be one of/);
     assert.match(problems[1], /lonely-agent.*not among the members/);
     assert.match(problems[2], /ghost-agent.*not a human member/);
     assert.match(problems[3], /grounded.*no testnet account/);
-    assert.match(problems[4], /orphan-agent.*grounded has no writable record/, "an agent whose operator will not be written is a problem, not a clean write");
+    assert.match(problems[4], /undated: no admission date on the record, and no commit that added it to roster\.json/, "the proof stands, so only the date is named missing");
+    assert.match(problems[5], /orphan-agent.*grounded has no writable record/, "an agent whose operator will not be written is a problem, not a clean write");
     // An account of the other network is never written for this one: the
     // registry would take it as admitted where it was not.
-    const foreign = planWrites([rosterRecord("mainlander", { nearAccount: "mainlander.near" })], { commitFor: () => null });
+    const foreign = await planWrites([rosterRecord("mainlander", { nearAccount: "mainlander.near" })], { commitFor: () => null });
     assert.deepEqual(foreign.writes, []);
     assert.match(foreign.problems[0], /mainlander\.near is a mainnet account, not testnet/);
     // Nothing can prove an entry with no join issue and no commit history.
-    const unprovable = planWrites([rosterRecord("mystery")], { commitFor: () => null });
+    const unprovable = await planWrites([rosterRecord("mystery")], { commitFor: () => null });
     assert.deepEqual(unprovable.writes, []);
-    assert.match(unprovable.problems[0], /mystery.*no join issue.*no commit/);
+    assert.match(unprovable.problems[0], /mystery: no proof and no admission date on the record, and no commit that added it to roster\.json/, "the problem names both missing halves");
   });
 
   test("a dry run prints every write and the commit fallback and writes nothing; a real run writes people before agents", async () => {
@@ -448,7 +468,7 @@ describe("the registry backfill", () => {
     const rootSha = gitIn("rev-parse", "HEAD").trim();
     rosterIn([
       rosterRecord("pat"),
-      rosterRecord("rob-agent", { kind: "agent", operator: "pat", nearAccount: "rob.agent.testnet", proof: "https://github.com/MultiAgency/kanban-sandbox/issues/18" }),
+      rosterRecord("rob-agent", { kind: "agent", operator: "pat", nearAccount: "rob.agent.testnet", proof: "https://github.com/MultiAgency/kanban-sandbox/issues/18", admittedAt: "2026-09-28T03:00:00.000Z" }),
     ]);
     gitIn("add", ".");
     dated("commit", "-m", "rob-agent joins");
@@ -638,8 +658,8 @@ describe("the registry backfill", () => {
     const env = { REGISTRY_URL: "https://registry.test/api/rpc/builders", ROSTER_FILE: join(shallow, "roster.json"), ADMITTED_FILE: store };
     const dry = await backfillRun(["--dry-run"], env, shallow);
     assert.match(dry, /0 members to write/);
-    assert.match(dry, /dee: no join issue on the record and no commit that added it to roster\.json/);
-    assert.match(dry, /pat: no join issue on the record and no commit that added it to roster\.json/);
+    assert.match(dry, /dee: no proof and no admission date on the record, and no commit that added it to roster\.json/);
+    assert.match(dry, /pat: no proof and no admission date on the record, and no commit that added it to roster\.json/);
     assert.doesNotMatch(dry, /Using the commit fallback/);
     assert.doesNotMatch(dry, /near-agencies\/commit\//);
 
@@ -656,7 +676,7 @@ describe("the registry backfill", () => {
     assert.match(deep, /1 member to write/);
     assert.match(deep, /^1\. pat —/m);
     assert.match(deep, /pat: proof from the commit that added the roster entry/);
-    assert.match(deep, /dee: no join issue on the record and no commit that added it to roster\.json/);
+    assert.match(deep, /dee: no proof and no admission date on the record, and no commit that added it to roster\.json/);
 
     // The same history read whole proves both entries: the fallback credits
     // each to the commit that added it.
@@ -732,5 +752,138 @@ describe("the registry backfill", () => {
     } finally {
       server.close();
     }
+  });
+
+  test("a record whose proof is a board join issue takes its admission date from the issue", async () => {
+    const admittedOn18 = "2026-09-30T12:34:56.000Z";
+    const issues = {
+      18: { state: "closed", state_reason: "completed", closed_at: admittedOn18 },
+      19: { state: "open", state_reason: null, closed_at: null },
+      20: { state: "closed", state_reason: "not_planned", closed_at: "2026-10-02T00:00:00.000Z" },
+      22: { state: "closed", state_reason: "duplicate", closed_at: "2026-10-03T00:00:00.000Z" },
+      23: { state: "closed", state_reason: "completed", closed_at: "2026-10-03T09:00:00.000Z" },
+      // The joiner's reopen-and-close-again after the board admitted them:
+      // the close moved, the admission did not.
+      24: { state: "closed", state_reason: "completed", closed_at: "2026-10-03T23:00:00.000Z" },
+      // The reverse: the owner's refusal stands even after the joiner has
+      // closed the issue as completed since — no admission, no date.
+      25: { state: "closed", state_reason: "completed", closed_at: "2026-10-04T09:00:00.000Z" },
+    };
+    const admittedAt = "2026-10-01T00:00:00.000Z";
+    const thread = {
+      18: [{ user: { login: "multi-agency" }, body: `**Admitted** by @owner-jl.`, created_at: admittedOn18 }],
+      20: [],
+      22: [],
+      // A stranger cannot forge the board's voice, however the issue is closed.
+      23: [{ user: { login: "self-closer" }, body: `**Admitted** by @self-closer.`, created_at: "2026-10-03T09:00:00.000Z" }],
+      24: [{ user: { login: "multi-agency" }, body: `**Admitted** by @owner-jl.`, created_at: admittedAt }],
+      25: [],
+    };
+    const reads = [];
+    globalThis.fetch = async url => {
+      const u = String(url);
+      const issues_ = u.match(/^https:\/\/api\.github\.com\/repos\/MultiAgency\/kanban-sandbox\/issues\/(\d+)$/);
+      const comments_ = u.match(/^https:\/\/api\.github\.com\/repos\/MultiAgency\/kanban-sandbox\/issues\/(\d+)\/comments\?/);
+      if (issues_) {
+        reads.push(issues_[1]);
+        return new Response(JSON.stringify(issues[issues_[1]] ?? {}), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (comments_) return new Response(JSON.stringify(thread[comments_[1]] ?? []), { status: 200, headers: { "content-type": "application/json" } });
+      if (u === "https://api.github.com/user") return new Response(JSON.stringify({ login: "multi-agency" }), { status: 200, headers: { "content-type": "application/json" } });
+      if (u.includes("/collaborators/")) return new Response(JSON.stringify({ role_name: "read" }), { status: 200, headers: { "content-type": "application/json" } });
+      throw new Error(`unexpected fetch: ${url}`);
+    };
+    const { writes, problems, fallbacks } = await planWrites([
+      rosterRecord("dated", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/18" }),
+      rosterRecord("waiting", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/19" }),
+      rosterRecord("refused", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/20" }),
+      rosterRecord("doubled", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/22" }),
+      rosterRecord("selfclosed", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/23" }),
+      rosterRecord("redated", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/24" }),
+      rosterRecord("overruled", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/25" }),
+      rosterRecord("own-stamp", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/18", admittedAt: "2026-10-01T00:00:00.000Z" }),
+      rosterRecord("elsewhere", { proof: "https://github.com/MultiAgency/near-agencies/issues/55" }),
+    ], {
+      commitFor: () => ({ url: "https://github.com/MultiAgency/near-agencies/commit/def", date: "2026-09-29T00:00:00.000Z", sha: "def" }),
+      joinIssueAdmission,
+    });
+    assert.deepEqual(reads, ["18", "19", "20", "22", "23", "24", "25"], "only records without their own stamp have their board join issue read — own-stamp's and elsewhere's proof is no unread board join issue");
+    assert.deepEqual(writes.map(w => w.login), ["dated", "selfclosed", "redated", "overruled", "own-stamp", "elsewhere"]);
+    assert.equal(writes[0].proof.from, "record", "the join issue stays the proof");
+    assert.equal(writes[0].admittedAt.value, admittedOn18, "the stamp is the board's **Admitted** comment's time");
+    assert.equal(writes[0].admittedAt.from, "join issue");
+    assert.equal(writes[1].admittedAt.value, "2026-09-29T00:00:00.000Z", "a stranger's forged **Admitted** comment dates nothing — the commit that added the roster entry does");
+    assert.equal(writes[1].admittedAt.from, "commit");
+    assert.equal(writes[2].admittedAt.value, admittedAt, "the stamp is the admission, however the joiner has closed and reopened the issue since");
+    assert.equal(writes[2].admittedAt.from, "join issue");
+    assert.equal(writes[3].admittedAt.from, "commit", "the owner's refusal left no **Admitted** comment, and the joiner's later completed close dates nothing either");
+    assert.equal(writes[4].admittedAt.from, "record", "a record with its own stamp keeps it");
+    assert.equal(writes[5].proof.from, "record", "a proof outside the board repo is kept");
+    assert.equal(writes[5].admittedAt.value, "2026-09-29T00:00:00.000Z", "its stamp is the commit fallback's, the path rob-agent's stamp once exercised end to end");
+    assert.equal(writes[5].admittedAt.from, "commit");
+    assert.equal(problems.length, 3);
+    assert.match(problems[0], /waiting: no admission date — its join issue \(#19\) is still open and has no admission on it — not written/);
+    assert.match(problems[1], /refused: no admission date — its join issue \(#20\) was closed as not planned — not written/);
+    assert.match(problems[2], /doubled: no admission date — its join issue \(#22\) was closed as duplicate — not written/, "the problem names the close's actual reason, not assumed not-planned");
+    assert.match(fallbacks.join("\n"), /selfclosed: its join issue \(#23\) has \*\*Admitted\*\* comments this run cannot vouch for — set COORDINATOR_LOGIN if this run should hear the board; the commit dates it instead/, "an unvouched-for comment is named, with the remedy, not silently ignored");
+  });
+
+  test("a join issue the board cannot answer about is a reported problem, not a crash", async () => {
+    globalThis.fetch = async () => new Response(JSON.stringify({ message: "board is down" }), { status: 500, headers: { "content-type": "application/json" } });
+    const { writes, problems } = await planWrites([
+      rosterRecord("shadowed", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/21" }),
+      rosterRecord("stamped", { proof: "https://github.com/MultiAgency/near-agencies/issues/55", admittedAt: "2026-10-01T00:00:00.000Z" }),
+    ], { commitFor: () => null, joinIssueAdmission });
+    assert.deepEqual(writes.map(w => w.login), ["stamped"], "one unreadable issue does not take the other records down");
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /shadowed: its join issue \(#21\) could not be read to date the admission/);
+    assert.match(problems[0], /board is down/);
+  });
+
+  test("--admitted-store reads the store it is given; a missing one stops the run like the default path", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "backfill-argstore-"));
+    const rosterFile = join(repo, "roster.json");
+    writeFileSync(rosterFile, JSON.stringify({ builders: [rosterRecord("pat", {
+      proof: "https://github.com/MultiAgency/near-agencies/issues/55",
+      admittedAt: "2026-10-01T00:00:00.000Z",
+    })] }));
+    const copy = join(repo, "roster-admitted.testnet.json"); // a copy of the coordinator's store, its name intact
+    writeFileSync(copy, JSON.stringify({ builders: [rosterRecord("boardmate", {
+      proof: "https://github.com/MultiAgency/near-agencies/issues/56",
+      admittedAt: "2026-10-02T00:00:00.000Z",
+    })] }));
+    const missing = join(repo, ".data", "roster-admitted.testnet.json"); // never created
+    // ADMITTED_FILE (the test file's empty scratch store) stays set in the
+    // environment: the flag, not it, names the store these runs read.
+    const env = { REGISTRY_URL: "https://registry.test/api/rpc/builders", ROSTER_FILE: rosterFile };
+
+    const dry = await backfillRun(["--dry-run", "--admitted-store", copy], env, repo);
+    assert.match(dry, /admitted store .*roster-admitted\.testnet\.json: 1 record/, "the run reads the store the flag names, not ADMITTED_FILE's");
+    assert.match(dry, /2 members to write/);
+    assert.match(dry, /^1\. pat —/m);
+    assert.match(dry, /^2\. boardmate —/m);
+    assert.match(dry, /dry run: nothing was written/);
+
+    const stopped = await backfillRun(["--dry-run", "--admitted-store", missing], env, repo);
+    assert.match(stopped, /the admitted store is missing/);
+    assert.ok(stopped.includes(missing), "the error names the path the flag gave");
+    assert.doesNotMatch(stopped, /members to write/);
+
+    // The store's file name is what ties it to its network: a copy renamed
+    // away from roster-admitted.<network>.json could hold any network's
+    // admissions, and this run refuses to guess.
+    const misnamed = join(repo, "staging-admitted.json");
+    writeFileSync(misnamed, JSON.stringify({ builders: [] }));
+    const misnamedRun = await backfillRun(["--dry-run", "--admitted-store", misnamed], env, repo);
+    assert.match(misnamedRun, /--admitted-store names staging-admitted\.json, not roster-admitted\.testnet\.json/);
+    assert.doesNotMatch(misnamedRun, /members to write/);
+
+    const contradictory = await backfillRun(["--dry-run", "--admitted-store", copy, "--no-admitted-store"], env, repo);
+    assert.match(contradictory, /--admitted-store and --no-admitted-store contradict each other/);
+    assert.doesNotMatch(contradictory, /members to write/);
+
+    const bare = await backfillRun(["--dry-run", "--admitted-store"], env, repo);
+    assert.match(bare, /--admitted-store needs a path/);
+    assert.doesNotMatch(bare, /members to write/);
   });
 });

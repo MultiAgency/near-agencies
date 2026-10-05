@@ -6,6 +6,16 @@
 //   REGISTRY_URL=... REGISTRY_TOKEN=... node scripts/registry-backfill.mjs --dry-run
 //   REGISTRY_URL=... REGISTRY_TOKEN=... node scripts/registry-backfill.mjs
 //
+// Beside the coordinator, both stores are read from its volume. From
+// elsewhere — a full clone of this repository, which has what the deployed
+// image lacks: roster.json's git history — the run carries a copy of the
+// admitted store and names it with --admitted-store <path>, so the commit
+// fallback below works for roster.json's entries too. Such a run reads the
+// board as its owner rather than as the coordinator, so it names the
+// coordinator's login with COORDINATOR_LOGIN: the board's own comments count
+// from that account (or, under the coordinator's token, from anyone the
+// board trusts).
+//
 // roster.json holds admissions made on testnet — the network the board has
 // run on — so a run for another network writes only that network's admitted
 // store (roster-admitted.<network>.json) and names roster.json's records as
@@ -19,10 +29,15 @@
 // - `kind` on every write, `operatorGithubLogin` exactly when kind is `agent`,
 //   logins lowercased;
 // - `status: "admitted"` needs a proof and a date: a record with a join issue
-//   keeps its join issue URL; an older roster.json entry with none uses the
-//   GitHub URL of the commit that added it to roster.json as both proofUrl and
-//   the account proof, and that commit's date as admittedAt. No signature is
-//   ever invented: an entry nothing can prove is reported and skipped;
+//   keeps its join issue URL, and takes its admission date from that issue —
+//   the board's own `**Admitted**` comment there, which the coordinator posts
+//   as it admits the member and which the roster record it stamps carries —
+//   when the record carries no stamp of its own; an older roster.json entry
+//   with no join issue uses the GitHub URL of the commit that added it to
+//   roster.json as both proofUrl and the account proof, and that commit's
+//   date as admittedAt. No signature is ever invented: an entry nothing can
+//   prove is reported and skipped, named by the half it lacks — its proof,
+//   its admission date, or both;
 // - writes carry each record's own admission stamp, so re-running the script
 //   produces the same writes — and the registry's putMember is idempotent;
 // - a record older than the registry's own admission of that login stays
@@ -35,10 +50,11 @@
 // is written; it needs no token. Nothing here reads or prints the token.
 import { execFileSync } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { basename, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { KINDS } from "../lib/onboarding.mjs";
+import { comments, isTrusted, issue, repoUrl } from "../lib/github.mjs";
+import { ADMITTED_PREFIX, KINDS } from "../lib/onboarding.mjs";
 import { network } from "../lib/network.mjs";
 import { putMember, putMemberBody, rosterStoreFiles } from "../lib/roster.mjs";
 
@@ -47,6 +63,20 @@ const dryRun = process.argv.includes("--dry-run");
 // purpose: --no-admitted-store proceeds with roster.json's records only, and
 // the plan says the store was not read.
 const noAdmittedStore = process.argv.includes("--no-admitted-store");
+// --admitted-store <path>: the admitted store file to read on this run's
+// host, in place of the coordinator's volume. Absent, undefined means the
+// flag was not given and null that it was given without a usable path.
+const ADMITTED_STORE = "--admitted-store";
+const admittedStoreArg = (() => {
+  const at = process.argv.indexOf(ADMITTED_STORE);
+  if (at !== -1) {
+    const value = process.argv[at + 1];
+    return value && !value.startsWith("--") ? value : null;
+  }
+  const inline = process.argv.find(arg => arg.startsWith(`${ADMITTED_STORE}=`));
+  if (inline !== undefined) return inline.slice(ADMITTED_STORE.length + 1) || null;
+  return undefined;
+})();
 const REGISTRY_URL = process.env.REGISTRY_URL;
 
 // An account's suffix names its network by convention (.testnet here, .near
@@ -96,7 +126,7 @@ export function loadMembers() {
   const rosterBuilders = buildersOf(asPath(rosterStoreFiles.roster));
   const onRosterNetwork = network.networkId === ROSTER_NETWORK;
   const leftOut = onRosterNetwork ? [] : rosterBuilders.map(builder => loginOf(builder) ?? `an unnamed record (${builder.name ?? "unnamed"})`);
-  const store = { path: asPath(rosterStoreFiles.admitted), builders: [], skipped: noAdmittedStore, problem: null };
+  const store = { path: asPath(admittedStoreArg ?? rosterStoreFiles.admitted), builders: [], skipped: noAdmittedStore, problem: null };
   if (!noAdmittedStore) {
     try {
       store.builders = JSON.parse(readFileSync(store.path, "utf8")).builders ?? [];
@@ -205,17 +235,81 @@ export function commitProofs(rosterFile) {
   };
 }
 
+// --- the board's record of the admission --------------------------------------
+
+/**
+ * The board join issue a record's proof names, if it names one: the issue the
+ * coordinator admitted the member through (lib/onboarding.mjs builds it; the
+ * coordinator stamps the record with its URL). Anything else — another
+ * repository's issue, a pull request, an arbitrary URL — is not one.
+ */
+export const joinIssueOf = proof => {
+  const prefix = `${repoUrl}/issues/`;
+  const url = String(proof ?? "");
+  return url.startsWith(prefix) && /^\d+$/.test(url.slice(prefix.length)) ? url.slice(prefix.length) : null;
+};
+
+/**
+ * The board's own voice: the coordinator's login, named with
+ * COORDINATOR_LOGIN when this run does not read the board as the
+ * coordinator, or anyone isTrusted counts — the token's own account, or an
+ * owner of the board. Logins compare without case, the way GitHub's do.
+ */
+const boardVoice = login => {
+  if (!login) return false;
+  const pin = (process.env.COORDINATOR_LOGIN ?? "").trim().toLowerCase();
+  return login.toLowerCase() === pin || isTrusted(login);
+};
+
+/**
+ * The admission a join issue records: the board's own `**Admitted** by …`
+ * comment — the coordinator posts it as it admits the member, and the roster
+ * record it stamps that same moment carries this time — and when it was
+ * posted. Not the issue's close: that waits until the deployed roster
+ * carries the member, which can be days after `/admit`, and the joiner who
+ * opened the issue can close and reopen it whenever they like. A comment
+ * counts only from the board's own voice, so a stranger cannot forge one,
+ * and an issue the board cannot answer about throws — the caller reports the
+ * record rather than guessing. An issue closed as completed that carries no
+ * comment the board's voice vouches for answers `{fallback}`: the board
+ * closed it as done without saying when it admitted the member — a profile
+ * update, or an entry older than the note — and the commit fallback may
+ * date that.
+ */
+export async function joinIssueAdmission(number) {
+  const joined = await issue(number);
+  const spoken = [];
+  const admitted = [];
+  for (const comment of await comments(number)) {
+    if (String(comment.body ?? "").startsWith(ADMITTED_PREFIX)) {
+      spoken.push(comment);
+      if (await boardVoice(comment.user?.login)) admitted.push(comment);
+    }
+  }
+  const admission = admitted.at(-1);
+  if (admission) {
+    if (!admission.created_at) return { why: "was admitted without a date GitHub reports" };
+    return { at: admission.created_at };
+  }
+  if (joined.state !== "closed") return { why: "is still open and has no admission on it" };
+  if (joined.state_reason && joined.state_reason !== "completed") {
+    return { why: `was closed as ${joined.state_reason.replaceAll("_", " ")}` };
+  }
+  return { fallback: true, spoken: spoken.length };
+}
+
 // --- the plan ----------------------------------------------------------------
 
 /**
  * Turn the members into ordered, checked registry writes. People first — the
  * operators the agents name, then the rest — then agents. Each write carries
- * a proof and an admission stamp: the record's own when it has them, the
- * commit that added the roster entry otherwise. Anything the registry would
- * refuse (no kind or an unknown kind, an agent without its operator among the
- * members, an unprovable entry) is a problem, not a write.
+ * a proof and an admission stamp: the record's own when it has them, else the
+ * stamp from the join issue its proof names, else the commit that added the
+ * roster entry. Anything the registry would refuse (no kind or an unknown
+ * kind, an agent without its operator among the members, an unprovable entry)
+ * is a problem, not a write.
  */
-export function planWrites(members, { commitFor }) {
+export async function planWrites(members, { commitFor, joinIssueAdmission: admissionOf }) {
   const proofs = new Map(); // login → {value, from}
   const stamps = new Map();
   const problems = [];
@@ -257,15 +351,49 @@ export function planWrites(members, { commitFor }) {
     }
     let proof = member.proof ? { value: member.proof, from: "record" } : null;
     let stamp = member.admittedAt ? { value: member.admittedAt, from: "record" } : null;
+    // The record's proof names its join issue: the board's own `**Admitted**`
+    // comment there is the admission — the coordinator posts it as it admits
+    // the member, in the same breath it stamps the roster record — so its
+    // time is the admission date a record without its own stamp takes. Where
+    // the issue says the member was never admitted (still open, or closed as
+    // something else), no commit is substituted — the plan reports the record
+    // instead of dating an admission that never happened. Where the issue
+    // closed as done but says nothing about when, the commit fallback below
+    // dates it.
+    const joinIssue = proof && !stamp ? joinIssueOf(proof.value) : null;
+    if (joinIssue) {
+      let admission;
+      try {
+        admission = await admissionOf(joinIssue);
+      } catch (error) {
+        problems.push(`${login}: its join issue (#${joinIssue}) could not be read to date the admission (${error.message}) — not written`);
+        continue;
+      }
+      if (admission.at) {
+        stamp = { value: admission.at, from: "join issue", issue: Number(joinIssue) };
+      } else if (admission.why) {
+        problems.push(`${login}: no admission date — its join issue (#${joinIssue}) ${admission.why} — not written`);
+        continue;
+      } else if (admission.spoken) {
+        // The issue closed as done, but every **Admitted** comment on it is
+        // one this run cannot vouch for: said so, so a full-clone run that
+        // forgot COORDINATOR_LOGIN sees why its dates come from git.
+        fallbacks.push(`${login}: its join issue (#${joinIssue}) has **Admitted** comments this run cannot vouch for${process.env.COORDINATOR_LOGIN ? "" : " — set COORDINATOR_LOGIN if this run should hear the board"}; the commit dates it instead`);
+      }
+      // Otherwise the issue closed as completed with no admission the
+      // board's voice records — a profile update, or an entry older than
+      // the note — and the commit fallback below may date it.
+    }
     if (!proof || !stamp) {
       const commit = commitFor(login);
       if (!commit) {
-        problems.push(`${login}: no join issue on the record and no commit that added it to roster.json — not written`);
+        const missing = !proof && !stamp ? "no proof and no admission date on the record" : proof ? "no admission date on the record" : "no proof on the record";
+        problems.push(`${login}: ${missing}, and no commit that added it to roster.json — not written`);
         continue;
       }
       if (!proof) {
         if (!commit.url) {
-          problems.push(`${login}: no join issue on the record, and the commit that added it (${commit.sha.slice(0, 12)}) has no GitHub URL to prove it — not written`);
+          problems.push(`${login}: no proof on the record, and the commit that added it (${commit.sha.slice(0, 12)}) has no GitHub URL to prove it — not written`);
           continue;
         }
         proof = { value: commit.url, from: "commit" };
@@ -353,11 +481,31 @@ async function registryAdmissions(url) {
 const row = write => {
   const { member } = write;
   const who = member.kind === "agent" ? `${member.name} (agent, operator ${member.operator})` : `${member.name} (${member.kind})`;
-  return `${write.login} — ${who}\n    account ${member.nearAccount}\n    proof ${write.proof.value}${write.proof.from === "commit" ? "  (commit fallback)" : ""}\n    admittedAt ${write.admittedAt.value}${write.admittedAt.from === "commit" ? "  (commit fallback)" : ""}\n    skills ${JSON.stringify(member.skills)}`;
+  const source = stamp => stamp.from === "commit" ? "  (commit fallback)" : stamp.from === "join issue" ? `  (its join issue #${stamp.issue})` : "";
+  return `${write.login} — ${who}\n    account ${member.nearAccount}\n    proof ${write.proof.value}${source(write.proof)}\n    admittedAt ${write.admittedAt.value}${source(write.admittedAt)}\n    skills ${JSON.stringify(member.skills)}`;
 };
 
 async function main() {
   console.log(`registry backfill — ${network.networkId}${REGISTRY_URL ? ` → ${REGISTRY_URL.replace(/\/+$/, "")}/putMember` : ""}`);
+  if (admittedStoreArg === null) {
+    console.error("--admitted-store needs a path: the admitted store file to read on this host.");
+    process.exitCode = 1;
+    return;
+  }
+  if (admittedStoreArg !== undefined && noAdmittedStore) {
+    console.error("--admitted-store and --no-admitted-store contradict each other: give the store's path, or say this host has none — not both.");
+    process.exitCode = 1;
+    return;
+  }
+  if (admittedStoreArg !== undefined) {
+    const name = basename(admittedStoreArg);
+    const wanted = `roster-admitted.${network.networkId}.json`;
+    if (name !== wanted) {
+      console.error(`--admitted-store names ${name}, not ${wanted}: the file name is what ties a store to its network, and this run writes ${network.networkId} — a store of another network would write members it never admitted.`);
+      process.exitCode = 1;
+      return;
+    }
+  }
   if (!REGISTRY_URL) {
     console.error("REGISTRY_URL is not set: nowhere to write. Set it (and REGISTRY_TOKEN, to write).");
     process.exitCode = 1;
@@ -377,7 +525,7 @@ async function main() {
   }
   const commits = commitProofs(rosterStoreFiles.roster);
   if (commits.problem) console.error(`note: ${commits.problem}`);
-  const plan = planWrites(members, { commitFor: commits.for });
+  const plan = await planWrites(members, { commitFor: commits.for, joinIssueAdmission });
   problems.push(...plan.problems);
 
   // A write of a local record older than the registry's own admission of that
