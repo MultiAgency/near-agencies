@@ -10,7 +10,11 @@
 // elsewhere — a full clone of this repository, which has what the deployed
 // image lacks: roster.json's git history — the run carries a copy of the
 // admitted store and names it with --admitted-store <path>, so the commit
-// fallback below works for roster.json's entries too.
+// fallback below works for roster.json's entries too. Such a run reads the
+// board as its owner rather than as the coordinator, so it names the
+// coordinator's login with COORDINATOR_LOGIN: the board's own comments count
+// from that account (or, under the coordinator's token, from anyone the
+// board trusts).
 //
 // roster.json holds admissions made on testnet — the network the board has
 // run on — so a run for another network writes only that network's admitted
@@ -26,9 +30,9 @@
 //   logins lowercased;
 // - `status: "admitted"` needs a proof and a date: a record with a join issue
 //   keeps its join issue URL, and takes its admission date from that issue —
-//   the close of it the board or an owner made, which is the coordinator
-//   admitting the member — when the record carries no stamp of its own; an
-//   older roster.json entry
+//   the board's own `**Admitted**` comment there, which the coordinator posts
+//   as it admits the member and which the roster record it stamps carries —
+//   when the record carries no stamp of its own; an older roster.json entry
 //   with no join issue uses the GitHub URL of the commit that added it to
 //   roster.json as both proofUrl and the account proof, and that commit's
 //   date as admittedAt. No signature is ever invented: an entry nothing can
@@ -49,8 +53,7 @@ import { readFileSync, realpathSync } from "node:fs";
 import { basename, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { allEvents } from "../lib/guard.mjs";
-import { isTrusted, issue, repoUrl } from "../lib/github.mjs";
+import { comments, isTrusted, issue, repoUrl } from "../lib/github.mjs";
 import { KINDS } from "../lib/onboarding.mjs";
 import { network } from "../lib/network.mjs";
 import { putMember, putMemberBody, rosterStoreFiles } from "../lib/roster.mjs";
@@ -247,43 +250,40 @@ export const joinIssueOf = proof => {
 };
 
 /**
- * The admission a join issue records: the issue's last close by the board or
- * an owner — the coordinator admitting the member — and when it happened.
- * Not the issue's own `closed_at`: the joiner opened the issue and can close
- * it again whenever they like, and `closed_at` is always the latest close,
- * theirs included. This reads the close events the way `closeVerified` does
- * (lib/guard.mjs), and reports an issue whose closes are all strangers', or
- * that was closed as not planned. An issue the board cannot answer about
- * throws, and the caller reports the record rather than guessing.
+ * The board's own voice: the coordinator's login, named with
+ * COORDINATOR_LOGIN when this run does not read the board as the
+ * coordinator, or anyone isTrusted counts — the token's own account, or an
+ * owner of the board.
+ */
+const boardVoice = login => login && (login === (process.env.COORDINATOR_LOGIN ?? "").trim() || isTrusted(login));
+
+/**
+ * The admission a join issue records: the board's own `**Admitted** by …`
+ * comment — the coordinator posts it as it admits the member, and the roster
+ * record it stamps that same moment carries this time — and when it was
+ * posted. Not the issue's close: that waits until the deployed roster
+ * carries the member, which can be days after `/admit`, and the joiner who
+ * opened the issue can close and reopen it whenever they like. A comment
+ * counts only from the board's own voice, so a stranger cannot forge one,
+ * and an issue the board cannot answer about throws — the caller reports the
+ * record rather than guessing.
  */
 export async function joinIssueAdmission(number) {
   const joined = await issue(number);
-  if (joined.state !== "closed") return { why: "is still open" };
-  const closes = (await allEvents(number)).filter(e => e?.event === "closed" && e?.actor?.login);
-  const last = closes.at(-1);
-  let admitted = null;
-  for (let i = closes.length - 1; i >= 0; i--) {
-    if (await isTrusted(closes[i].actor.login)) {
-      admitted = closes[i];
-      break;
-    }
+  const admitted = [];
+  for (const comment of await comments(number)) {
+    if (/^\*\*Admitted\*\*/.test(String(comment.body ?? "")) && (await boardVoice(comment.user?.login))) admitted.push(comment);
   }
-  if (!admitted) {
-    return { why: last ? `was last closed by @${last.actor.login}, not the board or an owner` : "has no close the board records" };
+  const admission = admitted.at(-1);
+  if (admission) {
+    if (!admission.created_at) return { why: "was admitted without a date GitHub reports" };
+    return { at: admission.created_at };
   }
-  // The reason belongs to the close that would date the admission — the
-  // board's or the owner's — not to the issue's current one, which is the
-  // latest close's, possibly the joiner's. GitHub records it on the event
-  // when it refuses (not planned); for a completed close it reads null, and
-  // the issue's own state_reason says completed unless someone has closed
-  // it differently since — in which case the record stays unwritten, which
-  // is the honest side to err on.
-  const reason = admitted.state_reason ?? joined.state_reason;
-  if (reason !== "completed") {
-    return { why: reason ? `was closed as ${reason.replaceAll("_", " ")}` : "was closed without a stated reason" };
+  if (joined.state !== "closed") return { why: "is still open and has no admission on it" };
+  if (joined.state_reason && joined.state_reason !== "completed") {
+    return { why: `was closed as ${joined.state_reason.replaceAll("_", " ")}` };
   }
-  if (!admitted.created_at) return { why: "was closed without a date GitHub reports" };
-  return { at: admitted.created_at };
+  return { why: "has no admission the board records" };
 }
 
 // --- the plan ----------------------------------------------------------------
@@ -339,11 +339,13 @@ export async function planWrites(members, { commitFor, joinIssueAdmission: admis
     }
     let proof = member.proof ? { value: member.proof, from: "record" } : null;
     let stamp = member.admittedAt ? { value: member.admittedAt, from: "record" } : null;
-    // The record's proof names its join issue: the coordinator admitting the
-    // member is what closed that issue as completed, so its close is the
-    // admission date a record without its own stamp takes. Where the issue
-    // dates nothing, no commit is substituted for it — the plan reports the
-    // record instead of dating an admission that never finished.
+    // The record's proof names its join issue: the board's own `**Admitted**`
+    // comment there is the admission — the coordinator posts it as it admits
+    // the member, in the same breath it stamps the roster record — so its
+    // time is the admission date a record without its own stamp takes. Where
+    // the issue records no admission, no commit is substituted for it — the
+    // plan reports the record instead of dating an admission that never
+    // happened.
     const joinIssue = proof && !stamp ? joinIssueOf(proof.value) : null;
     if (joinIssue) {
       let admission;
