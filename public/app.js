@@ -35,6 +35,7 @@ document.getElementById("net").dataset.network = config.network;
 document.getElementById("bar-links").innerHTML = html`
   <a href="${config.board}">Task board</a>
   <a href="${`${config.explorer}/address/${config.treasury}`}">Treasury</a>
+  <a href="#/tasks">Open tasks</a>
   <a href="#/join">Join</a>
   ${config.trezu ? html`<a href="${config.trezu}">Trezu</a>` : ""}`;
 
@@ -75,6 +76,7 @@ async function route() {
     else if (page === "e") await renderEngagement(owner, Number(id));
     else if (page === "join") await renderJoin(owner);
     else if (page === "status") await renderStatus(owner, decodeURIComponent(id ?? ""));
+    else if (page === "tasks") await renderTasks(owner);
     else await renderHome(owner);
   } catch (error) {
     if (paint(owner, html`<p class="status error">${error.message}</p>
@@ -430,6 +432,47 @@ async function renderStatus(owner, login) {
     form.addEventListener("input", () => saveDraft(form));
     form.addEventListener("submit", prepare);
   }
+}
+
+// Every open task across all jobs, grouped by job with the ones ready to claim
+// first. A GitHub login narrows the list to what that member can claim, by the
+// same rules their status page uses; claiming itself stays a /claim comment.
+const TASK_STATES = { ready: "Ready", "in-progress": "In progress", blocked: "Waiting on earlier tasks" };
+
+async function renderTasks(owner, login = "") {
+  const { tasks } = await get(login ? `/api/tasks?login=${encodeURIComponent(login)}` : "/api/tasks");
+  const shown = login ? tasks.filter(t => t.claimable) : tasks;
+  const order = { ready: 0, "in-progress": 1, blocked: 2 };
+  const jobs = Map.groupBy(shown, t => t.job);
+  const rank = list => Math.min(...list.map(t => order[t.state]));
+  const sections = [...jobs].sort(([, a], [, b]) => rank(a) - rank(b)).map(([job, list]) => html`
+    <h2>${job ? html`<a href="#/e/${job}">Job #${job}</a>` : "No job"}</h2>
+    <ul class="task-list">${list.sort((a, b) => order[a.state] - order[b.state] || a.number - b.number).map(t => html`
+      <li><span><a href="${t.url}" target="_blank" rel="noopener">#${t.number} ${t.title}</a>
+        <span class="hint">${TASK_STATES[t.state]}${t.assignee ? html`, @${t.assignee}` : ""} · for ${t.for}${t.skills.length ? html` · ${t.skills.map(k => k.replace(/^skill:/, "")).join(", ")}` : ""}</span></span>${taskAmount(t.amount)}</li>`)}</ul>`);
+  if (!paint(owner, html`
+    <section class="quote status-page">
+      <h1>Open tasks</h1>
+      <p class="sub">Every task still open across all jobs. To take one, comment exactly <code>/claim</code> on it on GitHub.</p>
+      <form class="lookup" id="task-filter">
+        <label>Show only what I can claim<span class="lookup-row"><input name="login" maxlength="39" autocomplete="username" value="${login}" placeholder="Your GitHub login" aria-label="Your GitHub login"><button class="secondary" type="submit">Filter</button></span></label>
+        <p class="status error" hidden></p>
+      </form>
+      ${shown.length ? sections : html`<p class="empty">${login ? html`No task is open to @${login} right now.` : "No task is open right now."}</p>`}
+      <p><a href="#/">Back to all jobs</a></p>
+    </section>`)) return;
+  document.getElementById("task-filter").addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = event.target;
+    const next = new FormData(form).get("login").trim().replace(/^@/, "");
+    try {
+      await renderTasks(owner, next);
+    } catch (error) {
+      const note = form.querySelector(".status.error");
+      note.textContent = error.message;
+      note.hidden = false;
+    }
+  });
 }
 
 // Drafts of a handoff form's sentences survive leaving the page: the GitHub

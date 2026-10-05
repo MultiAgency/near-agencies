@@ -37,7 +37,9 @@ import { engagementHealth } from "./lib/stuck.mjs";
 import { timeline } from "./lib/timeline.mjs";
 import { cached } from "./lib/cache.mjs";
 import { daoApprovers, pendingPayouts } from "./lib/payouts.mjs";
+import { openSeats } from "./lib/seats.mjs";
 import { isGithubLogin, memberStatus } from "./lib/status.mjs";
+import { tasksHandler } from "./lib/tasks.mjs";
 
 const deposit = process.env.ENGAGEMENT_DEPOSIT ?? "3000000";
 // The range a buyer may choose a deposit within; unset, only the default is taken.
@@ -136,6 +138,10 @@ app.get("/api/roster/:login", statusLimit, (request, response, next) => {
   if (!isGithubLogin(request.params.login)) return response.status(400).json({ error: "That is not a GitHub login." });
   status(request.params.login).then(body => response.json(body), next);
 });
+// The open tasks across every job, from the one cached board read; a login adds
+// what that roster member can claim, behind the same check and limit as their status.
+const seats = cached(30_000, openSeats);
+app.get("/api/tasks", tasksHandler(seats, statusLimit));
 // Each preparation reads the task and the deliverable comment from GitHub.
 const handoffLimit = rateLimit({ windowMs: 60_000, limit: 10, message: { error: "Too many handoffs prepared from this address. Try again in a minute." } });
 app.post("/api/handoff", handoffLimit, (request, response, next) => {
