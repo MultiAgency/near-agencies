@@ -114,6 +114,7 @@ describe("allowed tools per CODE_ACCESS", () => {
       "Bash(git push -u origin task-14)",
       "Bash(npm ci)", "Bash(npm run check)", "Bash(npm test)",
       "Bash(gh pr create:*)", "Bash(gh pr view:*)",
+      "Bash(gh pr merge task-14 --repo MultiAgency/near-agencies --auto --squash)",
     ]);
   });
 
@@ -208,6 +209,14 @@ describe("the shipping instructions", () => {
     assert.match(text, /`git clone --branch staging https:\/\/github\.com\/MultiAgency\/near-agencies\.git \.`/);
     assert.match(text, /`git checkout -b task-14`/);
     assert.match(text, /--head task-14 --base staging/);
+  });
+
+  test("branch mode turns on auto-merge for its own pull request; fork mode leaves the merge to a person", () => {
+    assert.match(ship("branch", near, 14, "near-builder", false).join("\n"), /`gh pr merge task-14 --repo MultiAgency\/near-agencies --auto --squash`/);
+    for (const [repo, access] of [[near, "fork"], [legion, "fork"]]) {
+      assert.equal(ship(access, repo, 14, "near-builder", false).join("\n").includes("gh pr merge"), false);
+      assert.equal(allowedTools(access, repo, 14, "near-builder").some(t => t.includes("gh pr merge")), false);
+    }
   });
 
   test("a revision checks out the task branch and opens no second pull request, in either mode", () => {

@@ -181,6 +181,9 @@ export function ship(access, repo, n, login, revision) {
     `\`git add\` only the files you changed, \`git commit\`, and \`git push -u origin ${branch}\`${fork ? " — origin is your fork" : ""}. If ${pulls} shows a pull request already, push to its branch instead of opening another.`,
     ...(revision ? [] : [
       `Open the pull request: write its body to a file first, then \`gh pr create --repo ${repo.name} --head ${fork ? `${login}:` : ""}${branch} --base ${repo.base} --title "Task #${n}: <what changed>" --body-file <file>\`. The body links task #${n} and says what changed and how you verified it.`,
+      ...(fork ? [] : [
+        `Then \`gh pr merge ${branch} --repo ${repo.name} --auto --squash\`: it merges by itself once the required checks pass and a code owner or the approval gate approves it, and waits until then.`,
+      ]),
     ]),
   ];
 }
@@ -228,5 +231,6 @@ export function allowedTools(access, repo, n, login) {
     `Bash(git push -u origin task-${n})`,
     ...repo.checks.map(c => `Bash(${c})`),
     "Bash(gh pr create:*)", "Bash(gh pr view:*)",
+    ...(access === "fork" ? [] : [`Bash(gh pr merge task-${n} --repo ${repo.name} --auto --squash)`]),
   );
 }
