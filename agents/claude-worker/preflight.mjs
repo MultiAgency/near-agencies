@@ -32,11 +32,14 @@ const PROBE_BRANCH = "preflight-probe";
 // reads as the inconclusive failure it is.
 const TIMEOUT_MS = 60_000;
 
-// The probe's git environment: the credential helper the delivery uses, a
-// clean config — no system or operator setting (a commit-signing key with a
-// passphrase, say) takes part or fails the scratch commit — and prompts
-// off, so a credential problem fails instead of waiting for input.
-const gitEnv = login => ({
+// The git environment of the probe and of the delivery itself (worker.mjs
+// assigns it before selecting a task, so both answer to the same
+// credentials): the credential helper the delivery uses, a clean config —
+// no system or operator setting (a commit-signing key with a passphrase,
+// say) takes part or fails the scratch commit — and prompts off, so a
+// credential problem fails instead of waiting for input. One definition:
+// the copies drifted apart once already.
+export const gitEnv = login => ({
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_CONFIG_GLOBAL: "/dev/null",
   GIT_CONFIG_COUNT: "2",
@@ -54,19 +57,25 @@ const gitEnv = login => ({
 // Git's own account of a failed probe, cut to one line for a comment: the
 // fatal line carries the verdict and usually the status ("The requested URL
 // returned error: 403"), the remote line the server's own words ("Permission
-// to … denied to …"). The token never appears in either — git authenticates
-// through the helper, never the URL — and the line is trimmed and
-// de-backticked before it reaches a comment.
+// to … denied to …"), gh's its own ("HTTP 401: Bad credentials"). The token
+// never appears in any of them — git authenticates through the helper, never
+// the URL — and the line is trimmed and de-backticked before it reaches a
+// comment. Only a 401, a 403 or a 404 says something about the credentials
+// or the repository: a 5xx or a 429 is GitHub having a bad minute, which
+// must not read as a denied token — it reports as inconclusive, and the
+// next run probes again.
+const DEFINITIVE_STATUSES = new Set(["401", "403", "404"]);
 const failureOf = stderr => {
   const text = String(stderr ?? "");
   const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
   const line = lines.find(l => l.startsWith("fatal:"))
     ?? lines.find(l => l.startsWith("remote:"))
     ?? lines.at(-1) ?? "git gave no reason";
-  const status = text.match(/returned error: (\d{3})/)?.[1]
+  const said = text.match(/returned error: (\d{3})/)?.[1]
+    ?? text.match(/HTTP (\d{3})/)?.[1]
     ?? (/Authentication failed/.test(text) ? "401" : null)
     ?? (/ not found/.test(text) ? "404" : null);
-  return { status, detail: line.replaceAll("`", "'").slice(0, 200) };
+  return { status: DEFINITIVE_STATUSES.has(said) ? said : null, detail: line.replaceAll("`", "'").slice(0, 200) };
 };
 
 /** Whether this run's credentials can deliver `repo` by `access` (fork or
@@ -88,6 +97,17 @@ export async function probeDelivery({ access, repo, login, run = promisify(execF
   const read = async url => {
     try {
       await run("git", ["ls-remote", url], { env, timeout: TIMEOUT_MS });
+      return null;
+    } catch (error) {
+      return failureOf(error.stderr);
+    }
+  };
+
+  // Whether the token itself answers gh: for the fork-mode case with no
+  // fork yet, the one path where every other probe can pass anonymously.
+  const tokenAlive = async () => {
+    try {
+      await run("gh", ["api", "user"], { env, timeout: TIMEOUT_MS });
       return null;
     } catch (error) {
       return failureOf(error.stderr);
@@ -122,7 +142,13 @@ export async function probeDelivery({ access, repo, login, run = promisify(execF
       return pushFailure ? { ok: false, step: "push", ...pushFailure } : { ok: true };
     }
     // No fork yet (or none this token can see): the delivery creates it,
-    // which any token that can read the repository can do — check that.
+    // which any token of its own that can read the repository can do — but
+    // a public repository reads anonymously, so the read probe alone would
+    // pass a dead token. The token answers gh directly; this runs before
+    // Claude, where the call is the worker's own, not anything the
+    // allowlist governs.
+    const tokenFailure = await tokenAlive();
+    if (tokenFailure) return { ok: false, step: "read", ...tokenFailure };
     const readFailure = await read(upstream);
     return readFailure ? { ok: false, step: "read", ...readFailure } : { ok: true };
   }

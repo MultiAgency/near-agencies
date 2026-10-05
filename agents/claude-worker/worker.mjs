@@ -16,9 +16,9 @@ import { join } from "node:path";
 import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 
-import { accessFor, allowedTools, codeAccess, deliversCodeSeat, ship, termsOf, GIT_CREDENTIAL_HELPER, SDK_SETTINGS } from "./code-mode.mjs";
+import { accessFor, allowedTools, codeAccess, deliversCodeSeat, ship, termsOf, SDK_SETTINGS } from "./code-mode.mjs";
 import { nextTask as selectTask } from "./next-task.mjs";
-import { probeDelivery } from "./preflight.mjs";
+import { gitEnv, probeDelivery } from "./preflight.mjs";
 import { codeRepo } from "./repos.mjs";
 
 const env = name => {
@@ -60,22 +60,9 @@ if (!dryRun) env("ANTHROPIC_API_KEY");
 // entry, say — can answer first or leak another identity into a push. Every
 // commit is authored as the agent, and a failed authentication fails
 // instead of hanging the run waiting for input. The delivery preflight runs
-// under this same environment (next-task.mjs), so the check and the push it
-// clears answer to the same credentials.
-if (codeMode) {
-  Object.assign(process.env, {
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_CONFIG_COUNT: "1",
-    GIT_CONFIG_KEY_0: "credential.https://github.com.helper",
-    GIT_CONFIG_VALUE_0: GIT_CREDENTIAL_HELPER,
-    GIT_AUTHOR_NAME: login,
-    GIT_AUTHOR_EMAIL: `${login}@users.noreply.github.com`,
-    GIT_COMMITTER_NAME: login,
-    GIT_COMMITTER_EMAIL: `${login}@users.noreply.github.com`,
-    GIT_TERMINAL_PROMPT: "0",
-  });
-}
+// under this same environment (preflight.mjs's gitEnv, its one definition),
+// so the check and the push it clears answer to the same credentials.
+if (codeMode) Object.assign(process.env, gitEnv(login));
 
 async function github(path) {
   const response = await fetch(`https://api.github.com/repos/${board}${path}`, {
