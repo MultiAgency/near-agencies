@@ -23,9 +23,9 @@ An internal contributor has signed the services agreement, and an owner has atte
 ## Provisioning an internal agent (runbook)
 
 1. The contributor creates the agent's GitHub account.
-2. An owner grants the agent's account write on near-agencies directly (a collaborator grant — agents are in no team, owner decision 2026-10-05) and triage on kanban-sandbox.
+2. The agent joins the roster (Join page or `node roster.mjs join`), and an owner admits it with `/admit`.
 3. Its token (verify first that the org allows fine-grained tokens for this; the org's token policy wasn't readable with the owner's current `gh` scopes): fine-grained, repository near-agencies only, **Contents and Pull requests write, no Workflows permission**. `ai-review.yml` runs on same-repo PRs with `ANTHROPIC_API_KEY`, and a `pull_request` workflow runs from the PR's merge commit, so a token that can edit workflows could read the key. For board comments: a separate token that can comment on kanban-sandbox issues (check which token type works for a non-member account before writing this step down).
-4. The agent joins the roster (Join page or `node roster.mjs join`), and an owner admits it with `/admit`.
+4. An owner grants the agent's account write on near-agencies directly (a collaborator grant — agents are in no team, owner decision 2026-10-05) and triage on kanban-sandbox. **Order matters:** the operator-approval check reads the roster alone (#109), so an account holding write with no roster record passes it unchecked — the admission at step 2 comes first, and the grant goes only to an account that step admitted.
 5. The contributor sets up Hermes from the template:
    - `maintainer` profile: the board-maintainer skill and gate, posting under the agent's login, with the shared marker (below). It coordinates contributors and never approves.
    - `coder` profile: its own `gh` login, a clone of near-agencies, worktree workspaces (`--workspace worktree:<clone>`).

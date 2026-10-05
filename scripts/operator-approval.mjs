@@ -24,6 +24,7 @@ import {
   operatorApproval,
   ownersFromCodeowners,
   ownersFromEnv,
+  REVIEWED_TEAMS,
   rosterFromApi,
   rosterRecord,
   unrecognizedApprovals,
@@ -31,10 +32,10 @@ import {
 
 const REVIEW_PAGES = 10;
 const TEAM_PAGES = 10;
-// The team behind CODEOWNERS' `@MultiAgency/internal` entry: a member of
-// `internal` is one of the people whose approvals count. Agents are in no
-// team; the roster says who they are.
-const INTERNAL_TEAM = "internal";
+// The teams whose members the check reads come from lib's REVIEWED_TEAMS —
+// one team, `internal`, the entry CODEOWNERS names. Agents are in no team
+// (#109); the roster says who they are. The list is pinned by test, so a
+// second team cannot creep back into these reads unjudged.
 
 try {
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH ?? "", "utf8"));
@@ -47,8 +48,8 @@ try {
   // A fork's run gets no repository secrets, so its team read cannot
   // succeed — GitHub's design, not a read that failed. The unread team
   // passes through and the verdict judges the fork on what needs no org
-  // token (lib/operator-approval.mjs); a same-repo PR fails closed when a
-  // team cannot be read.
+  // token (lib/operator-approval.mjs); a same-repo PR fails closed when
+  // team internal cannot be read.
   const fork = event.pull_request.head.repo?.full_name !== event.repository?.full_name;
 
   const [reviews, codeowners, builders, fromApi, internal] = await Promise.all([
@@ -56,7 +57,7 @@ try {
     textAtBase(".github/CODEOWNERS", base),
     buildersAtBase(base),
     rosterApi(author),
-    teamMembers(org, INTERNAL_TEAM),
+    ...REVIEWED_TEAMS.map(slug => teamMembers(org, slug)),
   ]);
   if (codeowners === null) {
     console.log("CODEOWNERS could not be read at the base branch, so only the owner's and the internal team's approvals count");

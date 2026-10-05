@@ -8,6 +8,7 @@ import {
   operatorApproval,
   ownersFromCodeowners,
   ownersFromEnv,
+  REVIEWED_TEAMS,
   rosterFromApi,
   rosterRecord,
   unrecognizedApprovals,
@@ -194,6 +195,17 @@ describe("ownersFromEnv", () => {
   });
 });
 
+describe("REVIEWED_TEAMS", () => {
+  test("the script reads one team only, and one that exists (#109)", () => {
+    // #93's script also read internal-agents, a team that was never created:
+    // the read could not succeed and the unreadable-teams gate failed every
+    // same-repo PR closed. The script takes the teams it reads from this
+    // list, so a second team cannot creep back into the reads without
+    // changing it here — and this test with it.
+    assert.deepEqual(REVIEWED_TEAMS, ["internal"]);
+  });
+});
+
 describe("operatorApproval", () => {
   const staging = { base: "staging", owners: ["jlwaugh"] };
 
@@ -314,7 +326,7 @@ describe("operatorApproval", () => {
     );
   });
 
-  test("a team that cannot be read fails closed, even off the roster", () => {
+  test("team internal unreadable fails closed, even off the roster", () => {
     assert.deepEqual(
       operatorApproval({ ...staging, author: "jlwaugh", roster: record("human", null), internal: null }).outcome,
       "fail",
@@ -325,7 +337,7 @@ describe("operatorApproval", () => {
     );
   });
 
-  test("a fork, whose run gets no secrets and so no teams, is judged on what needs no org token", () => {
+  test("a fork, whose run gets no secrets and so no team, is judged on what needs no org token", () => {
     // GitHub refuses a fork's run every repository secret, so its team is
     // unread by design: judged on CODEOWNERS' own logins and OWNER, with the
     // roster still answering for the author.
