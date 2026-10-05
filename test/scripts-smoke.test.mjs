@@ -9,16 +9,22 @@
 // runs the script (the describe-before-initialization in
 // scripts/staging-approval.mjs reached staging's first live run).
 //
+// One entry goes further than its startup: scripts/staging-approval.mjs runs
+// decide() itself against the stubbed fetch in
+// test/fixtures/github-decide-stub.mjs, so the hold log whose describe() call
+// crashed production is reached by CI, not by staging.
+//
 // The list is explicit on purpose: the last test fails when a new
 // scripts/*.mjs shows up without a smoke entry here. A script with no clean
 // early exit gets the smallest one — a usage message on missing input, as
 // connector.mjs and agent.mjs got — rather than a skip.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 // A load-time crash reads as one of these on stderr, whatever the script's own
@@ -40,10 +46,15 @@ const ENTRIES = [
     stderr: /operator-approval: .*failing closed/,
   },
   {
+    // The missing-event exit stops at the event read, so this entry runs the
+    // script through decide() itself: the stubbed fetch answers GitHub for
+    // one open pull request that changes no file, the run holds (a hold
+    // decides nothing and posts nothing), and its log line calls describe() —
+    // the call that crashed production with a "before initialization" (#130).
     file: "scripts/staging-approval.mjs",
-    drop: ["GITHUB_EVENT_PATH"],
-    code: 1,
-    stderr: /staging-approval/,
+    stubbed: true,
+    code: 0,
+    stdout: [/staging-approval hold on #1/, /internal 1 member/],
   },
   {
     file: "scripts/registry-backfill.mjs",
@@ -60,23 +71,46 @@ const ENTRIES = [
   { file: "agent.mjs", args: ["--help"], code: 0, stdout: /usage:/ },
 ];
 
-const env = drop => {
+const env = (drop, set) => {
   const copied = { ...process.env };
   for (const name of drop ?? []) delete copied[name];
-  return copied;
+  return { ...copied, ...set };
 };
+
+// The environment for the stubbed staging-approval run: the fetch stub loads
+// before the script does, the token names nothing real (every GitHub read
+// lands on the stub), and the event carries one open pull request so
+// openCandidates picks it up without a network read.
+const stubbedEnv = eventPath => env([], {
+  NODE_OPTIONS: `--import ${pathToFileURL(join(ROOT, "test/fixtures/github-decide-stub.mjs")).href}`,
+  GITHUB_TOKEN: "test-token",
+  SANDBOX_REPO: "MultiAgency/near-agencies",
+  ROSTER_URL: "http://127.0.0.1:4021/api",
+  GITHUB_EVENT_PATH: eventPath,
+});
 
 for (const entry of ENTRIES) {
   test(`${entry.file} exits ${entry.code} on its smoke input, with no load-time crash`, () => {
-    const run = spawnSync(process.execPath, [join(ROOT, entry.file), ...(entry.args ?? [])], {
-      env: env(entry.drop),
-      encoding: "utf8",
-      timeout: TIMEOUT_MS,
-    });
-    assert.equal(run.status, entry.code, `${entry.file}: stderr was:\n${run.stderr}`);
-    if (entry.stderr) assert.match(run.stderr, entry.stderr);
-    if (entry.stdout) assert.match(run.stdout, entry.stdout);
-    assert.doesNotMatch(String(run.stderr), CRASH);
+    let eventDir = null;
+    try {
+      if (entry.stubbed) {
+        eventDir = mkdtempSync(join(tmpdir(), "staging-approval-smoke-"));
+        writeFileSync(join(eventDir, "event.json"), JSON.stringify({
+          workflow_run: { name: "ci", head_sha: "0".repeat(40), pull_requests: [{ number: 1 }] },
+        }));
+      }
+      const run = spawnSync(process.execPath, [join(ROOT, entry.file), ...(entry.args ?? [])], {
+        env: entry.stubbed ? stubbedEnv(join(eventDir, "event.json")) : env(entry.drop),
+        encoding: "utf8",
+        timeout: TIMEOUT_MS,
+      });
+      assert.equal(run.status, entry.code, `${entry.file}: stderr was:\n${run.stderr}`);
+      for (const pattern of [].concat(entry.stderr ?? [])) assert.match(run.stderr, pattern);
+      for (const pattern of [].concat(entry.stdout ?? [])) assert.match(run.stdout, pattern);
+      assert.doesNotMatch(String(run.stderr), CRASH);
+    } finally {
+      if (eventDir) rmSync(eventDir, { recursive: true, force: true });
+    }
   });
 }
 
@@ -88,7 +122,7 @@ for (const entry of ENTRIES) {
 // during startup.
 test("server.mjs listens and stops cleanly on SIGTERM, with no load-time crash", async () => {
   const child = spawn(process.execPath, [join(ROOT, "server.mjs")], {
-    env: env(["FACILITATOR_URL", "COORDINATOR", "REGISTRY_URL", "GITHUB_EVENT_PATH"]),
+    env: env(["FACILITATOR_URL", "COORDINATOR", "REGISTRY_URL", "GITHUB_EVENT_PATH"], { PORT: "0", HOST: "127.0.0.1" }),
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout.setEncoding("utf8");
