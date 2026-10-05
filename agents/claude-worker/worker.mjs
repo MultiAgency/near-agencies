@@ -18,6 +18,7 @@ import { z } from "zod";
 
 import { accessFor, allowedTools, codeAccess, deliversCodeSeat, ship, termsOf, GIT_CREDENTIAL_HELPER, SDK_SETTINGS } from "./code-mode.mjs";
 import { nextTask as selectTask } from "./next-task.mjs";
+import { probeDelivery } from "./preflight.mjs";
 import { codeRepo } from "./repos.mjs";
 
 const env = name => {
@@ -53,6 +54,28 @@ const claimAfterMs = Number(process.env.CLAIM_AFTER_MINUTES ?? "0") * 60_000;
 const dryRun = process.argv.includes("--dry-run") || process.env.DRY_RUN === "1";
 env("GH_TOKEN");
 if (!dryRun) env("ANTHROPIC_API_KEY");
+// git ships a code task's work as the agent: gh (holding GH_TOKEN) is its
+// only credential helper, injected through the environment together with a
+// clean git config so no system or operator setting — a stored keychain
+// entry, say — can answer first or leak another identity into a push. Every
+// commit is authored as the agent, and a failed authentication fails
+// instead of hanging the run waiting for input. The delivery preflight runs
+// under this same environment (next-task.mjs), so the check and the push it
+// clears answer to the same credentials.
+if (codeMode) {
+  Object.assign(process.env, {
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "credential.https://github.com.helper",
+    GIT_CONFIG_VALUE_0: GIT_CREDENTIAL_HELPER,
+    GIT_AUTHOR_NAME: login,
+    GIT_AUTHOR_EMAIL: `${login}@users.noreply.github.com`,
+    GIT_COMMITTER_NAME: login,
+    GIT_COMMITTER_EMAIL: `${login}@users.noreply.github.com`,
+    GIT_TERMINAL_PROMPT: "0",
+  });
+}
 
 async function github(path) {
   const response = await fetch(`https://api.github.com/repos/${board}${path}`, {
@@ -77,7 +100,7 @@ async function comment(number, body) {
 // dependency-free code-mode.mjs and trust.mjs: the repository's tests can run
 // it from the root, where this folder's dependencies are not installed.
 const nextTask = () =>
-  selectTask({ github, comment, login, skills, codeMode, bot, claimAfterMs, dryRun, toolchain });
+  selectTask({ github, comment, login, skills, codeMode, bot, claimAfterMs, dryRun, toolchain, probe: probeDelivery });
 
 // Hashing is the one step easy to get subtly wrong in a shell, so the worker
 // provides it as a tool: sha256 of the comment body exactly as GitHub stores it.
@@ -154,26 +177,6 @@ async function run() {
   const skill = await (await fetch(skillUrl)).text();
   const cwd = await mkdtemp(join(tmpdir(), `seat-${task.seat.number}-`));
   try {
-    if (code) {
-      // git ships the work as the agent: gh (holding GH_TOKEN) is its only
-      // credential helper, injected through the environment together with a
-      // clean git config so no system or operator setting — a stored keychain
-      // entry, say — can answer first or leak another identity into a push.
-      // Every commit is authored as the agent, and a failed authentication
-      // fails instead of hanging the run waiting for input.
-      Object.assign(process.env, {
-        GIT_CONFIG_NOSYSTEM: "1",
-        GIT_CONFIG_GLOBAL: "/dev/null",
-        GIT_CONFIG_COUNT: "1",
-        GIT_CONFIG_KEY_0: "credential.https://github.com.helper",
-        GIT_CONFIG_VALUE_0: GIT_CREDENTIAL_HELPER,
-        GIT_AUTHOR_NAME: login,
-        GIT_AUTHOR_EMAIL: `${login}@users.noreply.github.com`,
-        GIT_COMMITTER_NAME: login,
-        GIT_COMMITTER_EMAIL: `${login}@users.noreply.github.com`,
-        GIT_TERMINAL_PROMPT: "0",
-      });
-    }
     for await (const message of query({
       prompt: instructions(task),
       options: {
