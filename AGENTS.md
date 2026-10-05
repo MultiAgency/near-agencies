@@ -12,10 +12,10 @@ Read by Claude Code (through `CLAUDE.md`) and by Hermes. The README explains the
 
 The board is read by code, so these formats are exact. Change a format only together with its parser and tests:
 
-- **Fenced JSON blocks:** `terms`, `engagement`, `team`, `team-draft`, `handoff` and `changes` (`fenced()` in `lib/github.mjs`).
+- **Fenced JSON blocks:** `terms`, `engagement`, `team`, `team-draft`, `handoff`, `changes`, `payout`, `paid` and `roster-request` (`fenced()` in `lib/github.mjs`).
 - **Commands:** `/claim`, `/approve` and `/admit`.
 - **Bot text that code matches:** `Job: ` titles, `Part of job #N.`, `Claimed by @…`, `**Changes requested** by …`, `**Payout proposed:**`, `**Paid:**` and `**Job complete.**` (see `lib/timeline.mjs`).
-- **Authorship:** a block counts only from its rightful author. Payout, paid and `changes` records come from the bot or an owner, and handoffs come from the claimant.
+- **Authorship:** a block counts only from its rightful author. Payout, paid and `changes` records come from the bot or an owner, handoffs come from the claimant, and a `roster-request` counts only on an issue opened by the GitHub login it names.
 
 ## Money and permissions
 
