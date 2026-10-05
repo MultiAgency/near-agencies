@@ -5,9 +5,11 @@ import {
   combineRoster,
   countableApprovals,
   countedApprovals,
+  judgedTeamMembers,
   operatorApproval,
   ownersFromCodeowners,
   ownersFromEnv,
+  REVIEWED_TEAMS,
   rosterFromApi,
   rosterRecord,
   unrecognizedApprovals,
@@ -194,6 +196,34 @@ describe("ownersFromEnv", () => {
   });
 });
 
+describe("REVIEWED_TEAMS", () => {
+  test("the script reads one team only, and one that exists (#109)", () => {
+    // #93's script also read a second team, one that was never created: the
+    // read could not succeed and the unreadable-teams gate failed every
+    // same-repo PR closed. The script takes the teams it reads from this
+    // list, so a second team cannot creep back into the reads without
+    // changing it here — and this test with it.
+    assert.deepEqual(REVIEWED_TEAMS, ["internal"]);
+  });
+});
+
+describe("judgedTeamMembers", () => {
+  test("answers team internal's members, the one team the verdict consumes", () => {
+    assert.deepEqual(judgedTeamMembers({ internal: ["saadiqbal-dev"] }), ["saadiqbal-dev"]);
+  });
+
+  test("an unread team reads as null, which fails closed in the verdict", () => {
+    assert.deepEqual(judgedTeamMembers({ internal: null }), null);
+  });
+
+  test("a read plan drifted from the verdict throws instead of passing unjudged", () => {
+    assert.throws(() => judgedTeamMembers({}));
+    assert.throws(() => judgedTeamMembers(undefined));
+    assert.throws(() => judgedTeamMembers({ elsewhere: ["stranger"] }));
+    assert.throws(() => judgedTeamMembers({ internal: ["saadiqbal-dev"], elsewhere: ["stranger"] }));
+  });
+});
+
 describe("operatorApproval", () => {
   const staging = { base: "staging", owners: ["jlwaugh"] };
 
@@ -223,7 +253,7 @@ describe("operatorApproval", () => {
 
   test("the owner alone on @multi-agency's PR passes", () => {
     assert.deepEqual(
-      operatorApproval({ ...staging, author: "multi-agency", roster: record("agent", "jlwaugh"), internalAgents: ["multi-agency"], approvals: ["jlwaugh"] }),
+      operatorApproval({ ...staging, author: "multi-agency", roster: record("agent", "jlwaugh"), approvals: ["jlwaugh"] }),
       pass("@jlwaugh operates @multi-agency as the owner, whose approval counts as it does today"),
     );
   });
@@ -295,63 +325,54 @@ describe("operatorApproval", () => {
     );
   });
 
-  test("an internal-agents author recorded as a person is still an agent", () => {
-    // Team internal-agents decides agent-hood; a declared kind cannot skip
-    // the check. With no operator any roster source names, it fails closed,
-    // approvals or none.
+  test("a self-declared person passes unchecked; owner decision 2026-10-05", () => {
+    // No team names agents (owner decision, 2026-10-05: one team only,
+    // `internal`, people only), so the roster record decides — and its kind
+    // is a declaration the board never verifies. An account recorded as a
+    // person therefore passes however it got there: an agent whose join said
+    // `kind: "human"` ships on its operator's approval alone. That is the
+    // risk the owner accepted by making the roster the one recognition
+    // source (#109), not a protection this check provides. A rostered agent
+    // still gets the operator check:
     assert.deepEqual(
-      operatorApproval({ ...staging, author: "rogue-agent", roster: record("human", null), internalAgents: ["rogue-agent"], approvals: ["jlwaugh"] }).outcome,
-      "fail",
+      operatorApproval({ ...staging, author: "rogue-agent", roster: record("human", null), approvals: ["jlwaugh"] }).outcome,
+      "pass",
     );
     assert.deepEqual(
-      operatorApproval({ ...staging, author: "rogue-agent", roster: record("human", null), internalAgents: ["rogue-agent"], approvals: [] }).outcome,
-      "fail",
-    );
-  });
-
-  test("nor does a person no roster source names, once the team names them an agent", () => {
-    assert.deepEqual(
-      operatorApproval({ ...staging, author: "rogue-agent", roster: { status: "absent" }, internalAgents: ["rogue-agent"], approvals: ["jlwaugh"] }).outcome,
-      "fail",
-    );
-  });
-
-  test("a member of internal-agents the roster operates still gets the operator check", () => {
-    assert.deepEqual(
-      operatorApproval({ ...staging, author: "new-agent", roster: record("agent", "saadiqbal-dev"), internalAgents: ["new-agent"], approvals: ["saadiqbal-dev"] }),
+      operatorApproval({ ...staging, author: "new-agent", roster: record("agent", "saadiqbal-dev"), internal: ["saadiqbal-dev"], approvals: ["saadiqbal-dev"] }),
       fail("the only approval is @saadiqbal-dev, @new-agent's operator; an operator's approval alone does not approve their agent's PR"),
     );
   });
 
-  test("a team that cannot be read fails closed, even off the roster", () => {
+  test("team internal unreadable fails closed, even off the roster", () => {
     assert.deepEqual(
-      operatorApproval({ ...staging, author: "jlwaugh", roster: record("human", null), internal: null, internalAgents: [] }).outcome,
+      operatorApproval({ ...staging, author: "jlwaugh", roster: record("human", null), internal: null }).outcome,
       "fail",
     );
     assert.deepEqual(
-      operatorApproval({ ...staging, author: "stranger", roster: { status: "absent" }, internal: [], internalAgents: null }).outcome,
+      operatorApproval({ ...staging, author: "stranger", roster: { status: "absent" }, internal: null }).outcome,
       "fail",
     );
   });
 
-  test("a fork, whose run gets no secrets and so no teams, is judged on what needs no org token", () => {
-    // GitHub refuses a fork's run every repository secret, so its teams are
+  test("a fork, whose run gets no secrets and so no team, is judged on what needs no org token", () => {
+    // GitHub refuses a fork's run every repository secret, so its team is
     // unread by design: judged on CODEOWNERS' own logins and OWNER, with the
     // roster still answering for the author.
     assert.deepEqual(
-      operatorApproval({ ...staging, author: "stranger", roster: { status: "absent" }, internal: null, internalAgents: null, fork: true, approvals: [] }).outcome,
+      operatorApproval({ ...staging, author: "stranger", roster: { status: "absent" }, internal: null, fork: true, approvals: [] }).outcome,
       "pass",
     );
     assert.deepEqual(
-      operatorApproval({ ...staging, author: "fork-agent", roster: record("agent", "jlwaugh"), internal: null, internalAgents: null, fork: true, approvals: ["jlwaugh"] }).outcome,
+      operatorApproval({ ...staging, author: "fork-agent", roster: record("agent", "jlwaugh"), internal: null, fork: true, approvals: ["jlwaugh"] }).outcome,
       "pass",
     );
     assert.deepEqual(
-      operatorApproval({ ...staging, author: "fork-agent", roster: record("agent", "jlwaugh"), internal: null, internalAgents: null, fork: true, approvals: [] }).outcome,
+      operatorApproval({ ...staging, author: "fork-agent", roster: record("agent", "jlwaugh"), internal: null, fork: true, approvals: [] }).outcome,
       "pass",
     );
     assert.deepEqual(
-      operatorApproval({ ...staging, author: "fork-agent", roster: record("agent", "jlwaugh"), internal: null, internalAgents: null, fork: true, approvals: [], unvouched: ["jlwaugh"] }).outcome,
+      operatorApproval({ ...staging, author: "fork-agent", roster: record("agent", "jlwaugh"), internal: null, fork: true, approvals: [], unvouched: ["jlwaugh"] }).outcome,
       "fail",
     );
   });

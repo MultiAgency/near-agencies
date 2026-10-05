@@ -274,7 +274,12 @@ board), `REGISTRY_URL` (the shared member registry's oRPC base —
 `https://multiagency.ai/api/rpc/builders` in production;
 `https://dev.multiagency.ai/api/rpc/builders` is a disposable test registry,
 for testing the board code only — unset, the roster is the local `roster.json`
-plus board admissions), and `COORDINATOR` as above: the coordinator must run in
+plus board admissions), `REGISTRY_TOKEN` (the registry's write token, a
+secret: with it set, every admission the board verifies is also written to
+the registry and [`scripts/registry-backfill.mjs`](scripts/registry-backfill.mjs)
+can write the members the board already admitted; without it, `/admit` runs
+exactly as before — reads need no token), and `COORDINATOR` as above: the
+coordinator must run in
 exactly one place. The x402 routes stay off unless a facilitator is configured.
 
 ## Network profiles
