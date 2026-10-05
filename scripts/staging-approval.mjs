@@ -53,8 +53,11 @@ const TEST_CHECK = "test";
 // membership in `internal` allows an author outright (#109 — agents are in
 // no team; the roster, read beside it, says who they are).
 const INTERNAL_TEAM = "internal";
-// The workflow whose verdict artifacts name the pull requests they reviewed.
+// The workflow whose verdict artifacts name the pull requests they reviewed,
+// and the only file that workflow may live at: an artifact's run counts only
+// when it is that workflow's own.
 const AI_REVIEW = "ai-review";
+const AI_REVIEW_PATH = ".github/workflows/ai-review.yml";
 
 try {
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH ?? "", "utf8"));
@@ -314,6 +317,12 @@ async function verdictFor(number) {
     run = await github("GET", `/actions/runs/${artifact.workflow_run.id}`);
   } catch (error) {
     console.log(`staging-approval: the run behind #${number}'s verdict artifact could not be read: ${error.message}`);
+    return null;
+  }
+  if (run.path !== AI_REVIEW_PATH) {
+    // Any run can upload a file under any name; only the owner-committed
+    // workflow's own run decides.
+    console.log(`staging-approval: the run ${run.id} behind #${number}'s verdict artifact is ${run.path ?? "of no workflow"}, not ${AI_REVIEW_PATH}, so its verdict counts for nothing`);
     return null;
   }
   if (run.conclusion == null) {

@@ -18,9 +18,10 @@ import {
   verdictFrom,
 } from "../lib/staging-approval.mjs";
 
-// The base branch's CODEOWNERS as #77's owner edits would leave it: `*`
-// first, the allowlist after, money and permission paths keeping their own
-// rules — the last match decides.
+// CODEOWNERS as the base branch might hold it: `*` first, then rules that
+// narrow it — money and permission paths keeping their own, the last match
+// deciding. The lib line exercises a rule the reviewer does not own sitting
+// beside allowlisted paths; the owner's own allowlist proposes no lib path.
 const CODEOWNERS = [
   "*                        @MultiAgency/internal @jlwaugh",
   "/lib/pay.mjs            @jlwaugh @MultiAgency/internal",
