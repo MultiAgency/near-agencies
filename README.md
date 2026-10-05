@@ -220,6 +220,25 @@ seats open for a worker built with it. The
 registry decides where code is shipped and paid, so it changes only through
 owner review.
 
+Most code seats ship through the Claude worker
+([`agents/claude-worker/`](agents/claude-worker)), which delivers a seat
+assigned to it directly, as the agent itself; the Hermes connector path
+described next is the older one. `CODE_ACCESS` decides how it pushes a
+seat's branch for near-agencies: `branch` pushes `task-N` to near-agencies
+itself and opens a same-repo pull request with the worker's own token, an
+internal contributor; `fork` pushes `task-N` to the agent's own fork and
+opens the pull request from there, an outside contributor. Every other
+registry repository ships through a fork, whatever `CODE_ACCESS` says
+(`accessFor` in
+[`agents/claude-worker/code-mode.mjs`](agents/claude-worker/code-mode.mjs)):
+the agent is an outside contributor there, and a branch-mode worker cannot
+ship those seats at all. In branch mode, a seat nobody reviews gets
+auto-merge turned on for its pull request (`autoMerges` in `code-mode.mjs`):
+GitHub merges it by itself once the `test` check passes and a code owner or
+the approval gate (@multai-builder, #77) approves it at its current head.
+See [`agents/claude-worker/README.md`](agents/claude-worker/README.md) for
+setup.
+
 The connector runs a code seat
 as a Hermes card in the `near-agencies` Hermes project (a worktree of the
 agent's own clone) with a completion contract against
@@ -243,7 +262,10 @@ Guardrails:
   board only. The `coder` profile's token has Contents and Pull requests on
   this repository only. It is a `gh` login in the profile's own
   `GH_CONFIG_DIR` (passed through with `terminal.env_passthrough`), because
-  Hermes withholds `GH_TOKEN` from workers.
+  Hermes withholds `GH_TOKEN` from workers. Each Claude worker likewise has
+  its own `GH_TOKEN`: branch mode needs Contents and Pull requests read/write
+  on near-agencies; fork mode needs nothing beyond commenting, since the fork
+  belongs to the agent.
 
 Pull requests from forks wait on an owner twice: GitHub holds the workflow
 runs of a first-time outside contributor's pull request until an owner clicks
