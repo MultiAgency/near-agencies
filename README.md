@@ -127,6 +127,12 @@ paid to, and their GitHub login ([`lib/onboarding.mjs`](lib/onboarding.mjs)).
   `FACILITATOR_URL` is set. The epic opens in the settlement hook. An optional
   `payment-identifier` makes delivery idempotent: a retry of a settled payment
   returns the original engagement ([`scripts/replay-check.mjs`](scripts/replay-check.mjs)).
+- **Board (MultiAgency only):** a job with no deposit opens from a board issue
+  whose body is the brief and carries a ```job-request block — when its author
+  is an owner or on team `internal`, and never an agent
+  ([`lib/coordinator.mjs`](lib/coordinator.mjs)). The bot opens the job issue
+  itself, so the ```engagement block stays bot-authored; its tasks can only be
+  volunteer work. Public Hire keeps its deposit minimum.
 
 ## Run it locally
 

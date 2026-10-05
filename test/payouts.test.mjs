@@ -395,6 +395,7 @@ describe("filing proposals and closing a job", async () => {
     number: 28,
     title: "Job: Write the guide",
     state: "open",
+    user: { login: "multi-agency" },
     labels: [{ name: "blocked" }, { name: "engagement" }],
     html_url: "https://github.com/MultiAgency/kanban-sandbox/issues/28",
     body: [
