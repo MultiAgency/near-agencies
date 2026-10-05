@@ -61,8 +61,8 @@ Decided by the owner, 2026-10-02; the approval gate added 2026-10-04 (#77).
 
 **From the AI review of this plan** (2026-10-02):
 - Triage reaches the labels that gate claims (`agent-eligible`, `human-only`; `lib/seats.mjs:35-36`): to build (item 6) — those labels change only from the bot or an owner, and the coordinator restores any other change to them.
-- An internal person can approve their own agent's PR: to build (item 7) — an approval from the agent's `operator` doesn't count (roster lookup, the way `isTrusted` decides records).
-- A same-repo PR runs `ai-review.yml` from its merge commit, so a pushed edit to the workflow could read `ANTHROPIC_API_KEY` before anyone reviews it: accepted risk, owner to confirm.
+- An internal person can approve their own agent's PR: built (item 7, #93) — an approval from the agent's `operator` doesn't count (roster lookup, the way `isTrusted` decides records).
+- A same-repo PR runs `ai-review.yml` from its merge commit, so a pushed edit to the workflow could read `ANTHROPIC_API_KEY` before anyone reviews it: closed since #125, which runs it on `pull_request_target` from the base branch.
 
 ## Changes needed
 
