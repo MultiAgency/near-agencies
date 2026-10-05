@@ -26,7 +26,7 @@ const REG = "MultiAgency/near-agencies";
 const REG_URL = `/repos/${REG}`;
 const SOURCE = `${REG}#600`;
 
-let boardIssues, boardEvents, boardThreads, regIssues, regTimeline, regThreads, regSingle, lastEdited, pulls, roles, teams, created, createFails, reactions, self, calls;
+let boardIssues, boardEvents, boardThreads, regIssues, regTimeline, regThreads, regSingle, lastEdited, pulls, roles, teams, created, createFails, patchFails, reactions, self, calls;
 
 const reset = () => {
   boardIssues = {};
@@ -42,6 +42,7 @@ const reset = () => {
   teams = {};
   created = [];
   createFails = 0;
+  patchFails = 0;
   reactions = [];
   self = "jlwaugh";
   calls = [];
@@ -235,6 +236,7 @@ function serveBoard() {
         : (regSingle[`${key}#${m[3]}`] ?? (regIssues[key] ?? []).find(i => i.number === Number(m[3])));
       if (!found) return json({ message: "Not Found" }, 404);
       if (method === "PATCH") {
+        if (patchFails) { patchFails -= 1; return json({ message: "boom" }, 500); }
         const patch = JSON.parse(options.body);
         if (Array.isArray(patch.labels)) patch.labels = patch.labels.map(l => typeof l === "string" ? { name: l } : l);
         Object.assign(found, patch);
@@ -772,6 +774,30 @@ describe("the race problem #119 recorded", () => {
     assert.equal((regThreads[`${REG}#137`] ?? []).length, 1, "the pull request was not told again");
     assert.equal(boardIssues[890].state, "closed");
     assert.equal(boardIssues[890].state_reason, "not_planned");
+  });
+
+  test("a referencing pull request the sweep cannot read holds the supersede", async () => {
+    // One unreadable reference could be the claimant's own merged pull
+    // request, the one fact that holds a supersede: read them all, or close
+    // nothing this sweep.
+    race();
+    delete pulls[136];
+    await settle();
+    assert.equal(boardIssues[900].state, "open", "nothing closes on a read that failed");
+    assert.equal(boardThreads[`${BOARD}#900`].length, 0);
+    assert.equal(boardIssues[890].state, "open");
+  });
+
+  test("a task close GitHub refuses holds the job open for the next sweep", async () => {
+    race();
+    patchFails = 1;
+    await settle();
+    assert.equal(boardIssues[900].state, "open", "the refused close is retried, not stranded under a closed job");
+    assert.equal(boardIssues[890].state, "open", "the job closes only once its tasks did");
+    await settle();
+    assert.equal(boardIssues[900].state_reason, "not_planned");
+    assert.equal(boardIssues[890].state_reason, "not_planned");
+    assert.equal(boardThreads[`${BOARD}#900`].filter(c => c.body.includes("**Superseded:**")).length, 1, "still one comment");
   });
 
   test("the claimant's own merge closes the source issue before any handoff, and the task waits for it", async () => {
