@@ -9,6 +9,8 @@
 //                                                    vote is cast while a task has duplicate proposals
 //   node payout.mjs reconcile <job>                   record approvals made elsewhere (a wallet, Trezu)
 //
+// Reading a job checks its epic was opened by the board's bot: run these with
+// BOARD_BOT=<the bot's login> when GITHUB_TOKEN (or your gh login) is your own.
 // Proposals are filed only after every task is closed with a handoff whose
 // `payout.account_id` matches the task's payee, every pull request a handoff
 // links (code tasks) is merged, and every deliverable a handoff pins by sha256

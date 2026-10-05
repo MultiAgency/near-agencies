@@ -10,6 +10,9 @@ import { timeline } from "../lib/timeline.mjs";
 
 // Requests go only to the fetch stubs below; the token just has to resolve.
 process.env.GITHUB_TOKEN = "test-token";
+// The bot's identity is a deployment fact (BOARD_BOT), not the caller's token:
+// every stub below answers /user with a stranger's login to prove it.
+process.env.BOARD_BOT = "multi-agency";
 
 const BOT = "multi-agency";
 const BOARD = "/repos/MultiAgency/kanban-sandbox";
@@ -18,15 +21,17 @@ const BOARD = "/repos/MultiAgency/kanban-sandbox";
 // multi-agency as an agent and jlwaugh as a person; everything else the stub
 // serves. Teams maps `team/login` to 204 (member), 404 (not), or another
 // status (the read failed); roles maps a login to its collaborator role.
-let epics, issues, comments, roles, teams, createFails;
+let epics, issues, comments, threads, roles, teams, createFails, self;
 
 const reset = () => {
   epics = [];
   comments = [];
+  threads = {};
   issues = {};
   roles = {};
   teams = {};
   createFails = 0;
+  self = "jlwaugh";
 };
 
 // A request issue: its body is the brief plus the ```job-request block.
@@ -56,7 +61,7 @@ function serveBoard() {
     const method = options.method ?? "GET";
     const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
     let m;
-    if (method === "GET" && u.pathname === "/user") return json({ login: BOT });
+    if (method === "GET" && u.pathname === "/user") return json({ login: self });
     if (method === "GET" && u.pathname === `${BOARD}/issues` && u.searchParams.get("labels") === "engagement") {
       return json(Object.values(issues).filter(i => (i.labels ?? []).some(l => l.name === "engagement")));
     }
@@ -76,10 +81,15 @@ function serveBoard() {
       issues[epic.number] = epic;
       return json(epic);
     }
-    if ((m = /^\/repos\/[^/]+\/[^/]+\/issues\/(\d+)\/comments$/.exec(u.pathname)) && method === "POST") {
-      const posted = { number: Number(m[1]), ...JSON.parse(options.body) };
-      comments.push(posted);
-      return json(posted);
+    if ((m = /^\/repos\/[^/]+\/[^/]+\/issues\/(\d+)\/comments$/.exec(u.pathname))) {
+      const thread = (threads[Number(m[1])] ??= []);
+      if (method === "POST") {
+        const posted = { number: Number(m[1]), user: { login: BOT }, ...JSON.parse(options.body) };
+        comments.push(posted);
+        thread.push(posted);
+        return json(posted);
+      }
+      return json(thread);
     }
     if ((m = /^\/repos\/[^/]+\/[^/]+\/issues\/(\d+)$/.exec(u.pathname))) {
       const found = issues[Number(m[1])];
@@ -87,7 +97,6 @@ function serveBoard() {
       if (method === "PATCH") Object.assign(found, JSON.parse(options.body));
       return json(found);
     }
-    if ((m = /^\/repos\/[^/]+\/[^/]+\/issues\/(\d+)\/comments$/.exec(u.pathname)) && method === "GET") return json([]);
     throw new Error(`unexpected request: ${method} ${u.pathname}${u.search}`);
   };
 }
@@ -116,7 +125,8 @@ describe("job requests", () => {
     assert.equal(engagement.deposit.transaction, undefined);
     assert.match(epic.body, /opened by @jlwaugh with no deposit/);
     assert.match(epic.body, /Build the internal dashboard/);
-    assert.match(comments[0].body, new RegExp(`your job is open with no deposit: ${epic.html_url.replace(/[/.]/g, "\\$&")}`));
+    assert.ok(comments[0].body.includes(`your job is open with no deposit: ${epic.html_url}.`),
+      "the answer links the job it opened");
     assert.equal(issues[800].state, "closed");
     assert.equal(issues[800].state_reason, "completed");
   });
@@ -141,6 +151,11 @@ describe("job requests", () => {
     assert.match(comments[0].body, /no job was opened from this request: only a MultiAgency owner or an active member of team internal/);
     assert.equal(issues[802].state, "closed");
     assert.equal(issues[802].state_reason, "not_planned");
+    // Reopened, it is closed again without a second refusal comment.
+    issues[802].state = "open";
+    await settle();
+    assert.equal(comments.length, 1);
+    assert.equal(issues[802].state_reason, "not_planned");
   });
 
   test("a roster agent is refused even when an owner and on team internal", async () => {
@@ -155,26 +170,17 @@ describe("job requests", () => {
     assert.equal(issues[803].state_reason, "not_planned");
   });
 
-  test("a member of team internal-agents is refused", async () => {
+  test("the board's own bot is refused by name, even off the roster and an owner", async () => {
     reset();
-    teams["internal/intern"] = 204;
-    teams["internal-agents/intern"] = 204;
-    issues[804] = jobRequest(804, "intern", "The agent team's job", {});
-    serveBoard();
-    await settle();
-    assert.equal(epics.length, 0);
-    assert.match(comments[0].body, /is in team internal-agents, and agents can't open jobs/);
-  });
-
-  test("an unreadable agents team fails closed, even for an owner", async () => {
-    reset();
-    roles.jlwaugh = "admin";
-    teams["internal-agents/jlwaugh"] = 503;
-    issues[805] = jobRequest(805, "jlwaugh", "Owner, unreadable agents team", {});
-    serveBoard();
-    await settle();
-    assert.equal(epics.length, 0);
-    assert.match(comments[0].body, /whether @jlwaugh is an agent could not be read from team internal-agents \(GitHub answered 503\)/);
+    roles["on-board"] = "admin";
+    // The bot's login is a deployment fact (BOARD_BOT); name one the roster
+    // does not know, so the by-name refusal is what fires.
+    process.env.BOARD_BOT = "on-board";
+    try {
+      assert.equal(await jobRequestRefusal("on-board"), "@on-board is MultiAgency's own agent, and only people open jobs");
+    } finally {
+      process.env.BOARD_BOT = BOT;
+    }
   });
 
   test("an unreadable internal team fails closed to owners only", async () => {
@@ -230,7 +236,7 @@ describe("job requests", () => {
     assert.match(comments[1].body, /brief must not carry an ```engagement or ```team block/);
   });
 
-  test("a request is processed once; a later cycle opens nothing new", async () => {
+  test("a request is processed once; a later cycle, or a reopened request, opens nothing new", async () => {
     reset();
     roles.jlwaugh = "admin";
     issues[811] = jobRequest(811, "jlwaugh", "Once only", {});
@@ -239,6 +245,13 @@ describe("job requests", () => {
     await settle();
     assert.equal(epics.length, 1);
     assert.equal(comments.length, 1);
+    // The author reopens their handled request: the bot's own answer marks it
+    // handled, so it closes again without a second job.
+    issues[811].state = "open";
+    await settle();
+    assert.equal(epics.length, 1);
+    assert.equal(comments.length, 1);
+    assert.equal(issues[811].state, "closed");
   });
 
   test("GitHub refusing the epic leaves the request open and unanswered for the next cycle", async () => {
