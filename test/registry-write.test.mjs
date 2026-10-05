@@ -357,6 +357,19 @@ const rosterRecord = (login, overrides = {}) => ({
   ...overrides,
 });
 
+// The script as its owner runs it, from a scratch directory; a failing run's
+// stdout and stderr come back together for the assertions. Async on purpose,
+// like the dry-run test's nodeIn below: the child's writes must reach a
+// registry this process serves.
+const backfillCli = fileURLToPath(new URL("../scripts/registry-backfill.mjs", import.meta.url));
+const backfillRun = async (args, env, cwd) => {
+  try {
+    return (await promisify(execFile)("node", ["--no-warnings", backfillCli, ...args], { cwd, encoding: "utf8", env: { ...process.env, ...env } })).stdout;
+  } catch (error) {
+    return `${error.stdout ?? ""}\n${error.stderr ?? ""}`;
+  }
+};
+
 describe("the registry backfill", () => {
   test("orders people first with the agents' operators first, agents last; logins lowercase; operator exactly on agents", () => {
     const commitFor = () => ({ url: "https://github.com/MultiAgency/near-agencies/commit/abc", date: "2026-09-27T23:18:01-04:00", sha: "abc" });
@@ -447,6 +460,7 @@ describe("the registry backfill", () => {
     const env = { REGISTRY_URL: "https://registry.test/api/rpc/builders", ROSTER_FILE: join(repo, "roster.json"), ADMITTED_FILE: admitted };
     const dry = await nodeIn([fileURLToPath(new URL("../scripts/registry-backfill.mjs", import.meta.url)), "--dry-run"], env);
     assert.match(dry, /3 members to write/);
+    assert.match(dry, /admitted store .*roster-admitted\.testnet\.json: 1 record/, "the dry run names the store it read and its record count");
     assert.deepEqual([...dry.matchAll(/^\d+\. (\S+) —/gm)].map(m => m[1]), ["pat", "sam", "rob-agent"]);
     assert.match(dry, new RegExp(`commit/${rootSha.slice(0, 8)}`), "pat's proof is the commit that added the entry");
     assert.match(dry, /pat: proof from the commit that added the roster entry/);
@@ -458,13 +472,16 @@ describe("the registry backfill", () => {
     assert.match(dry, /"githubLogin":"sam"/);
 
     // The accident the guard exists for: a run for the wrong network writes
-    // nothing — roster.json's accounts belong to testnet.
+    // nothing — roster.json holds testnet's admissions and is left out named,
+    // and the store's own records still fail the account check.
     const backfill = fileURLToPath(new URL("../scripts/registry-backfill.mjs", import.meta.url));
     const wrong = await nodeIn([backfill, "--dry-run"], { ...env, NEAR_NETWORK: "mainnet" }).catch(error => `${error.stdout}\n${error.stderr}`);
     assert.match(wrong, /registry backfill — mainnet/);
     assert.match(wrong, /0 members to write/);
-    assert.match(wrong, /pat\.testnet is a testnet account, not mainnet/);
-    assert.match(wrong, /sam\.testnet is a testnet account, not mainnet/);
+    assert.match(wrong, /left out — roster\.json holds admissions made on testnet/);
+    assert.match(wrong, /\n  pat\n/, "pat is named among the left-out records");
+    assert.doesNotMatch(wrong, /^1\. pat —/m);
+    assert.match(wrong, /sam\.testnet is a testnet account, not mainnet/, "a store record of the other network is still refused by its suffix");
 
     // The real run writes through a registry this test serves, people first.
     const writes = [];
@@ -490,5 +507,98 @@ describe("the registry backfill", () => {
     } finally {
       server.close();
     }
+  });
+
+  test("an implicit account in roster.json is left out on another network, written on testnet", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "backfill-net-"));
+    // The record carries its own proof and stamp, so the only thing under
+    // test is which network may write it.
+    const rosterFile = join(repo, "roster.json");
+    writeFileSync(rosterFile, JSON.stringify({ builders: [rosterRecord("hex-human", {
+      nearAccount: "deadbeef".repeat(8), // an implicit account: hex, no suffix
+      proof: "https://github.com/MultiAgency/near-agencies/issues/55",
+      admittedAt: "2026-10-01T00:00:00.000Z",
+    })] }));
+    const storeFile = join(repo, "roster-admitted.mainnet.json");
+    writeFileSync(storeFile, JSON.stringify({ builders: [] }));
+    const env = { REGISTRY_URL: "https://registry.test/api/rpc/builders", ROSTER_FILE: rosterFile, ADMITTED_FILE: storeFile };
+
+    // On mainnet the record is left out, named: roster.json holds admissions
+    // made on testnet, and an implicit account carries no suffix the account
+    // guard could read — nothing about it says mainnet admitted it.
+    const away = await backfillRun(["--dry-run"], { ...env, NEAR_NETWORK: "mainnet" }, repo);
+    assert.match(away, /registry backfill — mainnet/);
+    assert.match(away, /admitted store .*roster-admitted\.mainnet\.json: 0 records/);
+    assert.match(away, /left out — roster\.json holds admissions made on testnet/);
+    assert.match(away, /hex-human/);
+    assert.match(away, /0 members to write/);
+    assert.doesNotMatch(away, /^1\. hex-human —/m);
+    assert.doesNotMatch(away, /"githubLogin":"hex-human"/);
+
+    // On testnet — the network the roster's admissions were made on — it is
+    // written, implicit account and all.
+    const home = await backfillRun(["--dry-run"], env, repo);
+    assert.match(home, /registry backfill — testnet/);
+    assert.match(home, /1 member to write/);
+    assert.match(home, /^1\. hex-human —/m);
+    assert.match(home, new RegExp(`account ${"deadbeef".repeat(8)}`));
+    const writes = [];
+    const server = createServer((request, response) => {
+      let body = "";
+      request.on("data", chunk => { body += chunk; });
+      request.on("end", () => {
+        writes.push({ url: request.url, token: request.headers["x-registry-token"], body: JSON.parse(body).json });
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ json: { data: { overwritten: [] } } }));
+      });
+    });
+    await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const out = await backfillRun([], { ...env, REGISTRY_URL: `http://127.0.0.1:${server.address().port}/api/rpc/builders`, REGISTRY_TOKEN: TOKEN }, repo);
+      assert.match(out, /1\/1 written/);
+      assert.equal(writes.length, 1);
+      assert.equal(writes[0].body.githubLogin, "hex-human");
+      assert.equal(writes[0].body.network, "testnet");
+      assert.equal(writes[0].body.account.account, "deadbeef".repeat(8));
+      assert.equal(writes[0].body.admission.admittedAt, "2026-10-01T00:00:00.000Z", "the record keeps its own stamp");
+      assert.equal(writes[0].token, TOKEN);
+    } finally {
+      server.close();
+    }
+  });
+
+  test("a missing admitted store stops the run and names the path; --no-admitted-store goes on with roster.json only", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "backfill-store-"));
+    const rosterFile = join(repo, "roster.json");
+    writeFileSync(rosterFile, JSON.stringify({ builders: [rosterRecord("pat", {
+      proof: "https://github.com/MultiAgency/near-agencies/issues/55",
+      admittedAt: "2026-10-01T00:00:00.000Z",
+    })] }));
+    const missing = join(repo, ".data", "roster-admitted.testnet.json"); // never created
+    const env = { REGISTRY_URL: "https://registry.test/api/rpc/builders", ROSTER_FILE: rosterFile, ADMITTED_FILE: missing };
+
+    // The dry run stops, naming the store it expected: off-host, its absence
+    // must not read as an empty store — that run would drop every board
+    // admission and still report itself clean.
+    const dry = await backfillRun(["--dry-run"], env, repo);
+    assert.match(dry, /the admitted store is missing/);
+    assert.ok(dry.includes(missing), "the error names the expected path");
+    assert.match(dry, /--no-admitted-store/);
+    assert.doesNotMatch(dry, /members to write/);
+    assert.doesNotMatch(dry, /dry run:/);
+
+    // The real run stops the same way, before anything is written.
+    const real = await backfillRun([], { ...env, REGISTRY_TOKEN: TOKEN }, repo);
+    assert.match(real, /the admitted store is missing/);
+    assert.ok(real.includes(missing), "the error names the expected path");
+    assert.doesNotMatch(real, /\d+\/\d+ written/);
+
+    // Told so, the run goes on with roster.json's records only and says the
+    // store was not read.
+    const told = await backfillRun(["--dry-run", "--no-admitted-store"], env, repo);
+    assert.match(told, /admitted store: none read/);
+    assert.match(told, /1 member to write/);
+    assert.match(told, /^1\. pat —/m);
+    assert.match(told, /dry run: nothing was written/);
   });
 });

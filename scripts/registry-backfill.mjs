@@ -6,6 +6,13 @@
 //   REGISTRY_URL=... REGISTRY_TOKEN=... node scripts/registry-backfill.mjs --dry-run
 //   REGISTRY_URL=... REGISTRY_TOKEN=... node scripts/registry-backfill.mjs
 //
+// roster.json holds admissions made on testnet — the network the board has
+// run on — so a run for another network writes only that network's admitted
+// store (roster-admitted.<network>.json) and names roster.json's records as
+// left out. The admitted store lives on the coordinator's volume, not in the
+// repository: a run off-host stops until it is given --no-admitted-store to
+// go on with roster.json's records only.
+//
 // What it writes, per the registry's rules:
 // - people first — starting with the operators the agents name — then agents;
 //   an agent's operator must already be a human member admitted on this network;
@@ -31,6 +38,10 @@ import { network } from "../lib/network.mjs";
 import { putMember, putMemberBody, rosterStoreFiles } from "../lib/roster.mjs";
 
 const dryRun = process.argv.includes("--dry-run");
+// A run from a host that does not hold the admitted store may say so on
+// purpose: --no-admitted-store proceeds with roster.json's records only, and
+// the plan says the store was not read.
+const noAdmittedStore = process.argv.includes("--no-admitted-store");
 const REGISTRY_URL = process.env.REGISTRY_URL;
 
 // An account's suffix names its network by convention (.testnet here, .near
@@ -40,6 +51,11 @@ const REGISTRY_URL = process.env.REGISTRY_URL;
 // take it as admitted — and every coordinator of that network would read it
 // back as a member to pay — on a network it was never admitted on.
 const NETWORK_TLD = { testnet: ".testnet", mainnet: ".near" };
+
+// The network whose admissions the board's local records hold: the board has
+// run on testnet, so a backfill for another network writes only that
+// network's admitted store and leaves roster.json's records out.
+const ROSTER_NETWORK = "testnet";
 
 // --- the local records -------------------------------------------------------
 
@@ -59,13 +75,32 @@ const loginOf = builder => builder.links?.github?.replace(/^https:\/\/github\.co
 /**
  * The members to backfill: roster.json's records, overlaid by the admitted
  * store's (a board admission is the newer record of its login) — the same
- * precedence the roster merges by. Records without a GitHub login come back
- * as problems; everything else a write needs is checked in planWrites.
+ * precedence the roster merges by. roster.json holds admissions made on
+ * testnet only, so a run for another network leaves its records out — named
+ * in the plan, since an implicit account carries no network suffix and the
+ * account guard in planWrites could not catch one — and writes only this
+ * network's admitted store. That store lives on the coordinator's volume,
+ * not in the repository, so it is read strictly: a run off-host that read
+ * its absence as empty would drop every board admission and still report a
+ * clean run. Records without a GitHub login come back as problems;
+ * everything else a write needs is checked in planWrites.
  */
 export function loadMembers() {
   const merged = new Map();
   const problems = [];
-  for (const builder of [...buildersOf(asPath(rosterStoreFiles.roster)), ...buildersOf(asPath(rosterStoreFiles.admitted))]) {
+  const rosterBuilders = buildersOf(asPath(rosterStoreFiles.roster));
+  const onRosterNetwork = network.networkId === ROSTER_NETWORK;
+  const leftOut = onRosterNetwork ? [] : rosterBuilders.map(builder => loginOf(builder) ?? `an unnamed record (${builder.name ?? "unnamed"})`);
+  const store = { path: asPath(rosterStoreFiles.admitted), builders: [], skipped: noAdmittedStore, problem: null };
+  if (!noAdmittedStore) {
+    try {
+      store.builders = JSON.parse(readFileSync(store.path, "utf8")).builders ?? [];
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      store.problem = `the admitted store is missing: ${store.path} — a run without it would drop every board admission and still report a clean one. Run the backfill where the store lives, or pass --no-admitted-store to proceed with roster.json's records only.`;
+    }
+  }
+  for (const builder of [...(onRosterNetwork ? rosterBuilders : []), ...store.builders]) {
     const login = loginOf(builder);
     if (!login) {
       problems.push(`a record names no GitHub login (${builder.name ?? "unnamed"})`);
@@ -73,7 +108,7 @@ export function loadMembers() {
     }
     merged.set(login, builder);
   }
-  return { members: [...merged.values()], problems };
+  return { members: [...merged.values()], problems, leftOut, store };
 }
 
 // --- proof from the roster file's own history --------------------------------
@@ -273,7 +308,18 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  const { members, problems } = loadMembers();
+  const { members, problems, leftOut, store } = loadMembers();
+  if (store.problem) {
+    console.error(store.problem);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(store.skipped
+    ? "\nadmitted store: none read — --no-admitted-store, roster.json's records only"
+    : `\nadmitted store ${store.path}: ${store.builders.length} record${store.builders.length === 1 ? "" : "s"}`);
+  if (leftOut.length) {
+    console.log(`\nleft out — roster.json holds admissions made on ${ROSTER_NETWORK}, and this run writes only the ${network.networkId} admitted store:\n  ${leftOut.join("\n  ")}`);
+  }
   const commits = commitProofs(rosterStoreFiles.roster);
   if (commits.problem) console.error(`note: ${commits.problem}`);
   const plan = planWrites(members, { commitFor: commits.for });
