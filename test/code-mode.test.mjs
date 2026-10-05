@@ -10,6 +10,7 @@ import {
   CODE_ACCESS_REFUSAL_FIRST_LINE, CODE_IMAGE_REFUSAL_FIRST_LINE,
   CODE_REPO_REFUSAL_FIRST_LINE, CODE_REFUSAL,
   GIT_CREDENTIAL_HELPER,
+  SDK_SETTINGS,
 } from "../agents/claude-worker/code-mode.mjs";
 import { codeRepo } from "../agents/claude-worker/repos.mjs";
 import { nextTask } from "../agents/claude-worker/next-task.mjs";
@@ -311,6 +312,28 @@ describe("code tools only on a delivered code seat", () => {
     // The same gate, expressed the way worker.mjs runs it.
     assert.equal(allowedTools(withoutCodeMode ? "branch" : null, near, 14, "near-builder").includes("Bash(npm ci)"), false);
     assert.equal(allowedTools(withCodeMode ? "branch" : null, near, 14, "near-builder").includes("Bash(npm ci)"), true);
+  });
+});
+
+describe("no tool attribution in an agent's commits or pull requests (#141)", () => {
+  test("the SDK settings hide the commit and pull request attribution", () => {
+    assert.deepEqual(SDK_SETTINGS, { attribution: { commit: "", pr: "" } });
+  });
+
+  test("worker.mjs passes them to query()", async () => {
+    // worker.mjs loads the SDK, which isn't installed here, so the call is
+    // read as text: the settings are the module's own, not a copy.
+    const { readFile } = await import("node:fs/promises");
+    const source = await readFile(new URL("../agents/claude-worker/worker.mjs", import.meta.url), "utf8");
+    assert.match(source, /^\s*settings: SDK_SETTINGS,$/m);
+  });
+
+  test("the shipping instructions rule out probe commits and attribution, in every mode", () => {
+    for (const access of ["fork", "branch"]) {
+      const text = ship(access, near, 14, "near-builder", false, false).join("\n");
+      assert.match(text, /never an empty or probe commit/);
+      assert.match(text, /no tool attribution/);
+    }
   });
 });
 

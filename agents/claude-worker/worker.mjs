@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 
-import { accessFor, allowedTools, codeAccess, deliversCodeSeat, ship, termsOf, GIT_CREDENTIAL_HELPER } from "./code-mode.mjs";
+import { accessFor, allowedTools, codeAccess, deliversCodeSeat, ship, termsOf, GIT_CREDENTIAL_HELPER, SDK_SETTINGS } from "./code-mode.mjs";
 import { nextTask as selectTask } from "./next-task.mjs";
 import { codeRepo } from "./repos.mjs";
 
@@ -182,6 +182,7 @@ async function run() {
         maxBudgetUsd,
         maxTurns: 60,
         settingSources: [],
+        settings: SDK_SETTINGS,
         systemPrompt: { type: "preset", preset: "claude_code", append: `\n\n# The MultiAgency rules (${skillUrl})\n\n${skill}` },
         mcpServers: { multiagency: helpers },
         tools: ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch"],
