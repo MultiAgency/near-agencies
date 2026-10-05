@@ -399,17 +399,19 @@ describe("the registry backfill", () => {
       rosterRecord("ghost-agent", { kind: "agent", operator: "no-kind", nearAccount: "ghost.testnet" }),
       rosterRecord("grounded", { nearAccount: undefined }),
       rosterRecord("orphan-agent", { kind: "agent", operator: "grounded", nearAccount: "orphan.testnet", proof: "https://github.com/MultiAgency/kanban-sandbox/issues/9", admittedAt: "2026-09-30T00:00:00.000Z" }),
+      rosterRecord("undated", { proof: "https://github.com/MultiAgency/near-agencies/issues/54" }),
     ];
     const { writes, problems } = await planWrites(members, { commitFor: () => null });
     assert.deepEqual(writes.map(w => w.login), ["joined"]);
     assert.equal(writes[0].proof.from, "record");
     assert.equal(writes[0].admittedAt.from, "record");
-    assert.equal(problems.length, 5);
+    assert.equal(problems.length, 6);
     assert.match(problems[0], /no-kind.*kind must be one of/);
     assert.match(problems[1], /lonely-agent.*not among the members/);
     assert.match(problems[2], /ghost-agent.*not a human member/);
     assert.match(problems[3], /grounded.*no testnet account/);
-    assert.match(problems[4], /orphan-agent.*grounded has no writable record/, "an agent whose operator will not be written is a problem, not a clean write");
+    assert.match(problems[4], /undated: no admission date on the record, and no commit that added it to roster\.json/, "the proof stands, so only the date is named missing");
+    assert.match(problems[5], /orphan-agent.*grounded has no writable record/, "an agent whose operator will not be written is a problem, not a clean write");
     // An account of the other network is never written for this one: the
     // registry would take it as admitted where it was not.
     const foreign = await planWrites([rosterRecord("mainlander", { nearAccount: "mainlander.near" })], { commitFor: () => null });
@@ -740,6 +742,7 @@ describe("the registry backfill", () => {
       18: { state: "closed", state_reason: "completed", closed_at: closed },
       19: { state: "open", state_reason: null, closed_at: null },
       20: { state: "closed", state_reason: "not_planned", closed_at: "2026-10-02T00:00:00.000Z" },
+      22: { state: "closed", state_reason: "duplicate", closed_at: "2026-10-03T00:00:00.000Z" },
     };
     const reads = [];
     globalThis.fetch = async url => {
@@ -752,19 +755,26 @@ describe("the registry backfill", () => {
       rosterRecord("dated", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/18" }),
       rosterRecord("waiting", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/19" }),
       rosterRecord("refused", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/20" }),
+      rosterRecord("doubled", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/22" }),
       rosterRecord("own-stamp", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/18", admittedAt: "2026-10-01T00:00:00.000Z" }),
       rosterRecord("elsewhere", { proof: "https://github.com/MultiAgency/near-agencies/issues/55" }),
-    ], { commitFor: () => null, joinIssueAdmission });
-    assert.deepEqual(reads, ["18", "19", "20"], "only records without their own stamp have their board join issue read — own-stamp and elsewhere's proof is no board join issue");
-    assert.deepEqual(writes.map(w => w.login), ["dated", "own-stamp"]);
+    ], {
+      commitFor: () => ({ url: "https://github.com/MultiAgency/near-agencies/commit/def", date: "2026-09-29T00:00:00.000Z", sha: "def" }),
+      joinIssueAdmission,
+    });
+    assert.deepEqual(reads, ["18", "19", "20", "22"], "only records without their own stamp have their board join issue read — own-stamp's and elsewhere's proof is no unread board join issue");
+    assert.deepEqual(writes.map(w => w.login), ["dated", "own-stamp", "elsewhere"]);
     assert.equal(writes[0].proof.from, "record", "the join issue stays the proof");
     assert.equal(writes[0].admittedAt.value, closed, "the stamp is the issue's close as completed");
     assert.equal(writes[0].admittedAt.from, "join issue");
     assert.equal(writes[1].admittedAt.from, "record", "a record with its own stamp keeps it");
+    assert.equal(writes[2].proof.from, "record", "a proof outside the board repo is kept");
+    assert.equal(writes[2].admittedAt.value, "2026-09-29T00:00:00.000Z", "its stamp is the commit fallback's, the path rob-agent's stamp once exercised end to end");
+    assert.equal(writes[2].admittedAt.from, "commit");
     assert.equal(problems.length, 3);
     assert.match(problems[0], /waiting: no admission date — its join issue \(#19\) is still open — not written/);
     assert.match(problems[1], /refused: no admission date — its join issue \(#20\) was closed as not planned — not written/);
-    assert.match(problems[2], /elsewhere: no admission date on the record, and no commit that added it to roster\.json/, "a proof that names no board join issue gets no date from one");
+    assert.match(problems[2], /doubled: no admission date — its join issue \(#22\) was closed as duplicate — not written/, "the problem names the close's actual reason, not assumed not-planned");
   });
 
   test("a join issue the board cannot answer about is a reported problem, not a crash", async () => {

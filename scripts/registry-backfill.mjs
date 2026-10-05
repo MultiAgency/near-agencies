@@ -253,7 +253,9 @@ export const joinIssueOf = proof => {
 export async function joinIssueAdmission(number) {
   const joined = await issue(number);
   if (joined.state !== "closed") return { why: "is still open" };
-  if (joined.state_reason !== "completed") return { why: "was closed as not planned" };
+  if (joined.state_reason !== "completed") {
+    return { why: joined.state_reason ? `was closed as ${joined.state_reason.replaceAll("_", " ")}` : "was closed without a stated reason" };
+  }
   if (!joined.closed_at) return { why: "was closed without a date GitHub reports" };
   return { at: joined.closed_at };
 }
