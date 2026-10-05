@@ -132,6 +132,62 @@ export const codeAccessRefusal = name =>
     `Branch mode's token holds Contents and Pull requests read/write on ${DEFAULT_REPO} and nothing else, so it can neither fork ${name} nor push to its fork: a worker whose CODE_ACCESS=fork should take it instead.`,
   ].join("\n");
 
+/** What a run posts on an assigned skill:code seat whose delivery preflight
+ * failed (preflight.mjs): before any model turn is spent, the run checks
+ * with its own credentials that the pull request the work needs can land —
+ * a branch-mode token without Contents write answers 403 at the push, and
+ * the run must say so instead of doing the work it could never ship (#115).
+ * The fixed first line is how a later run recognises its own blocker and
+ * skips the seat for the current round without probing again
+ * (blockerStands); the body names the repository and git's own answer. */
+export const DELIVERY_BLOCKED_FIRST_LINE =
+  "I cannot take this task: I checked before starting, and this run cannot ship the pull request the work needs.";
+
+const DELIVERY_BLOCKED_RECOVERY =
+  "The check is read-only and runs again on a later run once this round changes, or once a comment this agent did not write arrives here: an owner who has fixed the token can just say so on the task.";
+
+/** The blocker for credentials that cannot read the repository a clone or
+ * fork would start from. */
+export const deliveryBlockedRead = (repoName, detail) =>
+  [
+    DELIVERY_BLOCKED_FIRST_LINE,
+    "",
+    `The preflight ran before any work: with this run's own credentials, \`git ls-remote\` cannot read ${repoName} (\`${detail}\`). There is no clone or fork to work from, so the run spends no model turns on the task.`,
+    "",
+    DELIVERY_BLOCKED_RECOVERY,
+  ].join("\n");
+
+/** The blocker for credentials that read the repository but cannot push the
+ * branch — the 403 every wasted run of #115 ended at. */
+export const deliveryBlockedPush = (repoName, detail) =>
+  [
+    DELIVERY_BLOCKED_FIRST_LINE,
+    "",
+    `The preflight ran before any work: with this run's own credentials, git reads ${repoName}, but a dry-run push of a scratch branch does not land (\`${detail}\`). Every run on this task would end the same way at \`git push\`, so the run spends no model turns on it.`,
+    "",
+    DELIVERY_BLOCKED_RECOVERY,
+  ].join("\n");
+
+/** Whether the agent's own delivery-blocker comment — by its fixed first
+ * line — is the seat's latest word: posted since the latest round the board
+ * credits, with no later comment by anyone else. While it stands, a later
+ * run skips the seat without probing again and without redoing the work,
+ * refusalPosted's once-per-round rule. A new round reopens the seat, and so
+ * does any comment the agent did not write itself — an owner saying the
+ * token is fixed re-arms the preflight without waiting for a coordinator's
+ * round. No role lookup takes part: whoever else comments, the cost of the
+ * needless re-check is two read-only git calls, and the blocker itself is
+ * never posted twice in one round. */
+export function blockerStands(thread, login, trusted, firstLine = DELIVERY_BLOCKED_FIRST_LINE) {
+  const own = c => c.user.login.toLowerCase() === login.toLowerCase();
+  let blocker = -1;
+  for (let i = thread.length - 1; i >= 0; i--) {
+    if (own(thread[i]) && thread[i].body.startsWith(firstLine)) { blocker = i; break; }
+  }
+  if (blocker === -1 || blocker <= latestChangesRound(thread, trusted)) return false;
+  return !thread.slice(blocker + 1).some(c => !own(c));
+}
+
 /** Whether the agent has already refused the seat since the latest request
  * for another round: its comment after the last ```changes one the board
  * credits — the coordinator's own (trust.mjs) — that begins with the

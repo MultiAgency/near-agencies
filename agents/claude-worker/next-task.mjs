@@ -6,8 +6,9 @@
 // where this folder's dependencies (the Claude SDK) are not installed.
 import {
   CODE_ACCESS_REFUSAL_FIRST_LINE, CODE_IMAGE_REFUSAL_FIRST_LINE,
-  CODE_REPO_REFUSAL_FIRST_LINE, CODE_REFUSAL,
-  codeAccessRefusal, codeImageRefusal, codeRepoRefusal, canShip, isCodeSeat,
+  CODE_REPO_REFUSAL_FIRST_LINE, CODE_REFUSAL, DELIVERY_BLOCKED_FIRST_LINE,
+  accessFor, blockerStands, codeAccessRefusal, codeImageRefusal, codeRepoRefusal,
+  canShip, deliveryBlockedPush, deliveryBlockedRead, isCodeSeat,
   mayClaim, refusalPosted, termsOf,
 } from "./code-mode.mjs";
 import { canBuild, codeRepo } from "./repos.mjs";
@@ -56,8 +57,14 @@ async function readySince(github, issue) {
  * canBuild: rust covers node, node covers only node — whose repository the
  * run's CODE_ACCESS cannot ship — canShip: fork mode ships any registry
  * repository, branch mode only near-agencies — or whose terms name a
- * repository outside the registry is never taken. */
-export async function nextTask({ github, comment, login, skills, codeMode, bot, claimAfterMs = 0, dryRun = false, toolchain = "node" }) {
+ * repository outside the registry is never taken. `probe` is the delivery
+ * preflight (preflight.mjs), the last gate a code seat meets before the
+ * model run: it checks with the run's own credentials that the pull
+ * request can land, and a failed check costs the seat one blocker comment
+ * — never a model run — and the run moves on; while the agent's own
+ * blocker is the seat's latest word (blockerStands), later runs skip it
+ * without probing again. */
+export async function nextTask({ github, comment, login, skills, codeMode, bot, claimAfterMs = 0, dryRun = false, toolchain = "node", probe = null }) {
   const trusted = trustCheck({ bot });
   const seats = (await github("/issues?state=open&per_page=100")).filter(isSeat);
   for (const seat of seats.filter(s => s.assignees.some(a => same(a.login, login)))) {
@@ -101,6 +108,36 @@ export async function nextTask({ github, comment, login, skills, codeMode, bot, 
         }
         continue;
       }
+      // The model run is the spend this selection guards (#115): before it,
+      // check with this run's own credentials that the delivery can land at
+      // all — the probe runs the delivery's own git path against the real
+      // repository (#130). A definitive failure costs the seat one blocker
+      // comment and this run nothing else; an inconclusive one (a network
+      // blip) costs only the skip itself, and the next run probes again.
+      // While the agent's own blocker is the seat's latest word, the seat
+      // is skipped without probing and without redoing the work — until
+      // the round changes or someone else comments (blockerStands).
+      if (probe) {
+        if (blockerStands(thread, login, trusted)) continue;
+        if (!dryRun) {
+          const access = accessFor(repo, codeMode);
+          const found = await probe({ access, repo, login });
+          if (!found.ok) {
+            if (found.status && !(await refusalPosted(thread, login, trusted, DELIVERY_BLOCKED_FIRST_LINE))) {
+              const subject = found.step === "push" && access === "fork"
+                ? `${login}/${repo.name.split("/")[1]}`
+                : repo.name;
+              const body = found.step === "push"
+                ? deliveryBlockedPush(subject, found.detail)
+                : deliveryBlockedRead(subject, found.detail);
+              await comment(seat.number, body);
+            } else if (!found.status) {
+              console.log(`worker: leaving #${seat.number} for now: the delivery check is unsure (${found.detail})`);
+            }
+            continue;
+          }
+        }
+      }
     }
     return { action: "deliver", seat, revision: since !== -1, round: since === -1 ? null : thread[since], reviewed: reviewedBy(seats, seat.number) };
   }
@@ -130,7 +167,22 @@ export async function nextTask({ github, comment, login, skills, codeMode, bot, 
       continue;
     }
     const thread = await github(`/issues/${seat.number}/comments?per_page=100`);
-    if (!thread.some(c => same(c.user.login, login) && c.body.trim().startsWith("/claim"))) return { action: "claim", seat };
+    if (thread.some(c => same(c.user.login, login) && c.body.trim().startsWith("/claim"))) continue;
+    // The claim is cheap, but it is the delivery's first step: claiming a
+    // seat whose pull request these credentials could never ship takes the
+    // coordinator's assignment for a run that could only refuse it (#115).
+    // The same read-only probe decides here — silently, for the seat is not
+    // this agent's to explain itself on while unclaimed, and the next run
+    // probes again, so a token fixed later is claimed then.
+    if (probe && !dryRun && isCodeSeat(seat)) {
+      const repo = seatRepo(seat);
+      const found = await probe({ access: accessFor(repo, codeMode), repo, login });
+      if (!found.ok) {
+        console.log(`worker: leaving #${seat.number} alone: the delivery check ${found.status ? `answers ${found.status}` : "is unsure"} (${found.detail})`);
+        continue;
+      }
+    }
+    return { action: "claim", seat };
   }
   return null;
 }

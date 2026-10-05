@@ -4,12 +4,12 @@ import { describe, test } from "node:test";
 // The worker folder's own logic, imported from the repository root, where its
 // node_modules are not installed — hence these modules import nothing.
 import {
-  accessFor, allowedTools, canShip, codeAccess, codeAccessRefusal,
+  accessFor, allowedTools, blockerStands, canShip, codeAccess, codeAccessRefusal,
   codeImageRefusal, codeRepoRefusal, deliversCodeSeat, isCodeSeat, mayClaim,
-  ship, termsOf,
+  deliveryBlockedPush, deliveryBlockedRead, ship, termsOf,
   CODE_ACCESS_REFUSAL_FIRST_LINE, CODE_IMAGE_REFUSAL_FIRST_LINE,
-  CODE_REPO_REFUSAL_FIRST_LINE, CODE_REFUSAL,
-  GIT_CREDENTIAL_HELPER,
+  CODE_REPO_REFUSAL_FIRST_LINE, CODE_REFUSAL, CODE_REFUSAL_FIRST_LINE,
+  DELIVERY_BLOCKED_FIRST_LINE, GIT_CREDENTIAL_HELPER,
 } from "../agents/claude-worker/code-mode.mjs";
 import { codeRepo } from "../agents/claude-worker/repos.mjs";
 import { nextTask } from "../agents/claude-worker/next-task.mjs";
@@ -708,5 +708,261 @@ describe("the trust check", () => {
 
   test("a missing bot login is refused up front, naming the setting", () => {
     assert.throws(() => trustCheck({}), /\(BOARD_BOT\) is required/);
+  });
+});
+
+// The delivery preflight (#115, #130): before a code task reaches Claude,
+// the run checks with its own credentials that the pull request can land at
+// all, and remembers a failed delivery for the current revision round —
+// the wasted runs of #115 each ended at a push the token was never allowed
+// to make, and nothing remembered the failure between runs.
+describe("the delivery blocker", () => {
+  const denied = "fatal: unable to access 'https://github.com/MultiAgency/near-agencies.git/': The requested URL returned error: 403";
+
+  test("its fixed first line is its own — none of the refusals counts for it", () => {
+    assert.equal(new Set([
+      CODE_REFUSAL_FIRST_LINE, CODE_REPO_REFUSAL_FIRST_LINE, CODE_IMAGE_REFUSAL_FIRST_LINE,
+      CODE_ACCESS_REFUSAL_FIRST_LINE, DELIVERY_BLOCKED_FIRST_LINE,
+    ]).size, 5);
+    assert.equal(deliveryBlockedRead("MultiAgency/near-agencies", denied).startsWith(DELIVERY_BLOCKED_FIRST_LINE), true);
+    assert.equal(deliveryBlockedPush("MultiAgency/near-agencies", denied).startsWith(DELIVERY_BLOCKED_FIRST_LINE), true);
+  });
+
+  test("the body names the repository, git's own answer, and how the check re-arms", () => {
+    const read = deliveryBlockedRead("MultiAgency/near-agencies", denied);
+    const push = deliveryBlockedPush("MultiAgency/near-agencies", denied);
+    for (const body of [read, push]) {
+      assert.match(body, /MultiAgency\/near-agencies/);
+      assert.match(body, new RegExp(denied.replace(/[/\\^$*+?.()|[\]{}]/g, "\\$&")));
+      assert.match(body, /runs again on a later run/);
+    }
+    assert.notEqual(read, push);
+    assert.match(push, /git push/, "the push blocker says where the wasted runs ended");
+    const fork = deliveryBlockedPush("near-builder/near-agencies", denied);
+    assert.match(fork, /near-builder\/near-agencies/, "a fork-mode blocker names the fork");
+  });
+});
+
+describe("blockerStands: the failed delivery is remembered for the round", () => {
+  const blocked = c(login, DELIVERY_BLOCKED_FIRST_LINE + "\n\nThe preflight ran before any work.");
+  const changes = user => c(user, "Once more:\n```changes\naddress the review\n```");
+  const trustedBot = trustCheck({ bot });
+
+  test("no blocker of the agent's own, nothing standing", () => {
+    assert.equal(blockerStands([], login, trustedBot), false);
+    assert.equal(blockerStands([c(login, CODE_REFUSAL)], login, trustedBot), false,
+      "a refusal's first line is not the blocker's");
+  });
+
+  test("the agent's own blocker since the round's start stands", () => {
+    assert.equal(blockerStands([blocked], login, trustedBot), true);
+    assert.equal(blockerStands([changes(bot), blocked], login, trustedBot), true);
+  });
+
+  test("the agent's own later comments do not re-arm it", () => {
+    assert.equal(blockerStands([blocked, c(login, "still here")], login, trustedBot), true);
+  });
+
+  test("anyone else's comment after it re-arms the check: an owner saying the token is fixed", () => {
+    assert.equal(blockerStands([blocked, c("jlwaugh", "Token fixed, try again.")], login, trustedBot), false);
+    assert.equal(blockerStands([blocked, c("stranger", "bump")], login, trustedBot), false,
+      "no role lookup decides this: whoever comments, the cost of the needless re-check is two read-only git calls");
+  });
+
+  test("a new round makes it an older round's blocker", () => {
+    assert.equal(blockerStands([blocked, changes(bot)], login, trustedBot), false);
+  });
+
+  test("a blocker before the credited round does not stand", () => {
+    assert.equal(blockerStands([blocked, changes(bot), changes(bot)], login, trustedBot), false);
+  });
+
+  test("someone else posting the blocker's first line counts for nothing", () => {
+    assert.equal(blockerStands([c("other-agent", DELIVERY_BLOCKED_FIRST_LINE)], login, trustedBot), false,
+      "the blocker counts only from its rightful author");
+  });
+
+  test("logins compare case-insensitively", () => {
+    assert.equal(blockerStands([c("Near-Builder", DELIVERY_BLOCKED_FIRST_LINE)], login, trustedBot), true,
+      "GitHub logins are not case-sensitive: the comment is the agent's own");
+  });
+});
+
+// The probe injected into the selection: it records every seat it was asked
+// about and answers from `result` — a fixed answer, or one computed from
+// the call.
+const probeOf = result => {
+  const calls = [];
+  const probe = async input => {
+    calls.push(input);
+    return typeof result === "function" ? result(input) : result;
+  };
+  probe.calls = calls;
+  return probe;
+};
+
+// The gate in the selection itself: the probe decides before query() does.
+describe("the delivery preflight gate", () => {
+  const codeSkills = { skills: ["code"], codeMode: "branch" };
+  const changes = user => c(user, "Once more:\n```changes\naddress the review\n```");
+  const DENIED = { ok: false, step: "push", status: "403", detail: "fatal: unable to access 'https://github.com/MultiAgency/near-agencies.git/': The requested URL returned error: 403" };
+  const UNSURE = { ok: false, step: "read", status: null, detail: "fatal: Could not resolve host: github.com" };
+
+  test("an assigned code seat whose push the token cannot make costs one blocker comment and no model run", async () => {
+    const probe = probeOf(DENIED);
+    const { task, posted } = harness(
+      [repoSeat(40, ["skill:code"], undefined, [login])],
+      { 40: [] },
+      {},
+      { ...codeSkills, probe },
+    );
+    assert.deepEqual(await task(), null, "the run skips the seat it cannot deliver");
+    assert.equal(posted.length, 1);
+    assert.equal(posted[0].number, 40);
+    assert.equal(posted[0].body.startsWith(DELIVERY_BLOCKED_FIRST_LINE), true);
+    assert.match(posted[0].body, /MultiAgency\/near-agencies/);
+    assert.match(posted[0].body, /returned error: 403/);
+    assert.equal(probe.calls.length, 1);
+    assert.equal(probe.calls[0].access, "branch", "branch mode probes the repository itself");
+  });
+
+  test("the next run finds its own blocker and skips the seat without probing again", async () => {
+    const probe = probeOf(DENIED);
+    const { task, posted, threads } = harness(
+      [repoSeat(40, ["skill:code"], undefined, [login])],
+      { 40: [] },
+      {},
+      { ...codeSkills, probe },
+    );
+    await task();
+    threads[40].push(c(login, posted[0].body));   // the comment the run left
+    assert.deepEqual(await task(), null);
+    assert.equal(posted.length, 1, "the blocker is not posted twice in one round");
+    assert.equal(probe.calls.length, 1, "no probe, no redoing of the work");
+  });
+
+  test("an owner's comment re-arms the probe; while it still fails, nothing is reposted", async () => {
+    const probe = probeOf(DENIED);
+    const { task, posted, threads } = harness(
+      [repoSeat(40, ["skill:code"], undefined, [login])],
+      { 40: [] },
+      {},
+      { ...codeSkills, probe },
+    );
+    await task();
+    threads[40].push(c(login, posted[0].body), c("jlwaugh", "Token fixed, try again."));
+    assert.deepEqual(await task(), null);
+    assert.equal(probe.calls.length, 2, "the check runs again");
+    assert.equal(posted.length, 1, "but the blocker stands: one per round");
+  });
+
+  test("a coordinator's round re-arms it too, and a probe that now passes delivers", async () => {
+    const probe = probeOf(input => (probe.calls.length > 1 ? { ok: true } : DENIED));
+    const { task, posted, threads } = harness(
+      [repoSeat(40, ["skill:code"], undefined, [login])],
+      { 40: [] },
+      {},
+      { ...codeSkills, probe },
+    );
+    await task();
+    threads[40].push(c(login, posted[0].body), changes(bot));
+    const picked = await task();
+    assert.equal(picked.action, "deliver");
+    assert.equal(picked.seat.number, 40);
+    assert.equal(probe.calls.length, 2);
+  });
+
+  test("a probe that passes delivers as before, and posts nothing", async () => {
+    const probe = probeOf({ ok: true });
+    const { task, posted } = harness(
+      [repoSeat(41, ["skill:code"], undefined, [login])],
+      { 41: [] },
+      {},
+      { ...codeSkills, probe },
+    );
+    const picked = await task();
+    assert.deepEqual(posted, []);
+    assert.equal(picked.action, "deliver");
+    assert.equal(picked.seat.number, 41);
+  });
+
+  test("an inconclusive probe skips the seat and posts nothing", async () => {
+    const probe = probeOf(UNSURE);
+    const { task, posted } = harness(
+      [repoSeat(42, ["skill:code"], undefined, [login])],
+      { 42: [] },
+      {},
+      { ...codeSkills, probe },
+    );
+    assert.deepEqual(await task(), null);
+    assert.deepEqual(posted, [], "a network blip is not a blocker worth a comment");
+    assert.equal(probe.calls.length, 1, "the next run simply probes again");
+  });
+
+  test("a dry run probes nothing: it names the seat as before", async () => {
+    const probe = probeOf(DENIED);
+    const { task, posted } = harness(
+      [repoSeat(43, ["skill:code"], undefined, [login])],
+      { 43: [] },
+      {},
+      { ...codeSkills, probe, dryRun: true },
+    );
+    const picked = await task();
+    assert.deepEqual(posted, []);
+    assert.equal(picked.action, "deliver");
+    assert.equal(probe.calls.length, 0, "--dry-run only names the task");
+  });
+
+  test("a seat whose blocker stands is not named by a dry run either", async () => {
+    const probe = probeOf(DENIED);
+    const { task } = harness(
+      [repoSeat(43, ["skill:code"], undefined, [login])],
+      { 43: [c(login, DELIVERY_BLOCKED_FIRST_LINE)] },
+      {},
+      { ...codeSkills, probe, dryRun: true },
+    );
+    assert.deepEqual(await task(), null);
+    assert.equal(probe.calls.length, 0);
+  });
+
+  test("the claim is gated too: a seat these credentials cannot ship is left unclaimed, silently", async () => {
+    const probe = probeOf(DENIED);
+    const { task, posted } = harness(
+      [repoSeat(44, ["ready", "agent-eligible", "skill:code"])],
+      { 44: [] },
+      {},
+      { ...codeSkills, probe },
+    );
+    assert.deepEqual(await task(), null, "claiming it would only take the assignment to refuse it");
+    assert.deepEqual(posted, [], "the seat is not this agent's to comment on while unclaimed");
+    assert.equal(probe.calls.length, 1);
+  });
+
+  test("a claimable code seat with passing credentials is claimed as before", async () => {
+    const probe = probeOf({ ok: true });
+    const { task, posted } = harness(
+      [repoSeat(45, ["ready", "agent-eligible", "skill:code"])],
+      { 45: [] },
+      {},
+      { ...codeSkills, probe },
+    );
+    const picked = await task();
+    assert.deepEqual(posted, []);
+    assert.equal(picked.action, "claim");
+    assert.equal(picked.seat.number, 45);
+  });
+
+  test("claiming and delivering non-code seats never probes", async () => {
+    const probe = probeOf(DENIED);
+    const { task, posted } = harness(
+      [repoSeat(46, ["skill:writing"], undefined, [login]), repoSeat(47, ["ready", "agent-eligible"])],
+      { 46: [], 47: [] },
+      {},
+      { skills: ["writing"], codeMode: null, probe },
+    );
+    const picked = await task();
+    assert.equal(picked.action, "deliver");
+    assert.equal(picked.seat.number, 46);
+    assert.equal(probe.calls.length, 0, "a writing delivery touches no repository");
   });
 });
