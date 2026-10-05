@@ -204,6 +204,17 @@ describe("the delivery preflight, fork mode", () => {
     assert.equal(found.status, "401");
   });
 
+  test("gh's spent rate limit says HTTP 403 and is not a denied token", async () => {
+    const git = gitRunner({
+      api: "gh: HTTP 403: API rate limit exceeded for 203.0.113.7. (https://api.github.com/search/...)",
+      [`ls-remote https://github.com/${login}/near-agencies.git`]: NO_FORK,
+    });
+    const found = await probeDelivery({ access: "fork", repo: near, login, run: git });
+    assert.equal(found.ok, false);
+    assert.equal(found.status, null, "a spent rate limit must not read as a denied token");
+    assert.match(found.detail, /rate limit/);
+  });
+
   test("a fork that exists but rejects the push fails the push probe", async () => {
     const git = gitRunner({ ...forkPlan, push: DENIED_PUSH });
     const found = await probeDelivery({ access: "fork", repo: near, login, run: git });

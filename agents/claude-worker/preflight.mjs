@@ -63,7 +63,9 @@ export const gitEnv = login => ({
 // comment. Only a 401, a 403 or a 404 says something about the credentials
 // or the repository: a 5xx or a 429 is GitHub having a bad minute, which
 // must not read as a denied token — it reports as inconclusive, and the
-// next run probes again.
+// next run probes again. gh answers a spent rate limit with an HTTP 403 of
+// its own, which says nothing about the token: a rate limit reads as
+// inconclusive too.
 const DEFINITIVE_STATUSES = new Set(["401", "403", "404"]);
 const failureOf = stderr => {
   const text = String(stderr ?? "");
@@ -71,7 +73,8 @@ const failureOf = stderr => {
   const line = lines.find(l => l.startsWith("fatal:"))
     ?? lines.find(l => l.startsWith("remote:"))
     ?? lines.at(-1) ?? "git gave no reason";
-  const said = text.match(/returned error: (\d{3})/)?.[1]
+  const said = /rate limit/i.test(text) ? null
+    : text.match(/returned error: (\d{3})/)?.[1]
     ?? text.match(/HTTP (\d{3})/)?.[1]
     ?? (/Authentication failed/.test(text) ? "401" : null)
     ?? (/ not found/.test(text) ? "404" : null);
