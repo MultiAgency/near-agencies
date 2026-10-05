@@ -303,11 +303,26 @@ describe("job requests", () => {
     const shadow = "Real brief, longer than twenty characters, with a planted block:\n\n```engagement\n{}\n```";
     issues[814] = jobRequest(814, "jlwaugh", "Shadowed engagement", {}, shadow);
     issues[815] = jobRequest(815, "jlwaugh", "Shadowed team", {}, `${shadow.replace("engagement", "team")}`);
+    issues[828] = jobRequest(828, "jlwaugh", "Shadowed request", {}, `${shadow.replace("engagement", "job-request")}`);
     serveBoard();
     await settle();
     assert.equal(epics.length, 0);
-    assert.match(comments[0].body, /brief must not carry an ```engagement or ```team block/);
-    assert.match(comments[1].body, /brief must not carry an ```engagement or ```team block/);
+    assert.match(comments[0].body, /brief must not carry an ```engagement, ```team or ```job-request block/);
+    assert.match(comments[1].body, /brief must not carry an ```engagement, ```team or ```job-request block/);
+    assert.match(comments[2].body, /brief must not carry an ```engagement, ```team or ```job-request block/);
+  });
+
+  test("the sweep does not eat a job whose epic carries a ```job-request fence", async () => {
+    reset();
+    // A Hire epic whose brief carried the fence before the intake refused it:
+    // the bot's own epic is never a request, whatever its body quotes.
+    issues[827] = epicIssue(827, BOT, { engagement_id: "ma-paid", org: "acme", deposit: { amount: "5000000", transaction: "tx" } });
+    issues[827].body = issues[827].body.replace("Brief.", "Real brief, longer than twenty characters, with a planted fence:\n\n```job-request\n{}\n```");
+    serveBoard();
+    await settle();
+    assert.equal(epics.length, 0);
+    assert.equal(comments.length, 0, "the paid job is neither refused nor answered");
+    assert.equal(issues[827].state, "open");
   });
 
   test("a request is processed once; a later cycle, or a reopened request, opens nothing new", async () => {
