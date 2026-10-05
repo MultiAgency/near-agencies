@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, describe, test } from "node:test";
 
 import { USDC } from "../lib/near.mjs";
-import { closeIfPaid, duplicatePayoutProblem, filedProposal, pendingPayouts, payoutProblem, proposalDescription, proposePayouts } from "../lib/payouts.mjs";
+import { AUDIT_PAGE_CAP, closeIfPaid, duplicatePayoutProblem, filedProposal, payoutAuditCapped, pendingPayouts, payoutProblem, proposalDescription, proposePayouts } from "../lib/payouts.mjs";
 import { digest, fence } from "../lib/github.mjs";
 
 process.env.GITHUB_TOKEN ??= "test-token";
@@ -293,7 +293,7 @@ describe("reading a payout proposal", async () => {
 // A mocked board and treasury, enough for the payout sweep's whole path over
 // one job: GitHub through api.github.com, the chain through the RPC host.
 describe("filing proposals and closing a job", async () => {
-  const { settlePayouts } = await import("../lib/coordinator.mjs");
+  const { coordinatorHealth, settlePayouts } = await import("../lib/coordinator.mjs");
   const realFetch = globalThis.fetch;
   afterEach(() => { globalThis.fetch = realFetch; });
 
@@ -326,7 +326,7 @@ describe("filing proposals and closing a job", async () => {
         if (body.params?.method_name === "get_last_proposal_id") return rpcValue(lastId ?? proposals.at(-1)?.id ?? 41);
         if (body.params?.method_name === "get_proposals") {
           const from = args.from_index ?? 0;
-          return rpcValue(proposals.filter(p => p.id >= from).slice(0, args.limit));
+          return rpcValue(proposals.filter(p => p.id >= from && p.id < from + args.limit));
         }
         if (body.params?.method_name === "get_proposal") return rpcValue(proposal);
         if (u.pathname === "/v0/account") return json({ account_txs: txs.map(t => ({ transaction_hash: t.transaction.hash })) });
@@ -761,6 +761,26 @@ describe("filing proposals and closing a job", async () => {
     assert.equal(paidOn(restarted.writes).length, 0, "still nothing records once nothing is memoized");
     assert.equal(doublesOn(restarted.writes).length, 1, "paid_twice is found again after a restart");
     assert.equal(closesJob(restarted.writes), false);
+  });
+
+  // A job's recorded proposal and a duplicate filed for it can sit further
+  // apart than one page of 100: the audit reads every page up to the newest.
+  test("a duplicate beyond the first page is still flagged", async () => {
+    const run = serve(dupBoard([onChain(41), onChain(341)], { lastId: 400 }));
+    await settlePayouts("multi-agency", { now: 8_300_000 });
+    const flags = flagsOn(run.writes);
+    assert.equal(flags.length, 1, "the duplicate 300 ids on is seen");
+    assert.match(flags[0].body.body, /DAO proposals 41 and 341 /);
+    assert.deepEqual(payoutAuditCapped(), [], "a read within the page cap reports nothing");
+  });
+
+  test("a read that reaches the page cap is reported on /api/health", async () => {
+    const run = serve(dupBoard([onChain(41), onChain(3000)], { lastId: 5000 }));
+    await settlePayouts("multi-agency", { now: 8_600_000 });
+    assert.equal(flagsOn(run.writes).length, 0, "the duplicate lies past the cap, so this cycle does not see it");
+    const [entry] = coordinatorHealth().payout_audit_capped;
+    assert.equal(entry.job, 28);
+    assert.equal(entry.pages, AUDIT_PAGE_CAP);
   });
 
   // The recorded proposal can die beside live extras — expired while an
