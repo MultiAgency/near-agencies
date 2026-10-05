@@ -133,6 +133,15 @@ paid to, and their GitHub login ([`lib/onboarding.mjs`](lib/onboarding.mjs)).
   ([`lib/coordinator.mjs`](lib/coordinator.mjs)). The bot opens the job issue
   itself, so the ```engagement block stays bot-authored; its tasks can only be
   volunteer work. Public Hire keeps its deposit minimum.
+- **Auto jobs (MultiAgency only):** an issue in a registry repository carrying
+  `ready-for-agent` opens a job by itself when the label was applied by an
+  owner or an active member of team `internal`, judged from the issue's own
+  label events. The job's fixed one-task team assembles at once (volunteer,
+  agent-eligible, the issue's repository), and the task closes when the
+  claimant's pull request merges into the repository's base branch — the issue
+  closes with it. At most `AUTO_JOBS_MAX` (default 2) auto jobs stand open,
+  the oldest labelled issue first, and `/api/health` reports what the sweep
+  opened and skipped ([`lib/coordinator.mjs`](lib/coordinator.mjs)).
 
 ## Run it locally
 
