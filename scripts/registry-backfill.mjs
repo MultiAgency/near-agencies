@@ -151,11 +151,27 @@ export function commitProofs(rosterFile) {
   } catch {
     // A local-only clone: commit dates still work; URLs would be invented.
   }
+  // The shallow boundary: the commits whose parents a shallow clone cut off.
+  // Such a commit's parentage is unknown here, so it proves nothing — an
+  // entry it merely carries must not take the commit's URL and date as proof
+  // and stamp, and that false stamp would then outrank newer board
+  // admissions in the registry. No shallow file: every unreadable parent
+  // belongs to a root commit.
+  const shallowFile = (() => {
+    try {
+      return readFileSync(gitQuiet(["rev-parse", "--git-path", "shallow"]), "utf8");
+    } catch {
+      return ""; // Not a shallow clone.
+    }
+  })();
+  const cutOff = new Set(shallowFile.split("\n").filter(Boolean));
   const parentOf = sha => {
     try {
       return gitQuiet(["rev-parse", `${sha}~1`]);
     } catch {
-      return EMPTY_TREE; // The root commit: against the empty tree, everything is new.
+      if (!cutOff.has(sha)) return EMPTY_TREE; // The root commit: against the empty tree, everything is new.
+      // Cut off by a shallow clone: unknown parentage, nothing credited.
+      return null;
     }
   };
   const buildersAt = sha => {
@@ -168,10 +184,11 @@ export function commitProofs(rosterFile) {
   };
   const added = new Map(); // login → the first commit whose tree holds the entry
   for (const sha of git(["rev-list", "--reverse", "HEAD", "--", rel]).split("\n").filter(Boolean)) {
-    const before = new Set(buildersAt(parentOf(sha)).map(loginOf));
+    const parent = parentOf(sha);
+    const before = parent === null ? null : new Set(buildersAt(parent).map(loginOf));
     for (const builder of buildersAt(sha)) {
       const login = loginOf(builder);
-      if (login && !before.has(login) && !added.has(login)) added.set(login, sha);
+      if (login && before && !before.has(login) && !added.has(login)) added.set(login, sha);
     }
   }
   return {

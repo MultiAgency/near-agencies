@@ -601,4 +601,61 @@ describe("the registry backfill", () => {
     assert.match(told, /^1\. pat —/m);
     assert.match(told, /dry run: nothing was written/);
   });
+
+  test("a shallow clone's cut history proves nothing: entries its oldest commit merely carries are not credited to it", async () => {
+    const full = mkdtempSync(join(tmpdir(), "backfill-history-"));
+    const gitIn = (...args) => execFileSync("git", args, { cwd: full, encoding: "utf8" });
+    gitIn("init", "-b", "main");
+    gitIn("config", "user.email", "test@example.com");
+    gitIn("config", "user.name", "Test");
+    gitIn("config", "commit.gpgsign", "false");
+    gitIn("remote", "add", "origin", "git@github.com:MultiAgency/near-agencies.git");
+    writeFileSync(join(full, "roster.json"), `${JSON.stringify({ builders: [rosterRecord("dee")] }, null, 2)}\n`);
+    gitIn("add", ".");
+    gitIn("commit", "-m", "dee joins");
+    writeFileSync(join(full, "roster.json"), `${JSON.stringify({ builders: [rosterRecord("dee"), rosterRecord("pat")] }, null, 2)}\n`);
+    gitIn("add", ".");
+    gitIn("commit", "-m", "pat joins");
+
+    // A clone one commit deep cannot read what came before its HEAD: neither
+    // entry can be proven new there, so neither takes the oldest commit's URL
+    // and date as proof and stamp it does not deserve.
+    const shallow = join(mkdtempSync(join(tmpdir(), "backfill-shallow-")), "clone");
+    execFileSync("git", ["clone", "--depth", "1", "--quiet", `file://${full}`, shallow]);
+    execFileSync("git", ["remote", "set-url", "origin", "git@github.com:MultiAgency/near-agencies.git"], { cwd: shallow, encoding: "utf8" });
+    const store = join(shallow, "roster-admitted.testnet.json");
+    writeFileSync(store, JSON.stringify({ builders: [] }));
+    const env = { REGISTRY_URL: "https://registry.test/api/rpc/builders", ROSTER_FILE: join(shallow, "roster.json"), ADMITTED_FILE: store };
+    const dry = await backfillRun(["--dry-run"], env, shallow);
+    assert.match(dry, /0 members to write/);
+    assert.match(dry, /dee: no join issue on the record and no commit that added it to roster\.json/);
+    assert.match(dry, /pat: no join issue on the record and no commit that added it to roster\.json/);
+    assert.doesNotMatch(dry, /Using the commit fallback/);
+    assert.doesNotMatch(dry, /near-agencies\/commit\//);
+
+    // Two commits deep, pat's adding commit has its parent and is credited;
+    // dee's sits on the shallow boundary itself, where parentage is unknown,
+    // so it is refused rather than credited to a commit that cannot vouch
+    // for it.
+    const shallow2 = join(mkdtempSync(join(tmpdir(), "backfill-shallow2-")), "clone");
+    execFileSync("git", ["clone", "--depth", "2", "--quiet", `file://${full}`, shallow2]);
+    execFileSync("git", ["remote", "set-url", "origin", "git@github.com:MultiAgency/near-agencies.git"], { cwd: shallow2, encoding: "utf8" });
+    const store2 = join(shallow2, "roster-admitted.testnet.json");
+    writeFileSync(store2, JSON.stringify({ builders: [] }));
+    const deep = await backfillRun(["--dry-run"], { ...env, ROSTER_FILE: join(shallow2, "roster.json"), ADMITTED_FILE: store2 }, shallow2);
+    assert.match(deep, /1 member to write/);
+    assert.match(deep, /^1\. pat —/m);
+    assert.match(deep, /pat: proof from the commit that added the roster entry/);
+    assert.match(deep, /dee: no join issue on the record and no commit that added it to roster\.json/);
+
+    // The same history read whole proves both entries: the fallback credits
+    // each to the commit that added it.
+    const storeWhole = join(full, "roster-admitted.testnet.json");
+    writeFileSync(storeWhole, JSON.stringify({ builders: [] }));
+    const whole = await backfillRun(["--dry-run"], { ...env, ROSTER_FILE: join(full, "roster.json"), ADMITTED_FILE: storeWhole }, full);
+    assert.match(whole, /2 members to write/);
+    assert.match(whole, /Using the commit fallback/);
+    assert.match(whole, /dee: proof from the commit that added the roster entry/);
+    assert.match(whole, /pat: proof from the commit that added the roster entry/);
+  });
 });
