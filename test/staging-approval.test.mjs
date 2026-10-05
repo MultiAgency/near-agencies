@@ -7,6 +7,7 @@ import {
   authorAllowed,
   codeownersMatches,
   codeownersRules,
+  openCandidates,
   ownersForPath,
   reviewerCovers,
   stagingApproval,
@@ -70,7 +71,7 @@ describe("stagingApproval", () => {
   });
 
   test("check 4: a test check that has not passed holds", () => {
-    for (const test of ["pending", "failure", null]) {
+    for (const test of ["pending", "failure", null, undefined]) {
       const { outcome, reason } = stagingApproval(passing({ test }));
       assert.equal(outcome, "hold");
       assert.match(reason, /test/);
@@ -116,6 +117,17 @@ describe("stagingApproval", () => {
     assert.match(reason, /0 Important findings/);
   });
 
+  test("a pull request is judged on both paths of a rename", () => {
+    // A rename lands as two changed paths: the old one leaves its owner's
+    // protection and the new one enters the allowlist. Moving a money or
+    // permission file into an allowlisted directory must hold.
+    const moved = passing({ paths: ["docs/roster.json", "roster.json"] });
+    const { outcome, reason } = stagingApproval(moved);
+    assert.equal(outcome, "hold");
+    assert.match(reason, /roster\.json/);
+    assert.equal(stagingApproval(passing({ paths: ["docs/new.md", "docs/old.md"] })).outcome, "approve");
+  });
+
   test("an author in internal-agents passes like one in internal", () => {
     const agent = passing({ author: "agency-builder", internal: ["jlwaugh"], internalAgents: ["agency-builder"] });
     assert.equal(stagingApproval(agent).outcome, "approve");
@@ -140,6 +152,20 @@ describe("authorAllowed", () => {
     assert.equal(authorAllowed({ author: "stranger" }), false);
     assert.equal(authorAllowed({ author: "stranger", internal: null }), false);
     assert.equal(authorAllowed({ author: "stranger", internalAgents: null }), false);
+  });
+});
+
+describe("openCandidates", () => {
+  test("the event's pull requests and the commit's, deduplicated", () => {
+    assert.deepEqual(
+      openCandidates([{ number: 12 }, { number: 7 }], [{ number: 7, state: "open" }, { number: 9 }]),
+      [12, 7, 9],
+    );
+  });
+
+  test("entries without a number count for nothing", () => {
+    assert.deepEqual(openCandidates([{}, null], [undefined]), []);
+    assert.deepEqual(openCandidates(), []);
   });
 });
 

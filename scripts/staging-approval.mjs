@@ -12,11 +12,13 @@
 // The workflow starts from `workflow_run` after `ci` and `ai-review` finish,
 // and checks out the base branch: it never checks out or runs the pull
 // request's code, and the verdict comes from the ai-review run's own
-// artifact, never from a comment, which a pull request can fake. The
-// decision lives in lib/staging-approval.mjs, pure. A check that fails is a
-// hold, not an error: the job log says which one, nothing is approved, and
-// no "changes requested" is ever posted. Only a read that breaks — no pull
-// request answerable, a page that will not end — exits non-zero.
+// artifact, named for the pull request it reviewed, never from a comment,
+// which a pull request can fake. Each pull request is judged on its own
+// current head SHA, whatever run started this one. The decision lives in
+// lib/staging-approval.mjs, pure. A check that fails is a hold, not an
+// error: the job log says which one, nothing is approved, and no "changes
+// requested" is ever posted. Only a read that breaks — no pull request
+// answerable, a page that will not end — exits non-zero.
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -26,6 +28,7 @@ import { github, orgApi } from "../lib/github.mjs";
 import {
   REVIEWER,
   codeownersRules,
+  openCandidates,
   stagingApproval,
   testVerdict,
   verdictFrom,
@@ -33,6 +36,7 @@ import {
 
 const FILE_PAGES = 50;
 const CHECK_PAGES = 10;
+const REVIEW_PAGES = 10;
 const RECENT_RUNS = 30;
 const VERDICT_ARTIFACT = "ai-review-verdict";
 const VERDICT_FILE = "verdict.json";
@@ -48,17 +52,22 @@ try {
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH ?? "", "utf8"));
   const sha = event.workflow_run?.head_sha;
   if (!sha) throw new Error("the event carries no workflow run with a head SHA");
-  const numbers = (await github("GET", `/commits/${sha}/pulls?per_page=100`))
-    .filter(pull => pull.state === "open")
-    .map(pull => pull.number);
+  // The triggering run's SHA is the pull request's head only for some
+  // events: a pull_request_target run carries the base branch's head
+  // instead. So the candidates come from the event's own association and
+  // GitHub's commit association together, and each is judged on the head
+  // SHA it answers with now, never on this run's.
+  const commitPulls = await github("GET", `/commits/${sha}/pulls?per_page=100`);
+  const numbers = openCandidates(event.workflow_run.pull_requests, commitPulls);
   if (numbers.length === 0) {
-    console.log(`staging-approval: no open pull request carries ${sha}`);
+    console.log(`staging-approval: no pull request is associated with ${sha}`);
     process.exit(0);
   }
   let failed = false;
   for (const number of numbers) {
     try {
-      await decide(number, sha);
+      const pr = await github("GET", `/pulls/${number}`);
+      if (pr.state === "open") await decide(pr);
     } catch (error) {
       console.error(`staging-approval: pull request #${number}: ${error.message}`);
       failed = true;
@@ -71,10 +80,13 @@ try {
 }
 
 // One pull request, all six checks, an approval only when all hold. The
-// heavy reads run together; the artifact read stays last in the loop so a
-// long scan never sits inside the per-pull-request fan-out.
-async function decide(number, sha) {
-  const pr = await github("GET", `/pulls/${number}`);
+// heavy reads run together; the artifact read stays last so a long scan
+// never sits inside the per-pull-request fan-out. The head SHA is this
+// pull request's own, as it answers right now — a verdict, a test check or
+// an approval pinned to any other SHA decides nothing here.
+async function decide(pr) {
+  const number = pr.number;
+  const sha = pr.head.sha;
   const repo = String(process.env.SANDBOX_REPO ?? "").toLowerCase();
   const org = repo.split("/")[0];
   const [paths, internal, internalAgents, codeowners, test] = await Promise.all([
@@ -90,7 +102,7 @@ async function decide(number, sha) {
   // head.repo is GitHub's own word for where the branch lives; a null one
   // (a deleted fork) reads as a fork, which fails the same check.
   const fork = pr.head?.repo?.full_name?.toLowerCase() !== repo;
-  const verdict = await verdictFor(sha);
+  const verdict = await verdictFor(sha, number);
   const { outcome, reason } = stagingApproval({
     base: pr.base.ref,
     fork,
@@ -129,12 +141,14 @@ async function decide(number, sha) {
   console.log(`staging-approval: approved #${number} as @${REVIEWER} at ${sha}`);
 }
 
-// The pull request's changed files, base against head, every page.
+// The pull request's changed files, base against head, every page. A rename
+// lists both its paths: the old one leaves its owner's protection and the
+// new one enters the allowlist, so both must be covered.
 async function changedFiles(number) {
   const found = [];
   for (let page = 1; page <= FILE_PAGES; page++) {
     const batch = await github("GET", `/pulls/${number}/files?per_page=100&page=${page}`);
-    found.push(...batch.map(file => file.filename).filter(Boolean));
+    found.push(...batch.flatMap(file => [file.filename, file.previous_filename]).filter(Boolean));
     if (batch.length < 100) return found;
   }
   throw new Error(`more than ${FILE_PAGES * 100} changed files on pull request #${number}`);
@@ -158,6 +172,9 @@ async function readTeam(org, slug, tries = 2) {
       throw new Error("more than 1000 members");
     } catch (error) {
       if (String(error.message).includes(": 404 ")) {
+        // internal-agents does not exist yet: nobody is in it. internal
+        // missing is a read that failed — fail closed like any other.
+        if (slug === INTERNAL_TEAM) return null;
         console.error(`team ${slug} does not exist, so nobody is in it`);
         return [];
       }
@@ -195,19 +212,23 @@ async function latestTest(sha) {
 }
 
 // The verdict for this head SHA, from the ai-review run's own artifact —
-// never from a comment. Runs come newest first; the first run carrying an
-// unexpired verdict artifact decides, and a verdict for an older SHA holds
-// (a newer review is still running or never finished). Downloaded with
-// `gh run download`, which unzips the artifact GitHub stores.
-async function verdictFor(sha) {
+// never from a comment. The artifact is named for the pull request it
+// reviewed (ai-review-verdict-<number>), so one pull request's verdict can
+// never decide another's, and whichever of two concurrent reviews finished
+// last holds only its own. Runs come newest first; the first run carrying
+// this pull request's unexpired verdict decides, and a verdict for an older
+// SHA holds (a newer review is still running or never finished). Downloaded
+// with `gh run download`, which unzips the artifact GitHub stores.
+async function verdictFor(sha, number) {
+  const name = `${VERDICT_ARTIFACT}-${number}`;
   const runs = await github("GET", `/actions/workflows/${AI_REVIEW_WORKFLOW}/runs?event=pull_request_target&per_page=${RECENT_RUNS}`);
   for (const run of (runs.workflow_runs ?? []).filter(run => run.conclusion === "success")) {
     const listed = await github("GET", `/actions/runs/${run.id}/artifacts?per_page=100`);
-    const artifact = (listed.artifacts ?? []).find(a => a.name === VERDICT_ARTIFACT && !a.expired);
+    const artifact = (listed.artifacts ?? []).find(a => a.name === name && !a.expired);
     if (!artifact) continue;
     const dir = mkdtempSync(join(tmpdir(), "staging-approval-"));
     try {
-      execFileSync("gh", ["run", "download", String(run.id), "--name", VERDICT_ARTIFACT, "--repo", process.env.SANDBOX_REPO, "--dir", dir], {
+      execFileSync("gh", ["run", "download", String(run.id), "--name", name, "--repo", process.env.SANDBOX_REPO, "--dir", dir], {
         stdio: "ignore",
         env: { ...process.env, GH_TOKEN: process.env.GITHUB_TOKEN },
       });
@@ -225,7 +246,7 @@ async function verdictFor(sha) {
       rmSync(dir, { recursive: true, force: true });
     }
   }
-  console.log("staging-approval: no ai-review run left a verdict artifact");
+  console.log(`staging-approval: no ai-review run left a verdict artifact for #${number}`);
   return null;
 }
 
@@ -233,8 +254,12 @@ async function verdictFor(sha) {
 // workflow fires once per completed run, so the second of two firings for
 // one head sees the first's approval and leaves it.
 async function alreadyApproved(number, sha) {
-  const reviews = await github("GET", `/pulls/${number}/reviews?per_page=100`);
-  return reviews.some(review => review.user?.login?.toLowerCase() === REVIEWER && review.state === "APPROVED" && review.commit_id === sha);
+  for (let page = 1; page <= REVIEW_PAGES; page++) {
+    const batch = await github("GET", `/pulls/${number}/reviews?per_page=100&page=${page}`);
+    if (batch.some(review => review.user?.login?.toLowerCase() === REVIEWER && review.state === "APPROVED" && review.commit_id === sha)) return true;
+    if (batch.length < 100) return false;
+  }
+  return false;
 }
 
 const describe = members => (members === null ? "unreadable" : `${members.length} member${members.length === 1 ? "" : "s"}`);
