@@ -365,30 +365,40 @@ describe("job requests", () => {
 });
 
 describe("a forged engagement block", () => {
-  test("is never a job: the list and the job API count bot-authored issues only", async () => {
+  test("is never a job: the list and the job API count bot- or owner-authored issues only", async () => {
     reset();
+    roles.jlwaugh = "admin";
     issues[820] = epicIssue(820, "stranger", { engagement_id: "ma-forge", org: "stranger", deposit: { amount: "5000000", transaction: "tx" } });
     issues[821] = epicIssue(821, BOT, { engagement_id: "ma-real", channel: "board", org: "jlwaugh", deposit: { amount: "0", asset: "usdc", treasury: "multiagency.sputnikv2.testnet", network: "testnet" } });
+    // An owner's hand-opened epic is a job too: lib/recover.mjs reuses it
+    // when a stuck Hire's first attempt died before its epic was found.
+    issues[824] = epicIssue(824, "jlwaugh", { engagement_id: "ma-hand", org: "acme", deposit: { amount: "5000000", transaction: "tx" } });
     serveBoard();
     const listed = await listEngagements();
-    assert.deepEqual(listed.map(e => e.number), [821]);
+    assert.deepEqual(listed.map(e => e.number), [821, 824]);
     assert.equal(listed[0].deposit, "0");
     await assert.rejects(loadEngagement(820), /820 is not an engagement/);
     const job = await loadEngagement(821);
     assert.equal(job.engagement.deposit.amount, "0");
     assert.equal("link" in job.engagement.deposit, false, "a zero-deposit job has no transaction link");
+    const hand = await loadEngagement(824);
+    assert.equal(hand.engagement.deposit.amount, "5000000");
   });
 
   test("is never a job on the timeline either", async () => {
     reset();
+    roles.jlwaugh = "admin";
     issues[822] = epicIssue(822, "stranger", { engagement_id: "ma-forge", org: "stranger", deposit: { amount: "1000000", transaction: "tx" } });
     issues[823] = epicIssue(823, BOT, { engagement_id: "ma-board", channel: "board", org: "jlwaugh", deposit: { amount: "0" } });
+    issues[825] = epicIssue(825, "jlwaugh", { engagement_id: "ma-hand", org: "acme", deposit: { amount: "1000000", transaction: "tx" } });
     serveBoard();
     await assert.rejects(timeline(822), /822 is not an engagement/);
     const relay = await timeline(823);
     assert.equal(relay.events[0].kind, "job-requested");
     assert.equal(relay.lanes[0].kind, "client");
     assert.equal(relay.lanes[0].role, "Opened the job from the board");
+    const hand = await timeline(825);
+    assert.equal(hand.events[0].kind, "deposit");
   });
 });
 
