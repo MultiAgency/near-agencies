@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, describe, test } from "node:test";
 
 import { USDC } from "../lib/near.mjs";
-import { AUDIT_PAGE_CAP, closeIfPaid, duplicatePayoutProblem, filedProposal, payoutAuditCapped, pendingPayouts, payoutProblem, proposalDescription, proposePayouts } from "../lib/payouts.mjs";
+import { AUDIT_PAGE_CAP, closeIfPaid, duplicatePayoutProblem, filedProposal, payoutAuditCapped, pendingPayouts, payoutProblem, proposalDescription, proposePayouts, recordApprovals } from "../lib/payouts.mjs";
 import { digest, fence } from "../lib/github.mjs";
 
 process.env.GITHUB_TOKEN ??= "test-token";
@@ -294,6 +294,7 @@ describe("reading a payout proposal", async () => {
 // one job: GitHub through api.github.com, the chain through the RPC host.
 describe("filing proposals and closing a job", async () => {
   const { coordinatorHealth, settlePayouts } = await import("../lib/coordinator.mjs");
+  const { loadEngagement } = await import("../lib/engagement-state.mjs");
   const realFetch = globalThis.fetch;
   afterEach(() => { globalThis.fetch = realFetch; });
 
@@ -781,6 +782,38 @@ describe("filing proposals and closing a job", async () => {
     const [entry] = coordinatorHealth().payout_audit_capped;
     assert.equal(entry.job, 28);
     assert.equal(entry.pages, AUDIT_PAGE_CAP);
+  });
+
+  // A capped audit cannot vouch for a duplicate past where it stopped — a
+  // payment already recorded must still hold, not complete, over the
+  // incomplete read.
+  test("a capped audit holds duplicatePayoutProblem, pendingPayouts and closeIfPaid", async () => {
+    const run = serve(dupBoard([onChain(41, "Approved"), onChain(3000)], {
+      proposalStatus: "Approved",
+      txs: [vote(41, "votetx")],
+      records: [{ id: 782, user: { login: "multi-agency" }, body: paidRecord(41, "votetx") }],
+      lastId: 5000,
+    }));
+    const job = await loadEngagement(28);
+    const problem = await duplicatePayoutProblem(job);
+    assert.match(problem, /payout audit stopped at its page cap \(1000 proposals/);
+    const { problem: pendingProblem } = await pendingPayouts(job, ["approver.testnet"]);
+    assert.match(pendingProblem, /payout audit stopped at its page cap/);
+    const held = await closeIfPaid(28, () => {});
+    assert.match(held, /payout audit stopped at its page cap/);
+    assert.equal(run.writes.some(w => w.path.endsWith("/issues/28") && w.body.state === "closed"), false,
+      "the job does not close over an incomplete audit");
+  });
+
+  test("recordApprovals records nothing for a job whose audit is capped", async () => {
+    const run = serve(dupBoard([onChain(41, "Approved"), onChain(3000)], {
+      proposalStatus: "Approved",
+      txs: [vote(41, "votetx")],
+      lastId: 5000,
+    }));
+    const job = await loadEngagement(28);
+    await recordApprovals(job, () => {});
+    assert.equal(paidOn(run.writes).length, 0, "a capped audit must not record a payment it cannot fully vouch for");
   });
 
   // The recorded proposal can die beside live extras — expired while an
