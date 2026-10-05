@@ -235,8 +235,10 @@ async function latestTest(sha) {
 // never decide another's, and whichever of two concurrent reviews finished
 // last holds only its own. Runs come newest first; the first run carrying
 // this pull request's unexpired verdict decides, and a verdict for an older
-// SHA holds (a newer review is still running or never finished). Downloaded
-// with `gh run download`, which unzips the artifact GitHub stores.
+// SHA holds (a newer review is still running or never finished). A newest
+// verdict that cannot be read holds too — an older run's verdict never
+// decides, because the newer review may be the one that found something.
+// Downloaded with `gh run download`, which unzips the artifact GitHub stores.
 async function verdictFor(sha, number) {
   const name = `${VERDICT_ARTIFACT}-${number}`;
   const runs = await github("GET", `/actions/workflows/${AI_REVIEW_WORKFLOW}/runs?event=pull_request_target&per_page=${RECENT_RUNS}`);
@@ -258,8 +260,10 @@ async function verdictFor(sha, number) {
       console.log(`staging-approval: ai-review run ${run.id} uploaded a verdict that does not parse`);
       return null;
     } catch (error) {
+      // The newest verdict for this pull request that cannot be read is a
+      // hold, never a fallback to an older run's verdict.
       console.log(`staging-approval: the verdict artifact of ai-review run ${run.id} could not be read: ${error.message}`);
-      continue;
+      return null;
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
