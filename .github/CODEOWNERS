@@ -47,3 +47,7 @@
 /README.md              @MultiAgency/internal @jlwaugh @multai-builder
 /CONTRIBUTING.md        @MultiAgency/internal @jlwaugh @multai-builder
 /public/app.css         @MultiAgency/internal @jlwaugh @multai-builder
+
+# The owner's decisions log is the owner's alone: ai-review reads it as
+# recorded decisions, so the reviewer account must never approve a change to it.
+/docs/decisions.md       @jlwaugh
