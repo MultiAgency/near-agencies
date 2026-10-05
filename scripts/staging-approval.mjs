@@ -69,7 +69,7 @@ try {
   // with now, never on this run's.
   const commitPulls = await github("GET", `/commits/${sha}/pulls?per_page=100`);
   const artifactNumbers = event.workflow_run.name === AI_REVIEW
-    ? verdictArtifactNumbers(await github("GET", `/actions/runs/${event.workflow_run.id}/artifacts?per_page=100`))
+    ? verdictArtifactNumbers((await github("GET", `/actions/runs/${event.workflow_run.id}/artifacts?per_page=100`)).artifacts)
     : [];
   const numbers = openCandidates(event.workflow_run.pull_requests, commitPulls, artifactNumbers);
   if (numbers.length === 0) {

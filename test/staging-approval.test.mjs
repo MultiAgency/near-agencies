@@ -10,7 +10,6 @@ import {
   newestVerdictArtifact,
   openCandidates,
   ownersForPath,
-  reviewerCovers,
   stagingApproval,
   testVerdict,
   uncoveredPath,
@@ -222,6 +221,12 @@ describe("verdictArtifactNumbers", () => {
     assert.deepEqual(verdictArtifactNumbers([]), []);
     assert.deepEqual(verdictArtifactNumbers(null), []);
   });
+
+  test("the API's response object reads as its artifacts, not as a TypeError (#116)", () => {
+    // GET /actions/runs/{id}/artifacts answers {total_count, artifacts},
+    // and the runner hands the response straight over (#116).
+    assert.deepEqual(verdictArtifactNumbers({ total_count: 1, artifacts: [{ name: "ai-review-verdict-108" }] }), [108]);
+  });
 });
 
 describe("newestVerdictArtifact", () => {
@@ -278,6 +283,19 @@ describe("codeownersMatches", () => {
     assert.equal(codeownersMatches("/docs/", "docs.md"), false);
   });
 
+  test("a trailing slash never owns a file that merely shares the directory's name", () => {
+    // "/docs/" owns files in the docs directory; a file named docs is not one of them.
+    assert.equal(codeownersMatches("/docs/", "docs"), false);
+  });
+
+  test("an unanchored trailing slash owns that directory's contents at any depth", () => {
+    // GitHub: "apps/ — @octocat owns any file in an apps directory anywhere in your repository."
+    assert.equal(codeownersMatches("apps/", "apps/ios/app.mjs"), true);
+    assert.equal(codeownersMatches("apps/", "src/apps/ios/app.mjs"), true);
+    assert.equal(codeownersMatches("apps/", "apps"), false);
+    assert.equal(codeownersMatches("apps/", "src/apps.mjs"), false);
+  });
+
   test("a leading slash anchors at the root", () => {
     assert.equal(codeownersMatches("/README.md", "README.md"), true);
     assert.equal(codeownersMatches("/README.md", "docs/README.md"), false);
@@ -287,6 +305,25 @@ describe("codeownersMatches", () => {
     assert.equal(codeownersMatches("README.md", "README.md"), true);
     assert.equal(codeownersMatches("README.md", "docs/README.md"), true);
     assert.equal(codeownersMatches("README.md", "docs/deep/README.md"), true);
+  });
+
+  test("a bare name that names a directory owns its contents too", () => {
+    assert.equal(codeownersMatches("logs", "logs/a.txt"), true);
+    assert.equal(codeownersMatches("logs", "build/logs/a.txt"), true);
+  });
+
+  test("a wildcard last segment owns that one level alone, as GitHub documents docs/*", () => {
+    // GitHub: "The docs/* pattern will match files like docs/getting-started.md
+    // but not further nested files like docs/build-app/troubleshooting.md."
+    assert.equal(codeownersMatches("docs/*", "docs/getting-started.md"), true);
+    assert.equal(codeownersMatches("docs/*", "docs/build-app/troubleshooting.md"), false);
+    assert.equal(codeownersMatches("/docs/*", "docs/getting-started.md"), true);
+    assert.equal(codeownersMatches("/docs/*", "docs/build-app/troubleshooting.md"), false);
+  });
+
+  test("the catch-all owns nested paths through the file's own last segment", () => {
+    assert.equal(codeownersMatches("*", "anything.md"), true);
+    assert.equal(codeownersMatches("*", "deep/nested/file.mjs"), true);
   });
 
   test("a wildcard covers one segment only", () => {
@@ -323,15 +360,6 @@ describe("ownersForPath and uncoveredPath", () => {
   test("uncoveredPath names the first file the reviewer does not own", () => {
     assert.equal(uncoveredPath(rules(), ["docs/setup.md", "lib/pay.mjs"]), "lib/pay.mjs");
     assert.equal(uncoveredPath(rules(), ["docs/setup.md", "lib/brief.mjs"]), null);
-  });
-});
-
-describe("reviewerCovers", () => {
-  test("true only when every changed file's last rule names the reviewer", () => {
-    assert.equal(reviewerCovers(rules(), ["docs/setup.md", "lib/brief.mjs"]), true);
-    assert.equal(reviewerCovers(rules(), ["docs/setup.md", "lib/pay.mjs"]), false);
-    assert.equal(reviewerCovers(rules(), []), false);
-    assert.equal(reviewerCovers(null, ["README.md"]), false);
   });
 });
 
