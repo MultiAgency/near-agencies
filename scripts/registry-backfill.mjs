@@ -24,7 +24,12 @@
 //   the account proof, and that commit's date as admittedAt. No signature is
 //   ever invented: an entry nothing can prove is reported and skipped;
 // - writes carry each record's own admission stamp, so re-running the script
-//   produces the same writes — and the registry's putMember is idempotent.
+//   produces the same writes — and the registry's putMember is idempotent;
+// - a record older than the registry's own admission of that login stays
+//   unwritten — writing it would overwrite the newer account, name and
+//   skills, and every coordinator reading the registry would pay the old
+//   account. The registry must answer a read to know: a real run that
+//   cannot read it writes nothing.
 //
 // The dry run prints every write and checks all of the above before anything
 // is written; it needs no token. Nothing here reads or prints the token.
@@ -310,6 +315,39 @@ export function planWrites(members, { commitFor }) {
   return { writes, problems, fallbacks };
 }
 
+// --- the registry's newer admissions -----------------------------------------
+
+/**
+ * The registry's latest admission per login for this network, read the way
+ * lib/roster.mjs reads it (a read needs no token). Throws when the registry
+ * cannot be read: the caller then writes nothing rather than guessing what a
+ * write would overwrite.
+ */
+async function registryAdmissions(url) {
+  const response = await fetch(`${url.replace(/\/+$/, "")}/listMembers`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ json: { network: network.networkId, status: "admitted" } }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  const reply = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = reply?.json?.message ?? reply?.message ?? response.statusText;
+    throw new Error(`registry listMembers failed: HTTP ${response.status}${message ? ` — ${message}` : ""}`);
+  }
+  const members = reply?.json?.data;
+  if (!Array.isArray(members)) throw new Error("registry listMembers returned no member list");
+  const admittedAt = new Map(); // login → when its latest admission on this network happened
+  for (const member of members) {
+    const stamps = (member?.admissions ?? [])
+      .filter(a => a?.network === network.networkId && a?.status === "admitted" && a?.admittedAt)
+      .map(a => Date.parse(a.admittedAt))
+      .filter(Number.isFinite);
+    if (stamps.length) admittedAt.set(String(member.githubLogin).toLowerCase(), Math.max(...stamps));
+  }
+  return admittedAt;
+}
+
 // --- the run -----------------------------------------------------------------
 
 const row = write => {
@@ -342,8 +380,31 @@ async function main() {
   const plan = planWrites(members, { commitFor: commits.for });
   problems.push(...plan.problems);
 
-  console.log(`\n${plan.writes.length} member${plan.writes.length === 1 ? "" : "s"} to write (people first — the operators agents name first — then agents):\n`);
-  for (const [index, write] of plan.writes.entries()) console.log(`${index + 1}. ${row(write)}\n   body ${JSON.stringify(write.body)}`);
+  // A write of a local record older than the registry's own admission of that
+  // login would overwrite the newer account, name and skills with old ones —
+  // and every coordinator reading the registry would then pay the old
+  // account. Such records stay unwritten. The registry must be readable to
+  // know: a real run that cannot read it writes nothing at all.
+  let admittedThere = new Map();
+  try {
+    admittedThere = await registryAdmissions(REGISTRY_URL);
+  } catch (error) {
+    if (dryRun) {
+      console.error(`note: the registry could not be read to check for newer admissions (${error.message}); these writes are checked against nothing`);
+    } else {
+      console.error(`the registry could not be read to check for newer admissions (${error.message}) — nothing written; run again when it answers`);
+      process.exitCode = 1;
+      return;
+    }
+  }
+  const newerThere = plan.writes.filter(write => admittedThere.get(write.login) > Date.parse(write.admittedAt.value));
+  const writes = plan.writes.filter(write => !newerThere.includes(write));
+  if (newerThere.length) {
+    console.log(`\nnot written — the registry already holds a newer admission:\n  ${newerThere.map(write => `${write.login}: the registry admitted them ${new Date(admittedThere.get(write.login)).toISOString()}; the local record's stamp is ${write.admittedAt.value}`).join("\n  ")}`);
+  }
+
+  console.log(`\n${writes.length} member${writes.length === 1 ? "" : "s"} to write (people first — the operators agents name first — then agents):\n`);
+  for (const [index, write] of writes.entries()) console.log(`${index + 1}. ${row(write)}\n   body ${JSON.stringify(write.body)}`);
   if (plan.fallbacks.length) console.log(`\nUsing the commit fallback (the record itself carries no join issue or stamp):\n  ${plan.fallbacks.join("\n  ")}`);
   if (problems.length) console.log(`\nproblems — not written:\n  ${problems.join("\n  ")}`);
 
@@ -360,7 +421,7 @@ async function main() {
   if (problems.length) console.log("\nwriting the members that check out; the problems above stay unwritten");
 
   let failed = 0;
-  for (const write of plan.writes) {
+  for (const write of writes) {
     const outcome = await putMember(write.member, { proof: write.proof.value, admittedAt: write.admittedAt.value });
     if (outcome === null) {
       console.error(`${write.login}: the write was not attempted — REGISTRY_URL or REGISTRY_TOKEN went missing mid-run`);
@@ -372,7 +433,7 @@ async function main() {
       failed++;
     }
   }
-  console.log(`\n${plan.writes.length - failed}/${plan.writes.length} written${failed ? `, ${failed} failed — fix and run again; the writes are idempotent` : ""}`);
+  console.log(`\n${writes.length - failed}/${writes.length} written${failed ? `, ${failed} failed — fix and run again; the writes are idempotent` : ""}`);
   if (failed || problems.length) process.exitCode = 1;
 }
 

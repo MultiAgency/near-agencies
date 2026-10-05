@@ -484,13 +484,19 @@ describe("the registry backfill", () => {
     assert.match(wrong, /sam\.testnet is a testnet account, not mainnet/, "a store record of the other network is still refused by its suffix");
 
     // The real run writes through a registry this test serves, people first.
+    // The pre-write check reads the registry's members first: none, so every
+    // planned write goes out.
     const writes = [];
     const server = createServer((request, response) => {
       let body = "";
       request.on("data", chunk => { body += chunk; });
       request.on("end", () => {
-        writes.push({ url: request.url, token: request.headers["x-registry-token"], body: JSON.parse(body).json });
         response.setHeader("content-type", "application/json");
+        if (request.url.endsWith("/listMembers")) {
+          response.end(JSON.stringify({ json: { data: [] } }));
+          return;
+        }
+        writes.push({ url: request.url, token: request.headers["x-registry-token"], body: JSON.parse(body).json });
         response.end(JSON.stringify({ json: { data: { overwritten: [] } } }));
       });
     });
@@ -547,8 +553,12 @@ describe("the registry backfill", () => {
       let body = "";
       request.on("data", chunk => { body += chunk; });
       request.on("end", () => {
-        writes.push({ url: request.url, token: request.headers["x-registry-token"], body: JSON.parse(body).json });
         response.setHeader("content-type", "application/json");
+        if (request.url.endsWith("/listMembers")) {
+          response.end(JSON.stringify({ json: { data: [] } }));
+          return;
+        }
+        writes.push({ url: request.url, token: request.headers["x-registry-token"], body: JSON.parse(body).json });
         response.end(JSON.stringify({ json: { data: { overwritten: [] } } }));
       });
     });
@@ -657,5 +667,70 @@ describe("the registry backfill", () => {
     assert.match(whole, /Using the commit fallback/);
     assert.match(whole, /dee: proof from the commit that added the roster entry/);
     assert.match(whole, /pat: proof from the commit that added the roster entry/);
+  });
+
+  test("a local record older than the registry's admission is not written over it", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "backfill-newer-"));
+    const rosterFile = join(repo, "roster.json");
+    writeFileSync(rosterFile, JSON.stringify({ builders: [
+      rosterRecord("old", { proof: "https://github.com/MultiAgency/near-agencies/issues/55", admittedAt: "2026-09-01T00:00:00.000Z" }),
+      rosterRecord("fresh", { proof: "https://github.com/MultiAgency/near-agencies/issues/56", admittedAt: "2026-09-15T00:00:00.000Z" }),
+    ] }));
+    const storeFile = join(repo, "roster-admitted.testnet.json");
+    writeFileSync(storeFile, JSON.stringify({ builders: [] }));
+    const env = { REGISTRY_URL: "", ROSTER_FILE: rosterFile, ADMITTED_FILE: storeFile };
+
+    // A registry this test serves: listMembers answers with the members it
+    // holds, putMember records what would be written.
+    const posts = [];
+    let members = [];
+    let listStatus = 200;
+    const server = createServer((request, response) => {
+      let body = "";
+      request.on("data", chunk => { body += chunk; });
+      request.on("end", () => {
+        response.setHeader("content-type", "application/json");
+        if (request.url.endsWith("/listMembers")) {
+          if (listStatus !== 200) { response.statusCode = listStatus; response.end(JSON.stringify({ json: { code: "X", status: listStatus, message: "registry is down" } })); return; }
+          response.end(JSON.stringify({ json: { data: members } }));
+          return;
+        }
+        posts.push(JSON.parse(body).json);
+        response.end(JSON.stringify({ json: { data: { overwritten: [] } } }));
+      });
+    });
+    await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+    const base = `http://127.0.0.1:${server.address().port}/api/rpc/builders`;
+    const admitted = (login, at) => ({ githubLogin: login, admissions: [{ network: "testnet", status: "admitted", admittedAt: at }] });
+    try {
+      // The registry holds newer admissions of both logins than the local
+      // records carry: neither may be written over them, in either mode.
+      members = [admitted("old", "2026-10-03T00:00:00.000Z"), admitted("fresh", "2026-10-01T00:00:00.000Z")];
+      const dry = await backfillRun(["--dry-run"], { ...env, REGISTRY_URL: base }, repo);
+      assert.match(dry, /not written — the registry already holds a newer admission/);
+      assert.match(dry, /old: the registry admitted them 2026-10-03/);
+      assert.match(dry, /fresh: the registry admitted them 2026-10-01/);
+      assert.match(dry, /0 members to write/);
+      assert.doesNotMatch(dry, /"githubLogin":"old"/);
+      const real = await backfillRun([], { ...env, REGISTRY_URL: base, REGISTRY_TOKEN: TOKEN }, repo);
+      assert.match(real, /0\/0 written/);
+      assert.deepEqual(posts, [], "nothing was written over a newer admission");
+
+      // A local record newer than the registry's is still the one to write.
+      members = [admitted("old", "2026-08-01T00:00:00.000Z")];
+      const out = await backfillRun([], { ...env, REGISTRY_URL: base, REGISTRY_TOKEN: TOKEN }, repo);
+      assert.match(out, /2\/2 written/, "fresh is absent from the registry and old's registry admission is older");
+      assert.deepEqual(posts.map(p => p.githubLogin), ["old", "fresh"]);
+
+      // A registry that cannot be read is not written to blind: the run
+      // stops, having posted nothing.
+      posts.length = 0;
+      listStatus = 500;
+      const stopped = await backfillRun([], { ...env, REGISTRY_URL: base, REGISTRY_TOKEN: TOKEN }, repo);
+      assert.match(stopped, /could not be read to check for newer admissions/);
+      assert.deepEqual(posts, [], "nothing was written without the check");
+    } finally {
+      server.close();
+    }
   });
 });
