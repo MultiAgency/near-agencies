@@ -1,21 +1,38 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 
 import { seat } from "../lib/seats.mjs";
 import { taskList, taskListFor, tasksHandler } from "../lib/tasks.mjs";
 
-// Board issues as GitHub returns them, through the same seat() the board read uses.
+// Board issues as GitHub returns them, through the same seat() the board read
+// uses. The base is a real board issue, captured with
+// `gh api repos/MultiAgency/kanban-sandbox/issues/52 > test/fixtures/board-issue-52.json`,
+// so the stubs carry GitHub's real shape and a renamed field fails here (#130).
+const boardIssue = JSON.parse(readFileSync(new URL("./fixtures/board-issue-52.json", import.meta.url), "utf8"));
 const terms = (job, amount) => "```terms\n" + JSON.stringify({ engagement: job, amount }) + "\n```";
 const issue = (number, labels, { job = 28, amount = "0", assignees = [], title = `Task ${number}` } = {}) => seat({
+  ...boardIssue,
   number,
   title,
   html_url: `https://github.com/MultiAgency/kanban-sandbox/issues/${number}`,
-  state: "open",
-  created_at: "2026-10-01T00:00:00Z",
-  updated_at: "2026-10-01T00:00:00Z",
-  labels: labels.map(name => ({ name })),
+  labels: labels.map(name => ({ ...boardIssue.labels[0], name })),
   assignees: assignees.map(login => ({ login })),
   body: terms(job, amount),
+});
+
+// The defect's repro (#142): a stranger opens an issue on the public board with
+// a ```terms block in its body, under a job number and amount they typed. Only
+// the bot and owners can set a status label (#71), so their issue carries none.
+const strangerIssue = seat({
+  ...boardIssue,
+  number: 99,
+  title: "Paid task: build my site",
+  user: { ...boardIssue.user, login: "stranger" },
+  html_url: "https://github.com/MultiAgency/kanban-sandbox/issues/99",
+  labels: [],
+  assignees: [],
+  body: terms(51, "500000000"),
 });
 
 const seats = [
@@ -24,6 +41,8 @@ const seats = [
   issue(32, ["ready", "skill:code", "agent-eligible"], { assignees: ["multi-agency"] }),
   issue(33, ["ready", "skill:review", "human-only"]),
   issue(34, ["ready", "skill:writing"]),
+  issue(35, ["in-progress"], { job: 29 }),
+  strangerIssue,
 ];
 const byNumber = (list, number) => list.find(t => t.number === number);
 
@@ -50,6 +69,16 @@ describe("the open task list", () => {
     assert.equal(byNumber(list, 33).amount, "0", "a volunteer task keeps its zero amount for the page to name");
   });
 
+  test("a seat with no status label is not a task: a stranger's issue with a terms block lists nowhere", () => {
+    assert.equal(byNumber(taskList(seats), 99), undefined);
+    assert.equal(taskListFor(seats, "stranger").some(t => t.number === 99), false);
+  });
+
+  test("the state comes from the status label, not the assignee", () => {
+    assert.equal(byNumber(taskList(seats), 35).state, "in-progress", "mid-release: labelled in-progress, nobody assigned");
+    assert.equal(byNumber(taskList(seats), 35).assignee, null);
+  });
+
   test("an unfiltered entry carries nothing about any member", () => {
     assert.equal("claimable" in taskList(seats)[0], false);
   });
@@ -72,6 +101,8 @@ describe("the list for a login", () => {
     const list = taskListFor(seats, "multi-agency");
     assert.equal(byNumber(list, 30).claimable, true);
     assert.equal(byNumber(list, 30).matches, true);
+    assert.equal(byNumber(list, 32).claimable, false, "assigned, though still labelled ready: mid-claim");
+    assert.match(byNumber(list, 32).reason, /already claimed/);
     assert.match(byNumber(list, 33).reason, /human-only/);
     assert.match(byNumber(list, 34).reason, /not agent-eligible/);
   });
@@ -101,7 +132,7 @@ describe("GET /api/tasks", () => {
   test("lists every open task with no sign-in", async () => {
     const { body, status } = await call({});
     assert.equal(status, undefined);
-    assert.equal(body.tasks.length, seats.length);
+    assert.deepEqual(body.tasks.map(t => t.number), [30, 31, 32, 33, 34, 35], "the stranger's unlabeled issue lists nowhere");
   });
 
   test("a login adds claimability for a person and an agent", async () => {
