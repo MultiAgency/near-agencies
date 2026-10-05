@@ -31,7 +31,6 @@ import { join } from "node:path";
 import { github, orgApi } from "../lib/github.mjs";
 import { combineRoster, rosterFromApi, rosterRecord } from "../lib/operator-approval.mjs";
 import {
-  BASE,
   REVIEWER,
   codeownersRules,
   newestVerdictArtifact,
@@ -41,6 +40,7 @@ import {
   verdictArtifactName,
   verdictArtifactNumbers,
   verdictFrom,
+  verdictRunProblem,
 } from "../lib/staging-approval.mjs";
 
 const FILE_PAGES = 50;
@@ -53,23 +53,18 @@ const TEST_CHECK = "test";
 // membership in `internal` allows an author outright (#109 — agents are in
 // no team; the roster, read beside it, says who they are).
 const INTERNAL_TEAM = "internal";
-// The workflow whose verdict artifacts name the pull requests they reviewed,
-// and the only file that workflow may live at: an artifact's run counts only
-// when it is that workflow's own.
+// The workflow whose verdict artifacts name the pull requests they reviewed.
 const AI_REVIEW = "ai-review";
-const AI_REVIEW_PATH = ".github/workflows/ai-review.yml";
 
 try {
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH ?? "", "utf8"));
   const sha = event.workflow_run?.head_sha;
   if (!sha) throw new Error("the event carries no workflow run with a head SHA");
-  // The triggering run's SHA is the pull request's head only for some
-  // events: a pull_request_target run carries the base branch's head, and
-  // GitHub matches workflow_run.pull_requests against that SHA, so the run
-  // that finished an AI review names its pull request only through the
-  // verdict artifact it just uploaded. Candidates come from all three
-  // places, and each pull request is judged on the head SHA it answers
-  // with now, never on this run's.
+  // Candidates come from three places: the triggering run's own pull
+  // requests, the pull requests its head commit belongs to, and the verdict
+  // artifacts it uploaded (named for the pull request each reviewed). Each
+  // pull request is judged on the head SHA it answers with now, never on
+  // this run's.
   const commitPulls = await github("GET", `/commits/${sha}/pulls?per_page=100`);
   const artifactNumbers = event.workflow_run.name === AI_REVIEW
     ? verdictArtifactNumbers((await github("GET", `/actions/runs/${event.workflow_run.id}/artifacts?per_page=100`)).artifacts)
@@ -281,23 +276,18 @@ async function latestTest(sha) {
 }
 
 // The verdict for this pull request, from the ai-review run's own artifact
-// — never from a comment, which a pull request can fake. Nothing a
-// workflow run reports names the pull request the run reviewed: a
-// `pull_request_target` run answers with the base branch as its head_branch
-// and head_sha, so the run is found through its verdict artifact, whose
-// name carries the pull request's number (ai-review-verdict-<number>) and
-// whose verdict.json carries the head SHA the review judged — compared
-// against the head SHA the pull request answers with now, in the verdict
-// (stagingApproval). The newest verdict artifact still held decides,
-// whatever run left it: a run still going holds (its verdict is coming),
-// one that failed, was cancelled, or succeeded without a verdict artifact
-// leaves nothing newer to trust, and only a succeeded run's artifact
-// decides — through a download with `gh run download`, which unzips the
-// artifact GitHub stores. The run's own head_sha is still read for one
-// check, the one about the run and not the pull request: its verdict
-// counts only when the base branch carries that commit, so a run from a
-// side branch's modified copy of the workflow — even one a pull request to
-// the base branch carries on its head — decides nothing.
+// — never from a comment, which a pull request can fake. The run is found
+// through its verdict artifact, whose name carries the pull request's
+// number (ai-review-verdict-<number>) and whose verdict.json carries the
+// head SHA the review judged — compared against the head SHA the pull
+// request answers with now, in the verdict (stagingApproval). The newest
+// verdict artifact still held decides, whatever run left it: a run whose
+// provenance fails (verdictRunProblem: not the owner-committed workflow on
+// a pull request into staging) counts for nothing, a run still going holds
+// (its verdict is coming), one that failed, was cancelled, or succeeded
+// without a verdict artifact leaves nothing newer to trust, and only a
+// succeeded run's artifact decides — through a download with
+// `gh run download`, which unzips the artifact GitHub stores.
 async function verdictFor(number) {
   const name = verdictArtifactName(number);
   let artifact = null;
@@ -319,10 +309,11 @@ async function verdictFor(number) {
     console.log(`staging-approval: the run behind #${number}'s verdict artifact could not be read: ${error.message}`);
     return null;
   }
-  if (run.path !== AI_REVIEW_PATH) {
+  const problem = verdictRunProblem(run, number);
+  if (problem) {
     // Any run can upload a file under any name; only the owner-committed
     // workflow's own run decides.
-    console.log(`staging-approval: the run ${run.id} behind #${number}'s verdict artifact is ${run.path ?? "of no workflow"}, not ${AI_REVIEW_PATH}, so its verdict counts for nothing`);
+    console.log(`staging-approval: the run ${run.id} behind #${number}'s verdict artifact counts for nothing: ${problem}`);
     return null;
   }
   if (run.conclusion == null) {
@@ -331,17 +322,6 @@ async function verdictFor(number) {
   }
   if (run.conclusion !== "success") {
     console.log(`staging-approval: the newest ai-review run ${run.id} with a verdict for #${number} ended ${run.conclusion}, so nothing is approved`);
-    return null;
-  }
-  let offBase = `${BASE} does not carry ${run.head_sha}`;
-  try {
-    const compare = await github("GET", `/compare/${BASE}...${run.head_sha}`);
-    if (["behind", "identical"].includes(String(compare?.status ?? ""))) offBase = null;
-  } catch (error) {
-    offBase = `comparing ${run.head_sha} with ${BASE} failed: ${error.message}`;
-  }
-  if (offBase) {
-    console.log(`staging-approval: ai-review run ${run.id} ran from a commit ${offBase}, so its verdict counts for nothing`);
     return null;
   }
   const dir = mkdtempSync(join(tmpdir(), "staging-approval-"));
@@ -379,4 +359,8 @@ async function alreadyApproved(number, sha) {
   return false;
 }
 
-const describe = members => (members === null ? "unreadable" : `${members.length} member${members.length === 1 ? "" : "s"}`);
+// A function declaration, not a const: the decision runs (and logs) before
+// the module reaches this line.
+function describe(members) {
+  return members === null ? "unreadable" : `${members.length} member${members.length === 1 ? "" : "s"}`;
+}

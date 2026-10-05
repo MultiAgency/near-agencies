@@ -16,6 +16,7 @@ import {
   verdictArtifactName,
   verdictArtifactNumbers,
   verdictFrom,
+  verdictRunProblem,
 } from "../lib/staging-approval.mjs";
 
 // CODEOWNERS as the base branch might hold it: `*` first, then rules that
@@ -227,6 +228,46 @@ describe("verdictArtifactNumbers", () => {
     // GET /actions/runs/{id}/artifacts answers {total_count, artifacts},
     // and the runner hands the response straight over (#116).
     assert.deepEqual(verdictArtifactNumbers({ total_count: 1, artifacts: [{ name: "ai-review-verdict-108" }] }), [108]);
+  });
+});
+
+describe("verdictRunProblem", () => {
+  // A run as the API reports it for a pull_request_target review of #126:
+  // its head_sha is the pull request's head, and it lists the pull request
+  // with its base branch.
+  const run = {
+    path: ".github/workflows/ai-review.yml",
+    event: "pull_request_target",
+    head_sha: "24ec161f53e1af8fb1bda514afc2337564774c00",
+    pull_requests: [{ number: 126, base: { ref: "staging" } }],
+  };
+
+  test("the owner-committed workflow on a pull request into staging decides", () => {
+    assert.equal(verdictRunProblem(run, 126), null);
+  });
+
+  test("a run whose head_sha staging does not carry still decides (#117)", () => {
+    // The old check compared head_sha with staging and so refused every
+    // pull_request_target run: their head_sha is the pull request's head.
+    assert.equal(verdictRunProblem({ ...run, head_sha: "f".repeat(40) }, 126), null);
+  });
+
+  test("another workflow's run counts for nothing", () => {
+    assert.match(verdictRunProblem({ ...run, path: ".github/workflows/ci.yml" }, 126), /not \.github\/workflows\/ai-review\.yml/);
+    assert.match(verdictRunProblem({ ...run, path: undefined }, 126), /of no workflow/);
+  });
+
+  test("a run on any event but pull_request_target counts for nothing, since it may run a branch's copy", () => {
+    for (const event of ["pull_request", "push", "workflow_dispatch", "issue_comment", undefined]) {
+      assert.match(verdictRunProblem({ ...run, event }, 126), /not pull_request_target/);
+    }
+  });
+
+  test("a run for another pull request, or one into another branch, counts for nothing", () => {
+    assert.match(verdictRunProblem(run, 12), /lists no pull request #12 into staging/);
+    assert.match(verdictRunProblem({ ...run, pull_requests: [{ number: 126, base: { ref: "side" } }] }, 126), /into staging/);
+    assert.match(verdictRunProblem({ ...run, pull_requests: [] }, 126), /into staging/);
+    assert.match(verdictRunProblem({ ...run, pull_requests: undefined }, 126), /into staging/);
   });
 });
 
