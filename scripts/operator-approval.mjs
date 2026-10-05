@@ -21,6 +21,7 @@ import {
   combineRoster,
   countableApprovals,
   countedApprovals,
+  judgedTeamMembers,
   operatorApproval,
   ownersFromCodeowners,
   ownersFromEnv,
@@ -52,23 +53,19 @@ try {
   // team internal cannot be read.
   const fork = event.pull_request.head.repo?.full_name !== event.repository?.full_name;
 
+  // The team reads start alongside the others and land keyed by slug;
+  // judgedTeamMembers picks the one team the verdict consumes and throws if
+  // the pinned list drifted from it, failing closed.
+  const teamReads = new Map(REVIEWED_TEAMS.map(slug => [slug, teamMembers(org, slug)]));
   const [reviews, codeowners, builders, fromApi] = await Promise.all([
     allReviews(number),
     textAtBase(".github/CODEOWNERS", base),
     buildersAtBase(base),
     rosterApi(author),
   ]);
-  // The verdict consumes exactly team internal's members, and REVIEWED_TEAMS
-  // is pinned by test to name it and nothing else. The reads land in a map
-  // keyed by slug and the pinned slug is picked by name, so a list drifted
-  // from what the verdict judges throws here — failing closed — instead of
-  // mis-shaping a positional destructure or dropping an unread team.
-  const teamReads = await Promise.all(REVIEWED_TEAMS.map(async slug => [slug, await teamMembers(org, slug)]));
-  const teams = Object.fromEntries(teamReads);
-  if (!("internal" in teams)) {
-    throw new Error(`the verdict judges team internal alone, but REVIEWED_TEAMS names ${REVIEWED_TEAMS.join(", ")}`);
-  }
-  const internal = teams.internal;
+  const teams = {};
+  for (const [slug, read] of teamReads) teams[slug] = await read;
+  const internal = judgedTeamMembers(teams);
   if (codeowners === null) {
     console.log("CODEOWNERS could not be read at the base branch, so only the owner's and the internal team's approvals count");
   }

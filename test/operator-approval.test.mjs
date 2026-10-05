@@ -5,6 +5,7 @@ import {
   combineRoster,
   countableApprovals,
   countedApprovals,
+  judgedTeamMembers,
   operatorApproval,
   ownersFromCodeowners,
   ownersFromEnv,
@@ -203,6 +204,23 @@ describe("REVIEWED_TEAMS", () => {
     // list, so a second team cannot creep back into the reads without
     // changing it here — and this test with it.
     assert.deepEqual(REVIEWED_TEAMS, ["internal"]);
+  });
+});
+
+describe("judgedTeamMembers", () => {
+  test("answers team internal's members, the one team the verdict consumes", () => {
+    assert.deepEqual(judgedTeamMembers({ internal: ["saadiqbal-dev"] }), ["saadiqbal-dev"]);
+  });
+
+  test("an unread team reads as null, which fails closed in the verdict", () => {
+    assert.deepEqual(judgedTeamMembers({ internal: null }), null);
+  });
+
+  test("a read plan drifted from the verdict throws instead of passing unjudged", () => {
+    assert.throws(() => judgedTeamMembers({}));
+    assert.throws(() => judgedTeamMembers(undefined));
+    assert.throws(() => judgedTeamMembers({ elsewhere: ["stranger"] }));
+    assert.throws(() => judgedTeamMembers({ internal: ["saadiqbal-dev"], elsewhere: ["stranger"] }));
   });
 });
 
