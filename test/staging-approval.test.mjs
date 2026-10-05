@@ -139,6 +139,13 @@ describe("stagingApproval", () => {
     const { outcome } = stagingApproval(passing({ rules: overridden }));
     assert.equal(outcome, "hold");
   });
+
+  test("a later ** rule that does not name the reviewer keeps its deep paths off the allowlist", () => {
+    const narrowed = codeownersRules(`${CODEOWNERS}\n/test/private/**        @jlwaugh`);
+    assert.equal(uncoveredPath(narrowed, ["test/private/deep/unit.test.mjs"]), "test/private/deep/unit.test.mjs");
+    const { outcome } = stagingApproval(passing({ rules: narrowed, paths: ["test/private/deep/unit.test.mjs"] }));
+    assert.equal(outcome, "hold");
+  });
 });
 
 describe("authorAllowed", () => {
@@ -216,6 +223,18 @@ describe("codeownersMatches", () => {
   test("a wildcard covers one segment only", () => {
     assert.equal(codeownersMatches("/lib/*.mjs", "lib/brief.mjs"), true);
     assert.equal(codeownersMatches("/lib/*.mjs", "lib/deep/brief.mjs"), false);
+  });
+
+  test("** crosses directories, as gitignore and GitHub match it", () => {
+    assert.equal(codeownersMatches("**/logs", "logs"), true);
+    assert.equal(codeownersMatches("**/logs", "a/b/logs"), true);
+    assert.equal(codeownersMatches("**/logs", "a/b/logs/under"), true);
+    assert.equal(codeownersMatches("**/logs", "a/b/logsname"), false);
+    assert.equal(codeownersMatches("docs/**", "docs/x/y"), true);
+    assert.equal(codeownersMatches("docs/**", "other/x"), false);
+    assert.equal(codeownersMatches("a/**/b", "a/b"), true);
+    assert.equal(codeownersMatches("a/**/b", "a/x/y/b"), true);
+    assert.equal(codeownersMatches("a/**/b", "a/x/c"), false);
   });
 
   test("garbage matches nothing", () => {

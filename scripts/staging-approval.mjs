@@ -26,6 +26,7 @@ import { join } from "node:path";
 
 import { github, orgApi } from "../lib/github.mjs";
 import {
+  BASE,
   REVIEWER,
   codeownersRules,
   openCandidates,
@@ -125,6 +126,15 @@ async function decide(pr) {
   console.log(`staging-approval ${outcome} on #${number} at ${sha}: ${reason}`);
   console.log(`  author @${pr.user?.login}, head ${pr.head?.repo?.full_name ?? "unknown"}, files ${paths.length}, teams: internal ${describe(internal)}, internal-agents ${describe(internalAgents)}, test ${testVerdict(test) ?? "missing"}, verdict ${verdict ? `from an ai-review run (${verdict.important} Important)` : "none"}`);
   if (outcome !== "approve") return;
+  // The reads above take time, and a push in between moves the head the
+  // checks were judged on. The approval names one SHA: re-read the pull
+  // request and hold when it moved — the push's own run decides the new
+  // head, and staging's ruleset dismisses whatever was posted for the old.
+  const now = await github("GET", `/pulls/${number}`);
+  if (now.head?.sha !== sha) {
+    console.log(`staging-approval: #${number} moved to ${now.head?.sha} while it was judged, so the next run decides`);
+    return;
+  }
   if (await alreadyApproved(number, sha)) {
     console.log(`staging-approval: @${REVIEWER} has already approved #${number} at ${sha}`);
     return;
@@ -246,6 +256,15 @@ async function verdictFor(sha, number) {
     const listed = await github("GET", `/actions/runs/${run.id}/artifacts?per_page=100`);
     const artifact = (listed.artifacts ?? []).find(a => a.name === name && !a.expired);
     if (!artifact) continue;
+    // The run's head SHA is its base branch's head, and a commit the base
+    // branch carries is one a pull request to it names. A run based on a
+    // side branch — where a modified copy of the workflow could have
+    // written itself a verdict — decides nothing here.
+    const basePulls = await github("GET", `/commits/${run.head_sha}/pulls?per_page=100`);
+    if (!(basePulls ?? []).some(pull => String(pull?.base?.ref ?? "").toLowerCase() === BASE)) {
+      console.log(`staging-approval: ai-review run ${run.id} did not run for ${BASE}, so its verdict counts for nothing`);
+      return null;
+    }
     const dir = mkdtempSync(join(tmpdir(), "staging-approval-"));
     try {
       execFileSync("gh", ["run", "download", String(run.id), "--name", name, "--repo", process.env.SANDBOX_REPO, "--dir", dir], {
