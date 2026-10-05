@@ -21,11 +21,9 @@ import {
   combineRoster,
   countableApprovals,
   countedApprovals,
-  judgedTeamMembers,
   operatorApproval,
   ownersFromCodeowners,
   ownersFromEnv,
-  REVIEWED_TEAMS,
   rosterFromApi,
   rosterRecord,
   unrecognizedApprovals,
@@ -33,10 +31,10 @@ import {
 
 const REVIEW_PAGES = 10;
 const TEAM_PAGES = 10;
-// The teams whose members the check reads come from lib's REVIEWED_TEAMS —
-// one team, `internal`, the entry CODEOWNERS names. Agents are in no team
-// (#109); the roster says who they are. The list is pinned by test, so a
-// second team cannot creep back into these reads unjudged.
+// The team behind CODEOWNERS' `@MultiAgency/internal` entry: a member of
+// `internal` is one of the people whose approvals count. Agents are in no
+// team (#109); the roster says who they are.
+const INTERNAL_TEAM = "internal";
 
 try {
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH ?? "", "utf8"));
@@ -53,19 +51,13 @@ try {
   // team internal cannot be read.
   const fork = event.pull_request.head.repo?.full_name !== event.repository?.full_name;
 
-  // The team reads start alongside the others and land keyed by slug;
-  // judgedTeamMembers picks the one team the verdict consumes and throws if
-  // the pinned list drifted from it, failing closed.
-  const teamReads = new Map(REVIEWED_TEAMS.map(slug => [slug, teamMembers(org, slug)]));
-  const [reviews, codeowners, builders, fromApi] = await Promise.all([
+  const [reviews, codeowners, builders, fromApi, internal] = await Promise.all([
     allReviews(number),
     textAtBase(".github/CODEOWNERS", base),
     buildersAtBase(base),
     rosterApi(author),
+    teamMembers(org, INTERNAL_TEAM),
   ]);
-  const teams = {};
-  for (const [slug, read] of teamReads) teams[slug] = await read;
-  const internal = judgedTeamMembers(teams);
   if (codeowners === null) {
     console.log("CODEOWNERS could not be read at the base branch, so only the owner's and the internal team's approvals count");
   }
