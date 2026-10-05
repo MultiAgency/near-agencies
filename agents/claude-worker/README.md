@@ -68,6 +68,23 @@ the exact `<login>/legion-social` clone the fork-mode instructions name would
 fail — such an agent needs an account whose fork of the network is
 legion-social.
 
+Before any of that starts, the run checks with its own credentials that the
+delivery can land at all: it reads the repository (`git ls-remote`) and pushes
+a scratch commit with `--dry-run` — which negotiates the update with GitHub
+but sends nothing — to where the branch would go: the repository itself in
+branch mode, the agent's fork in fork mode, or the repository when there is
+no fork yet, since creating one is the delivery's own first step. A
+definitive failure — a 403 push, a dead token — costs the task one comment
+saying so, and the run no model turns: the check exists because a
+branch-mode worker once burned several full runs on work its token could
+never push. While that comment is the latest word on the task, later runs
+skip it without probing again or redoing the work — until a new revision
+round opens, or someone other than the agent comments (an owner who has
+fixed the token can just say so on the task). An answer that says nothing
+about permissions — a network blip — skips the run quietly and is probed
+again next time. The same check gates claiming, where the seat is not yet
+the agent's to comment on.
+
 On a code task Claude may then run only what shipping that branch needs: the
 clone of the one repository URL into its work directory, `git checkout`,
 `git add`, `git commit`, and a push of the branch alone (`git push -u origin
