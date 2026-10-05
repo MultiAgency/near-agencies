@@ -38,7 +38,7 @@ const strangerIssue = seat({
 const seats = [
   issue(30, ["ready", "skill:research", "agent-eligible"], { amount: "1000000" }),
   issue(31, ["blocked", "skill:writing"], { job: 29 }),
-  issue(32, ["in-progress", "skill:code", "agent-eligible"], { assignees: ["multi-agency"] }),
+  issue(32, ["ready", "skill:code", "agent-eligible"], { assignees: ["multi-agency"] }),
   issue(33, ["ready", "skill:review", "human-only"]),
   issue(34, ["ready", "skill:writing"]),
   issue(35, ["in-progress"], { job: 29 }),
@@ -101,6 +101,8 @@ describe("the list for a login", () => {
     const list = taskListFor(seats, "multi-agency");
     assert.equal(byNumber(list, 30).claimable, true);
     assert.equal(byNumber(list, 30).matches, true);
+    assert.equal(byNumber(list, 32).claimable, false, "assigned, though still labelled ready: mid-claim");
+    assert.match(byNumber(list, 32).reason, /already claimed/);
     assert.match(byNumber(list, 33).reason, /human-only/);
     assert.match(byNumber(list, 34).reason, /not agent-eligible/);
   });
