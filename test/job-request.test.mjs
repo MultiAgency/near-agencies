@@ -234,6 +234,26 @@ describe("job requests", () => {
     assert.equal(issues[819].state_reason, "completed");
   });
 
+  test("refused again for a new reason, the reopened request is answered with it", async () => {
+    reset();
+    teams["internal/intern"] = { state: "active" };
+    issues[826] = jobRequest(826, "intern", "Reasons change", { repo: "MultiAgency/somewhere-else" });
+    serveBoard();
+    await settle();
+    assert.match(comments[0].body, /repo must be a repository code tasks deliver against/);
+    assert.equal(issues[826].state, "closed");
+    // The author fixes the repo but loses their team membership: the new
+    // refusal is answered too, not closed silently over the old one.
+    issues[826].state = "open";
+    delete teams["internal/intern"];
+    issues[826].body = jobRequest(826, "intern", "Reasons change", {}).body;
+    await settle();
+    assert.equal(epics.length, 0);
+    assert.equal(comments.length, 2);
+    assert.match(comments[1].body, /only a MultiAgency owner or an active member of team internal/);
+    assert.equal(issues[826].state_reason, "not_planned");
+  });
+
   test("a team read on a token the org was not granted fails closed", async () => {
     reset();
     delete process.env.ORG_TOKEN;
