@@ -1,0 +1,41 @@
+# The operator-approval check the staging ruleset requires (issue #76): a
+# pull request authored by a rostered agent cannot stand on approvals from
+# its operator alone. Runs again on every review, so a later approval or
+# dismissal updates the check, and on edits, so retargeting a PR from main
+# to staging judges it where it was never judged before.
+name: operator-approval
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  operator-approval:
+    name: operator-approval
+    runs-on: ubuntu-latest
+    env:
+      SANDBOX_REPO: ${{ github.repository }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # The team read (internal) needs the org's Members: read, which the
+      # repository token cannot be granted; without a working ORG_TOKEN
+      # every PR to staging fails closed.
+      ORG_TOKEN: ${{ secrets.ORG_TOKEN }}
+      OWNER: jlwaugh
+      ROSTER_URL: https://demo.multiagency.ai
+    steps:
+      # staging's own copy of the check, never the PR's, so a PR cannot run a
+      # weakened version of it. Nothing to run until this lands on staging.
+      - uses: actions/checkout@v4
+        with:
+          ref: staging
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - if: hashFiles('scripts/operator-approval.mjs') != ''
+        run: node scripts/operator-approval.mjs

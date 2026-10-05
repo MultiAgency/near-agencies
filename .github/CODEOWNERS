@@ -35,3 +35,19 @@
 /CLAUDE.md               @jlwaugh
 /REVIEW.md               @jlwaugh
 /.claude/                @jlwaugh
+
+# Approved in code (issue #77): the reviewer account may approve these
+# low-risk paths alone. The last matching rule decides, so this block must
+# stay after every rule it narrows, and it never covers money or permission
+# files, agents/, scripts/, server.mjs, public/skill.md, or the client's
+# deposit transfer (public/app.js, public/index.html) — anything else keeps
+# needing a person, and every new file fails closed.
+/docs/                  @MultiAgency/internal @jlwaugh @multai-builder
+/test/                  @MultiAgency/internal @jlwaugh @multai-builder
+/README.md              @MultiAgency/internal @jlwaugh @multai-builder
+/CONTRIBUTING.md        @MultiAgency/internal @jlwaugh @multai-builder
+/public/app.css         @MultiAgency/internal @jlwaugh @multai-builder
+
+# The owner's decisions log is the owner's alone: ai-review reads it as
+# recorded decisions, so the reviewer account must never approve a change to it.
+/docs/decisions.md       @jlwaugh

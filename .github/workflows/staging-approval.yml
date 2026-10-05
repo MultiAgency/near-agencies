@@ -1,0 +1,42 @@
+name: staging-approval
+
+# The code approval for staging pull requests (issue #77): when every check
+# in the issue holds for a pull request's current head SHA, the review posts
+# as @multai-builder — nobody's judgment is involved at that step; the AI
+# review advises, and this code decides.
+#
+# The job runs from the base branch's checkout after `ci` and `ai-review`
+# finish, and never checks out or runs the pull request's code. Everything
+# uncertain holds: the decision script exits 0 on a hold, logging which
+# check failed, and a push dismisses the approval (staging ruleset) so the
+# next run decides again.
+#
+# REVIEWER_TOKEN lives only in the `reviewer` Environment, whose deployment
+# branches are limited to `staging`. A workflow_run run carries the
+# repository's default branch as its ref, and that branch is `staging`, so
+# the run may read the Environment; if the default branch ever moves, the
+# Environment's deployment branches must move with it.
+
+on:
+  workflow_run:
+    workflows: [ci, ai-review]
+    types: [completed]
+
+jobs:
+  approve:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: reviewer
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: staging
+          fetch-depth: 1
+      - name: Decide, and approve when every check holds
+        run: node scripts/staging-approval.mjs
+        env:
+          SANDBOX_REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.REVIEWER_TOKEN }}
+          ORG_TOKEN: ${{ secrets.REVIEWER_TOKEN }}

@@ -21,6 +21,17 @@ Every pull request gets these three passes. `AGENTS.md` defines the contracts an
 - **Important:** would break behavior, pay the wrong account, let the wrong person claim or approve, leak a secret, or breach a contract in `AGENTS.md`.
 - **Nit:** naming, style and wording. Report at most five, and summarize the rest as a count.
 
+## The code approval's verdict
+
+The `ai-review` run leaves its verdict as the run's own artifact
+`ai-review-verdict-<pull request number>`, holding one `verdict.json`:
+`{"sha": "<pull request head sha>", "important": <count of Important findings still open>}`,
+counted over the findings list every round carries forward (#116).
+The staging approval reads the verdict from the newest such artifact still
+held — never from a comment, which a pull request's text could fake — and
+holds when it is missing, malformed, for another SHA, or counts any
+Important finding.
+
 ## Skip
 
 `package-lock.json`, anything `npm run check` and `npm test` already enforce, and formatting.
