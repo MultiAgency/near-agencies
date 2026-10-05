@@ -25,7 +25,7 @@ const REG = "MultiAgency/near-agencies";
 const REG_URL = `/repos/${REG}`;
 const SOURCE = `${REG}#600`;
 
-let boardIssues, boardEvents, boardThreads, regIssues, regEvents, regThreads, regSingle, pulls, roles, teams, created, createFails, reactions, self, calls;
+let boardIssues, boardEvents, boardThreads, regIssues, regEvents, regThreads, regSingle, lastEdited, pulls, roles, teams, created, createFails, reactions, self, calls;
 
 const reset = () => {
   boardIssues = {};
@@ -35,6 +35,7 @@ const reset = () => {
   regEvents = {};
   regThreads = {};
   regSingle = {};
+  lastEdited = {};
   pulls = {};
   roles = {};
   teams = {};
@@ -46,11 +47,11 @@ const reset = () => {
 };
 
 // A registry issue labelled for the agents, with the events its trigger reads.
-const registryIssue = (number, { title = "Build the internal dashboard", body = "Please build the internal dashboard, volunteer work, this week at the latest.", assignees = [], created_at = "2026-10-05T00:00:00Z" } = {}) => ({
+const registryIssue = (number, { title = "Build the internal dashboard", body = "Please build the internal dashboard, volunteer work, this week at the latest.", assignees = [], created_at = "2026-10-05T00:00:00Z", state = "open" } = {}) => ({
   number,
   user: { login: "someone" },
   title,
-  state: "open",
+  state,
   labels: [{ name: "ready-for-agent" }],
   assignees: assignees.map(login => ({ login })),
   created_at,
@@ -149,6 +150,12 @@ function serveBoard() {
     const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
     let m;
     if (method === "GET" && u.pathname === "/user") return json({ login: self });
+    // GraphQL: the issue reads the trigger cannot get from the events API —
+    // when its body or title was last edited.
+    if (u.pathname === "/graphql" && method === "POST") {
+      const { variables } = JSON.parse(options.body);
+      return json({ data: { repository: { issue: { lastEditedAt: lastEdited[`${variables.owner}/${variables.repo}#${variables.number}`] ?? null } } } });
+    }
     // The board's engagement lists: open ones for the sweeps, every state for
     // the epics a source leads back to, and everything for tasksMade's
     // interrupted-run check.
@@ -452,13 +459,16 @@ describe("opening auto jobs", () => {
 });
 
 describe("closing an auto task on the merge", () => {
-  const build = ({ pr = pull(9), thread = [handoffBy("jlwaugh", `https://github.com/${REG}/pull/9`)], task = {} } = {}) => {
+  const build = ({ pr = pull(9), thread = [handoffBy("jlwaugh", `https://github.com/${REG}/pull/9`)], task = {}, sourceState = "closed" } = {}) => {
     reset();
     boardIssues[890] = autoEpic(890, 900);
     boardIssues[900] = autoTask(900, 890, task);
     boardThreads[`${BOARD}#900`] = thread;
     pulls[9] = pr;
     regIssues[REG] = [];
+    // GitHub closed the source issue when the pull request merged into the
+    // default branch; its state as the sweep re-reads it is this one.
+    regSingle[SOURCE] = registryIssue(600, { state: sourceState });
     serveBoard();
   };
 
@@ -505,14 +515,23 @@ describe("closing an auto task on the merge", () => {
     assert.equal(boardIssues[900].state, "closed");
   });
 
+  test("a pull request whose closing reference was written after the merge closes nothing", async () => {
+    // The body reads as it stands now, so a reference added after the merge
+    // passes that check; the issue the merge never closed is what holds.
+    build({ pr: pull(9, { state: "closed", merged: true }), sourceState: "open" });
+    await settle();
+    assert.equal(boardIssues[900].state, "open", "the merge closed no issue, so the task is not done");
+    assert.equal(boardThreads[`${BOARD}#900`].length, 1);
+  });
+
   test("a body edited after the label opens nothing until the label is applied again", async () => {
     reset();
     roles.jlwaugh = "admin";
     regIssues[REG] = [registryIssue(615)];
-    regEvents[`${REG}#615`] = [
-      labeled("jlwaugh", "2026-10-05T00:01:00Z"),
-      { event: "edited", actor: { login: "someone" }, created_at: "2026-10-05T00:05:00Z" },
-    ];
+    regEvents[`${REG}#615`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
+    // GitHub's events record no body edit; the issue's own lastEditedAt is
+    // what an edit after the label is judged from.
+    lastEdited[`${REG}#615`] = "2026-10-05T00:05:00Z";
     serveBoard();
     await settle();
     assert.equal(created.length, 0);
@@ -522,6 +541,22 @@ describe("closing an auto task on the merge", () => {
     regEvents[`${REG}#615`].push(labeled("jlwaugh", "2026-10-05T00:06:00Z"));
     await settle();
     assert.equal(created.length, 2);
+  });
+
+  test("an issue whose edits cannot be read opens nothing", async () => {
+    reset();
+    roles.jlwaugh = "admin";
+    regIssues[REG] = [registryIssue(616)];
+    regEvents[`${REG}#616`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
+    serveBoard();
+    const served = globalThis.fetch;
+    globalThis.fetch = async (url, options = {}) => {
+      if (new URL(url).pathname === "/graphql") return new Response(JSON.stringify({ message: "boom" }), { status: 500, headers: { "content-type": "application/json" } });
+      return served(url, options);
+    };
+    await settle();
+    assert.equal(created.length, 0, "an unreadable edit fails closed, as an unreadable team does");
+    assert.match(autoJobsHealth().skipped.find(s => s.issue === `${REG}#616`).why, /its edits could not be read/);
   });
 
   test("a task without a handoff yet waits, and one with an unreadable handoff is answered", async () => {
