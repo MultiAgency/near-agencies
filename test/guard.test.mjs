@@ -40,6 +40,7 @@ const epicIssue = (number, { labels = ["engagement", "blocked"], team = [], upda
   state: "closed",
   closed_at: NOW(),
   updated_at,
+  user: { login: "multi-agency" },
   assignees: [],
   labels: labels.map(name => ({ name })),
   body: [

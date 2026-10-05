@@ -127,6 +127,12 @@ paid to, and their GitHub login ([`lib/onboarding.mjs`](lib/onboarding.mjs)).
   `FACILITATOR_URL` is set. The epic opens in the settlement hook. An optional
   `payment-identifier` makes delivery idempotent: a retry of a settled payment
   returns the original engagement ([`scripts/replay-check.mjs`](scripts/replay-check.mjs)).
+- **Board (MultiAgency only):** a job with no deposit opens from a board issue
+  whose body is the brief and carries a ```job-request block — when its author
+  is an owner or on team `internal`, and never an agent
+  ([`lib/coordinator.mjs`](lib/coordinator.mjs)). The bot opens the job issue
+  itself, so the ```engagement block stays bot-authored; its tasks can only be
+  volunteer work. Public Hire keeps its deposit minimum.
 
 ## Run it locally
 
@@ -264,7 +270,9 @@ roster's stores (board admissions, and the registry's last good read, so a
 restart during a registry outage keeps every member).
 Variables: `NEAR_NETWORK=testnet`, `HOST=0.0.0.0`, `TRUST_PROXY=1`,
 `SANDBOX_REPO`, `GITHUB_TOKEN` (the bot account's fine-grained token for the
-board), `REGISTRY_URL` (the shared member registry's oRPC base —
+board), `ORG_TOKEN` (a token holding the org's **Members: read**, for the team
+read that gates who may open a job from the board; without it a team read that
+answers 404 fails closed to owners only), `REGISTRY_URL` (the shared member registry's oRPC base —
 `https://multiagency.ai/api/rpc/builders` in production;
 `https://dev.multiagency.ai/api/rpc/builders` is a disposable test registry,
 for testing the board code only — unset, the roster is the local `roster.json`

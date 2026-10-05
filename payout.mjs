@@ -9,6 +9,9 @@
 //                                                    vote is cast while a task has duplicate proposals
 //   node payout.mjs reconcile <job>                   record approvals made elsewhere (a wallet, Trezu)
 //
+// Reading a job checks its epic was opened by the board's bot, so these
+// commands refuse to run until BOARD_BOT names that login: on your own
+// token or gh login, every job would read as "not an engagement".
 // Proposals are filed only after every task is closed with a handoff whose
 // `payout.account_id` matches the task's payee, every pull request a handoff
 // links (code tasks) is merged, and every deliverable a handoff pins by sha256
@@ -25,6 +28,12 @@ const [command, jobNumber, flag, signer] = process.argv.slice(2);
 const needsSigner = command === "propose" || command === "approve";
 if (!["status", "propose", "approve", "reconcile"].includes(command) || !jobNumber || (needsSigner && (flag !== "--as" || !signer))) {
   console.error("usage: node payout.mjs status|reconcile <job> | propose|approve <job> --as <account>");
+  process.exit(64);
+}
+// The bot's login is a deployment fact, not this token's identity: without it
+// spelled out, every job reads as "not an engagement" and nothing can be paid.
+if (!process.env.BOARD_BOT) {
+  console.error("payout: set BOARD_BOT=<the board bot's login>; on this token alone the bot's identity cannot be known");
   process.exit(64);
 }
 

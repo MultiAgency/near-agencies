@@ -145,7 +145,7 @@ async function renderHome(owner) {
     : html`<ul class="engagements">${jobs.map(e => html`
         <li><a href="#/e/${e.number}">
           <span class="t">${e.title}</span>
-          <span class="m">For ${account(e.org)}, ${usdc(e.deposit)} USDC deposit</span>
+          <span class="m">For ${account(e.org)}, ${Number(e.deposit) ? `${usdc(e.deposit)} USDC deposit` : "no deposit"}</span>
           <span class="s">${e.state === "closed" ? "Done" : e.assembled ? "In progress" : "Drafting the team"}</span>
         </a></li>`)}</ul>`;
   // The hero's figure is the newest finished job: evidence, not illustration.
@@ -181,10 +181,15 @@ function story(e, relay) {
   const signOff = reviewers.length
     ? `${reviewers.join(" and ")} ${rounds ? `asked for ${rounds === 1 ? "one round" : `${rounds} rounds`} of changes and ` : ""}signed it off`
     : "it was signed off";
+  const board = e.engagement.channel === "board";
   return [
-    `${account(e.engagement.org)} paid a ${usdc(e.totals.deposit)} USDC deposit.`,
+    board
+      ? `${account(e.engagement.org)} opened this job from the board with no deposit.`
+      : `${account(e.engagement.org)} paid a ${usdc(e.totals.deposit)} USDC deposit.`,
     workers.length ? `${workers.join(" and ")} did the work; ${signOff};` : `${signOff[0].toUpperCase()}${signOff.slice(1)};`,
-    `the DAO paid ${usdc(e.totals.paid)} USDC. ${took} from deposit to done.`,
+    board
+      ? `nobody was paid, because the work was volunteer. ${took} from open to done.`
+      : `the DAO paid ${usdc(e.totals.paid)} USDC. ${took} from deposit to done.`,
   ].join(" ");
 }
 
@@ -496,7 +501,7 @@ async function prepare(event) {
 // The relay: one lane per participant, every event where it happened, joined
 // in time order; and the deposit split into what each seat is paid.
 const EVENT_NAMES = {
-  "deposit": "Deposit", "team-draft": "Team proposed", "team-approved": "Team approved",
+  "deposit": "Deposit", "job-requested": "Requested", "team-draft": "Team proposed", "team-approved": "Team approved",
   "claim": "Took it on", "assigned": "Confirmed", "seat-opened": "Next task opened",
   "deliverable": "Delivered", "handoff": "Handed over", "changes-requested": "Changes requested",
   "reopened": "Reopened for revision", "payout-proposed": "Payout proposed", "paid": "Paid",
@@ -563,7 +568,7 @@ function swimlane({ lanes, events, open }, { links = true, reveal = false } = {}
       ${events.slice(1).map((ev, i) => ev.lane === events[i].lane ? "" : html`
         <line class="handoff-line" style="${`--i:${i + 1}`}" x1="${x(pos[i])}" y1="${row.get(events[i].lane)}" x2="${x(pos[i + 1])}" y2="${row.get(ev.lane)}"/>`)}
       ${events.map((ev, i) => {
-        const dot = html`<circle class="ev ${tone(ev.lane)} ${ev.kind} ${i === latest ? "latest" : ""}" style="${`--i:${i}`}" cx="${x(pos[i])}" cy="${row.get(ev.lane)}" r="${["deliverable", "paid", "complete", "deposit"].includes(ev.kind) ? 7 : 5}">
+        const dot = html`<circle class="ev ${tone(ev.lane)} ${ev.kind} ${i === latest ? "latest" : ""}" style="${`--i:${i}`}" cx="${x(pos[i])}" cy="${row.get(ev.lane)}" r="${["deliverable", "paid", "complete", "deposit", "job-requested"].includes(ev.kind) ? 7 : 5}">
             <title>${`${EVENT_NAMES[ev.kind] ?? ev.kind}${ev.seat ? ` on #${ev.seat}` : ""}, ${new Date(ev.t).toLocaleString()}`}</title>
           </circle>`;
         return links ? html`<a href="${ev.url}" target="_blank" rel="noopener">${dot}</a>` : dot;
@@ -574,7 +579,7 @@ function swimlane({ lanes, events, open }, { links = true, reveal = false } = {}
 
 // Words on the milestones, so the chart reads without hovering: the first of
 // each kind, lifted clear of a neighbouring label on the same lane.
-const LABELLED = ["deposit", "team-draft", "team-approved", "deliverable", "changes-requested", "paid", "complete"];
+const LABELLED = ["job-requested", "deposit", "team-draft", "team-approved", "deliverable", "changes-requested", "paid", "complete"];
 function labels(events, pos, x, row) {
   const placed = [];
   const seen = new Set();
@@ -591,16 +596,29 @@ function labels(events, pos, x, row) {
 // The engagement's state in one sentence: what has happened and who is next.
 function nowLine(e, relay) {
   const who = m => m.claimedBy.map(login => `@${login}`).join(", ");
+  // A job opened from the board has no deposit behind it, so its lines never
+  // speak of one: its tasks can only be volunteer work.
+  const board = e.engagement.channel === "board";
   switch (e.stage) {
-    case "cancelled": return `This job was closed before it was completed. ${Number(e.totals.paid) > 0
+    case "cancelled": return `This job was closed before it was completed. ${board ? "Nobody was paid: its tasks were volunteer work." : Number(e.totals.paid) > 0
       ? `The DAO paid ${usdc(e.totals.paid)} USDC for work signed off; the other ${usdc(Number(e.totals.deposit) - Number(e.totals.paid))} USDC stays with MultiAgency.`
       : `The ${usdc(e.totals.deposit)} USDC deposit stays with MultiAgency.`}`;
-    case "complete": return `Done. The work was signed off and the DAO paid ${usdc(e.totals.paid)} USDC to the people and agents who did it; ${usdc(e.totals.margin)} USDC stays with MultiAgency.`;
+    case "complete": return board
+      ? "Done. The work was signed off, and nobody was paid: its tasks were volunteer work."
+      : `Done. The work was signed off and the DAO paid ${usdc(e.totals.paid)} USDC to the people and agents who did it; ${usdc(e.totals.margin)} USDC stays with MultiAgency.`;
     case "assembling": return relay?.events.some(ev => ev.kind === "team-draft")
-      ? "The deposit arrived and the maintainer has proposed a team. Waiting for MultiAgency to approve it."
-      : "The deposit arrived. MultiAgency is putting the team together.";
-    case "accepting": return "All the work is signed off. MultiAgency is proposing each payout to the DAO.";
-    case "paying": return "Each payout is waiting for a DAO approver to vote for it.";
+      ? board
+        ? "The maintainer has proposed a team. Waiting for MultiAgency to approve it."
+        : "The deposit arrived and the maintainer has proposed a team. Waiting for MultiAgency to approve it."
+      : board
+        ? "The job is open from the board. MultiAgency is putting the team together."
+        : "The deposit arrived. MultiAgency is putting the team together.";
+    case "accepting": return board
+      ? "All the work is signed off. Nobody was paid: this job's tasks were volunteer work."
+      : "All the work is signed off. MultiAgency is proposing each payout to the DAO.";
+    case "paying": return board
+      ? "The work is done. Nobody was paid: this job's tasks were volunteer work."
+      : "Each payout is waiting for a DAO approver to vote for it.";
   }
   const open = e.members.find(m => m.state === "open");
   if (!open.claimedBy.length) return `Waiting for someone to take on “${open.title}”.`;
@@ -620,6 +638,9 @@ function resultSection(result, e) {
 
 function moneyStrip(e) {
   const total = Number(e.totals.deposit);
+  // A job opened from the board has no deposit to split, so no strip: its
+  // tasks are volunteer work, and the trail above already says so.
+  if (!total) return "";
   const part = amount => `${(Number(amount) / total) * 100}%`;
   // The strip is the deposit's allocation, so volunteer tasks, which carry no
   // money, are not on it; each is listed below with its work.
@@ -648,10 +669,16 @@ async function renderEngagement(owner, number) {
   const stages = ["assembling", "working", "accepting", "paying", "complete"];
   const current = stages.indexOf(e.stage);
   const deposit = e.engagement.deposit;
+  // A job opened from the board has no deposit to trail: its first stop says so.
+  const depositStop = deposit.link
+    ? html`<div class="stop-head"><h3>Deposit from ${account(e.engagement.org)}</h3><span class="flow">+${usdc(deposit.amount)} USDC</span></div>
+        <ul class="facts"><li class="ok">Final on chain (<a href="${deposit.link}">transaction</a>)</li></ul>`
+    : html`<div class="stop-head"><h3>Opened by ${account(e.engagement.org)}</h3></div>
+        <ul class="facts"><li>From the board, with no deposit: its tasks are volunteer work.</li></ul>`;
   if (!paint(owner, html`
     <article class="engagement">
       <h1>${e.title}</h1>
-      <p class="who">For ${accountLink(e.engagement.org)}; the deposit is held by the MultiAgency DAO, ${accountLink(deposit.treasury)}. ${e.engagement.repo ? html`Code delivers to <a href="${`https://github.com/${e.engagement.repo}`}">${e.engagement.repo}</a>. ` : ""}<a href="${e.url}">This job on the board</a></p>
+      <p class="who">For ${e.engagement.channel === "board" ? html`<a href="${`https://github.com/${e.engagement.org}`}">@${e.engagement.org}</a>` : accountLink(e.engagement.org)}; ${deposit.link ? html`the deposit is held by the MultiAgency DAO, ${accountLink(deposit.treasury)}. ` : ""}${e.engagement.repo ? html`Code delivers to <a href="${`https://github.com/${e.engagement.repo}`}">${e.engagement.repo}</a>. ` : ""}<a href="${e.url}">This job on the board</a></p>
       <ol class="stages">${stages.map((s, i) => html`
         <li class="${i < current || e.stage === "complete" ? "done" : ""}" ${i === current ? html`aria-current="step"` : ""}>${stageName(s)}</li>`)}</ol>
       <p class="now ${e.stage}" role="status">${nowLine(e, relay)}</p>
@@ -666,8 +693,7 @@ async function renderEngagement(owner, number) {
         <summary>Details: each task, its deliverable and its payment</summary>
       <ol class="trail">
         <li class="stop">
-          <div class="stop-head"><h3>Deposit from ${account(e.engagement.org)}</h3><span class="flow">+${usdc(deposit.amount)} USDC</span></div>
-          <ul class="facts"><li class="ok">Final on chain (<a href="${deposit.link}">transaction</a>)</li></ul>
+          ${depositStop}
         </li>
         ${e.stage === "assembling" ? html`<li class="stop"><div class="stop-head"><h3>Drafting the team</h3></div>
           <ul class="facts">

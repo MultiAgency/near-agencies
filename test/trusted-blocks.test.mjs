@@ -9,6 +9,7 @@ const { loadEngagement } = await import("../lib/engagement-state.mjs");
 // whose bot is multi-agency and whose only owner is jlwaugh.
 const epic = {
   number: 1, title: "Job: A job", state: "open", html_url: "https://github.com/x/y/issues/1",
+  user: { login: "multi-agency" },
   body: ["Brief", "", fence("engagement", { org: "org.testnet", deposit: { amount: "3000000", transaction: "tx" } }), "",
     fence("team", { committed: "1000000", members: [{ issue: 2, amount: "1000000" }] })].join("\n"),
 };

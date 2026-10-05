@@ -9,6 +9,9 @@ process.env.GITHUB_TOKEN ??= "test-token";
 // The sweep's proposing gate (lib/coordinator.mjs) reads this; without a
 // proposer it skips the checks the volunteer-edit test below is about.
 process.env.PROPOSER_ACCOUNT ??= "proposer.testnet";
+// payout.mjs runs in-process below (the terminal approve's refusal) and
+// refuses to start without the board bot's login spelled out.
+process.env.BOARD_BOT ??= "multi-agency";
 
 const member = (issue, overrides = {}) => ({
   issue,
@@ -395,6 +398,7 @@ describe("filing proposals and closing a job", async () => {
     number: 28,
     title: "Job: Write the guide",
     state: "open",
+    user: { login: "multi-agency" },
     labels: [{ name: "blocked" }, { name: "engagement" }],
     html_url: "https://github.com/MultiAgency/kanban-sandbox/issues/28",
     body: [
