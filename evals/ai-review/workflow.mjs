@@ -24,15 +24,22 @@ export function literalBlock(lines, key, from = 0) {
   throw new Error(`no "${key}: |" block in the workflow`);
 }
 
-/** The prompt, the claude_args and the Earlier rounds step's script. */
+/** The run script of the step named `name`. */
+function stepScript(lines, name) {
+  const step = lines.findIndex(l => new RegExp(`^\\s*- name: ${name}\\s*$`).test(l));
+  if (step === -1) throw new Error(`no "${name}" step in the workflow`);
+  return literalBlock(lines, "run", step);
+}
+
+/** The prompt, the claude_args, and the scripts of the steps around the
+ * review: "Earlier rounds" (its memory) and "Verdict" (what the gate reads). */
 export function reviewConfig(text) {
   const lines = text.split("\n");
-  const step = lines.findIndex(l => /^\s*- name: Earlier rounds\s*$/.test(l));
-  if (step === -1) throw new Error('no "Earlier rounds" step in the workflow');
   return {
     prompt: literalBlock(lines, "prompt"),
     claudeArgs: literalBlock(lines, "claude_args"),
-    earlierRounds: literalBlock(lines, "run", step),
+    earlierRounds: stepScript(lines, "Earlier rounds"),
+    verdict: stepScript(lines, "Verdict"),
   };
 }
 

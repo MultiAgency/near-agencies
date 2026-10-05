@@ -15,6 +15,7 @@ describe("the ai-review evals read the workflow itself", () => {
     assert.match(config.prompt, /ai-review-ledger/);
     assert.ok(splitArgs(config.claudeArgs).includes("--allowedTools"));
     assert.match(config.earlierRounds, /ledger\.json/);
+    assert.match(config.verdict, /HEAD_SHA/);
   });
 
   test("the evals know every expression the prompt uses, and refuse an unknown one", () => {
@@ -60,15 +61,26 @@ describe("what an eval run is judged on", () => {
   });
 
   test("no verdict, no summary, or a findings list for another head fails the contract", () => {
-    assert.ok(failed({ ...good, verdict: null }).includes("verdict.json counts Important findings"));
+    assert.ok(failed({ ...good, verdict: null }).includes("the Verdict step left a verdict for this head"));
+    assert.ok(failed({ ...good, verdict: { sha: "ffff", important: 0 } }).includes("the Verdict step left a verdict for this head"));
     assert.ok(failed({ ...good, summary: "" }).includes("a summary was posted"));
     assert.ok(failed({ ...good, summary: summary({ sha: "ffff", findings: [] }) }).includes("the summary ends with a findings list for this head"));
+    assert.ok(failed({ ...good, summary: summary({ sha: "", findings: [] }) }).includes("the summary ends with a findings list for this head"));
+  });
+
+  test("a malformed inline comments file fails the contract without aborting the checks", () => {
+    assert.deepEqual(failed({ ...good, inline: { path: "a" } }), ["the inline comments file is an array"]);
+    assert.deepEqual(failed({ ...good, inline: [{ path: "a.mjs" }, "text", null] }, { mustNotRaise: [{ path: "a.mjs", word: "x" }] }), []);
+  });
+
+  test("with no verdict, an Important count check fails rather than passing on null", () => {
+    assert.ok(failed({ ...good, verdict: null }, { importantMax: 0 }).includes("at most 0 Important"));
   });
 
   test("behavior checks: counts, a flagged range, nothing re-raised, a finding's status", () => {
     const run = {
       ...good,
-      verdict: { important: 1 },
+      verdict: { sha: head, important: 1 },
       inline: [{ path: "s.mjs", line: 72, body: "Bugs, Important: the artifacts response object" }],
     };
     assert.deepEqual(failed(run, { importantMin: 1, mustFlag: [{ path: "s.mjs", from: 65, to: 80, what: "x" }] }), []);

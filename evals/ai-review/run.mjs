@@ -1,13 +1,15 @@
 #!/usr/bin/env node
-// Runs ai-review, exactly as .github/workflows/ai-review.yml configures it,
-// on recorded pull requests, and checks what it does. Each case in cases/
-// is one review round: the pull request's base tree with this checkout's
-// REVIEW.md, AGENTS.md, CLAUDE.md and docs/decisions.md laid over it (the
-// configuration under test), the diff and description, and the earlier
-// rounds' comments, which the workflow's own "Earlier rounds" script turns
-// into the reviewer's memory. gh is a stub (gh-stub.mjs). The one change to
-// the review: the inline-comment tool exists only inside the GitHub action,
-// so the eval asks for those comments in a file instead.
+// Runs ai-review, as .github/workflows/ai-review.yml configures it, on
+// recorded pull requests, and checks what it does. Each case in cases/ is
+// one review round: the pull request's base tree with this checkout's
+// REVIEW.md, AGENTS.md, CLAUDE.md, docs/decisions.md and .claude/ laid over
+// it (the configuration under test), the diff and description, and the
+// earlier rounds' comments, which the workflow's own "Earlier rounds" script
+// turns into the reviewer's memory. After the review, the workflow's own
+// "Verdict" script rewrites verdict.json as the gate reads it. gh is a stub
+// (gh-stub.mjs). The one change to the review: the inline-comment tool
+// exists only inside the GitHub action, so the eval asks for those comments
+// in a file instead.
 //
 //   node evals/ai-review/run.mjs [case ...] [--keep]
 //
@@ -48,8 +50,11 @@ for (const name of cases) {
   mkdirSync(out);
   mkdirSync(bin);
   try {
-    execFileSync("bash", ["-c", `git -C "${root}" archive ${spec.base} | tar -x -C "${ws}"`]);
+    if (!/^[0-9a-f]{40}$/.test(spec.base)) throw new Error(`${name}: base must be a full commit SHA`);
+    execFileSync("tar", ["-x", "-C", ws], { input: execFileSync("git", ["-C", root, "archive", spec.base], { maxBuffer: 1 << 28 }) });
     for (const file of CONFIG) if (existsSync(join(root, file))) cpSync(join(root, file), join(ws, file));
+    rmSync(join(ws, ".claude"), { recursive: true, force: true });
+    if (existsSync(join(root, ".claude"))) cpSync(join(root, ".claude"), join(ws, ".claude"), { recursive: true });
     writeFileSync(join(bin, "gh"), `#!/bin/sh\nexec node "${join(here, "gh-stub.mjs")}" "$@"\n`, { mode: 0o755 });
     const env = {
       ...process.env, PATH: `${bin}:${process.env.PATH}`, EVAL_CASE: dir, EVAL_OUT: out,
@@ -75,12 +80,15 @@ for (const name of cases) {
       }
     };
     const read = (file, parse) => attempt(() => parse(readFileSync(file, "utf8")));
+    // The workflow's Verdict step: the event's SHA and a count that parses,
+    // or no file at all.
+    spawnSync("bash", ["-c", config.verdict], { cwd: ws, env, stdio: "ignore" });
     const run = {
       head: spec.head,
       result: attempt(() => JSON.parse(ran.stdout)),
       verdict: read(join(ws, "verdict.json"), JSON.parse),
       summary: read(join(out, "summary.md"), s => s),
-      inline: read(join(ws, INLINE), JSON.parse) ?? [],
+      inline: existsSync(join(ws, INLINE)) ? read(join(ws, INLINE), JSON.parse) : [],
     };
     cost += run.result?.total_cost_usd ?? 0;
     const results = checks(spec.expect, run);
