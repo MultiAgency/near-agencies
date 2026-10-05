@@ -121,6 +121,7 @@ async function decide(pr) {
   // (a deleted fork) reads as a fork, which fails the same check.
   const fork = pr.head?.repo?.full_name?.toLowerCase() !== repo;
   const verdict = await verdictFor(number);
+  const messages = await commitMessages(pr);
   const { outcome, reason } = stagingApproval({
     base: pr.base.ref,
     fork,
@@ -132,6 +133,8 @@ async function decide(pr) {
     test: testVerdict(test),
     verdict,
     sha,
+    body: pr.body ?? "",
+    messages,
   });
   console.log(`staging-approval ${outcome} on #${number} at ${sha}: ${reason}`);
   console.log(`  author @${author}, head ${pr.head?.repo?.full_name ?? "unknown"}, files ${paths.length}, teams: internal ${describe(internal)}, roster ${roster.status}, test ${testVerdict(test) ?? "missing"}, verdict ${verdict ? `from an ai-review run (${verdict.important} Important)` : "none"}`);
@@ -160,6 +163,7 @@ async function decide(pr) {
       `- @${pr.user?.login} is allowed to be approved in code;`,
       "- the `test` check passed;",
       `- @${REVIEWER} is the last matching CODEOWNERS rule for every changed file;`,
+      "- the pull request body and its commit messages carry no tool attribution;",
       "- the ai-review run for this head counts 0 Important findings.",
       "",
       "A push dismisses this approval (staging ruleset) and the next run decides again.",
@@ -190,6 +194,24 @@ async function changedFiles(pr) {
     }
   }
   throw new Error(`more than ${FILE_PAGES * 100} changed files on pull request #${pr.number}`);
+}
+
+// The pull request's commit messages, every page. GitHub lists at most 250
+// commits; a count that does not add up is a read that cannot be completed,
+// and it throws rather than judge commits nobody saw whole.
+async function commitMessages(pr) {
+  const found = [];
+  for (let page = 1; page <= 3; page++) {
+    const batch = await github("GET", `/pulls/${pr.number}/commits?per_page=100&page=${page}`);
+    found.push(...batch.map(c => c.commit?.message ?? ""));
+    if (batch.length < 100) {
+      if (found.length !== pr.commits) {
+        throw new Error(`pull request #${pr.number} has ${pr.commits} commits but only ${found.length} were read, so its commit messages cannot be judged whole`);
+      }
+      return found;
+    }
+  }
+  throw new Error(`more than 300 commits on pull request #${pr.number}`);
 }
 
 // Team `internal`'s members, as GitHub answers for it. Null when it cannot
