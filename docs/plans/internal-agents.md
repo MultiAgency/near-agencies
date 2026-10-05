@@ -46,7 +46,7 @@ Decided by the owner, 2026-10-02; the approval gate added 2026-10-04 (#77).
 
 **One CODEOWNERS file for both branches.** A release carries `staging`'s file into `main`, so the two branches must not differ. The rulesets carry the differences:
 - CODEOWNERS: `* @MultiAgency/internal @jlwaugh`; today's money and permission paths `@jlwaugh @MultiAgency/internal`; what steers agents and reviews — `/AGENTS.md`, `/CLAUDE.md`, `/REVIEW.md`, `/.claude/` — `@jlwaugh` only, like `/.github/`.
-- `staging` ruleset: PR required, code-owner review, **dismiss stale approvals on push** (otherwise an agent could push after a person approved and then merge what nobody reviewed), `test` required, the operator-approval check (item 7) required once built, no force pushes or deletion.
+- `staging` ruleset: PR required, code-owner review, **dismiss stale approvals on push** (otherwise an agent could push after a person approved and then merge what nobody reviewed), `test` required, the operator-approval check (item 7) required once someone other than the owner operates an agent (it runs on every staging PR since #125, not yet as a required check), no force pushes or deletion.
 - `main` ruleset: as today, including `update`, so only an org admin merges.
 - Team `internal`: internal **people** only, with write (a CODEOWNERS team needs write). Agents are in no team (owner decision, 2026-10-05): each gets write on its own account, and since CODEOWNERS vouches only the file's own logins, OWNER and team `internal`, an agent can merge but never counts as a reviewer — the roster says who they are.
 
@@ -61,8 +61,8 @@ Decided by the owner, 2026-10-02; the approval gate added 2026-10-04 (#77).
 
 **From the AI review of this plan** (2026-10-02):
 - Triage reaches the labels that gate claims (`agent-eligible`, `human-only`; `lib/seats.mjs:35-36`): to build (item 6) — those labels change only from the bot or an owner, and the coordinator restores any other change to them.
-- An internal person can approve their own agent's PR: to build (item 7) — an approval from the agent's `operator` doesn't count (roster lookup, the way `isTrusted` decides records).
-- A same-repo PR runs `ai-review.yml` from its merge commit, so a pushed edit to the workflow could read `ANTHROPIC_API_KEY` before anyone reviews it: accepted risk, owner to confirm.
+- An internal person can approve their own agent's PR: built (item 7, #93) — an approval from the agent's `operator` doesn't count (roster lookup, the way `isTrusted` decides records).
+- A same-repo PR runs `ai-review.yml` from its merge commit, so a pushed edit to the workflow could read `ANTHROPIC_API_KEY` before anyone reviews it: closed for `ai-review.yml` since #125, which runs it on `pull_request_target` from the base branch. `private-review.yml` (`NEARAI_API_KEY`) and `operator-approval.yml` (`ORG_TOKEN`) still run on `pull_request`, so a person with write who pushes an edit to either could read its secret before review; agent tokens can't edit workflows. Accepted risk, owner to confirm.
 
 ## Changes needed
 
@@ -74,7 +74,7 @@ Decided by the owner, 2026-10-02; the approval gate added 2026-10-04 (#77).
 4. **Maintainer template** — dropped 2026-10-04: the owner decided it stays in its Hermes profile. The board-maintainer skill and `board-changes.py` remain in `~/.hermes/profiles/maintainer/` on the owner's laptop, outside any repository.
 5. **agency-builder becomes the internal coder on its Railway worker** (`code` skill, `CODE_ACCESS=branch`). near-builder stays the outside rehearsal: we trust it, but it goes through the outside path on purpose.
 6. **The coordinator restores gate labels and reopens job epics.** It restores `agent-eligible`/`human-only` changed by anyone but the bot or an owner, and it reopens a job epic closed by anyone but the bot or an owner (a closed epic drops out of the payout sweep, `lib/coordinator.mjs:498`). Restoring a gate label after the fact races `/claim`, so the coordinator must also refuse a claim made while the label was set by anyone but the bot or an owner (check the label's latest `labeled` event actor), not only restore it.
-7. **A required check rejects an operator's approval of their own agent's PR** (#76). The ruleset counts an approval from the author agent's roster `operator`, so it needs a required check that fails a PR whose only approval is from that operator. The check must run on `pull_request_review` events too (`submitted` and `dismissed`), not only on `push` — on `push` alone it passes before any approval exists.
+7. **A required check rejects an operator's approval of their own agent's PR** (#76). Built in #93 and #112, running since #125; not yet required (see the `staging` ruleset above). The ruleset counts an approval from the author agent's roster `operator`, so it needs a required check that fails a PR whose only approval is from that operator. The check must run on `pull_request_review` events too (`submitted` and `dismissed`), not only on `push` — on `push` alone it passes before any approval exists.
 8. **The approval gate approves staging PRs in code, as @multai-builder** (#77). A same-repo PR by a person or one of our agents, with `test` green, a clean AI-review verdict for its head SHA, and every changed file on the gate's allowlist of low-risk paths in CODEOWNERS, gets @multai-builder's code-owner approval with no person in the loop; a push dismisses it, and the next run decides again.
 
 ## Open, owner to decide
