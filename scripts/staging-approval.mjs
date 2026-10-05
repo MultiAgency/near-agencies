@@ -8,6 +8,10 @@
 //                   GITHUB_TOKEN and ORG_TOKEN for lib/github.mjs, so reads
 //                   and the approving review all act as @multai-builder
 //   SANDBOX_REPO    the repository, for lib/github.mjs
+//   ROSTER_URL      the coordinator serving GET /api/roster/:login — with
+//                   roster.json at the base branch it answers who an author
+//                   is beyond team `internal`: a rostered agent counts when
+//                   their operator is in team `internal` (#109)
 //
 // The workflow starts from `workflow_run` after `ci` and `ai-review` finish,
 // and checks out the base branch: it never checks out or runs the pull
@@ -25,13 +29,16 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 
 import { github, orgApi } from "../lib/github.mjs";
+import { combineRoster, rosterFromApi, rosterRecord } from "../lib/operator-approval.mjs";
 import {
   BASE,
   REVIEWER,
   codeownersRules,
+  newestVerdictArtifact,
   openCandidates,
   stagingApproval,
   testVerdict,
+  verdictArtifactName,
   verdictArtifactNumbers,
   verdictFrom,
 } from "../lib/staging-approval.mjs";
@@ -40,16 +47,14 @@ const FILE_PAGES = 50;
 const FILE_MAX = 3000;
 const CHECK_PAGES = 10;
 const REVIEW_PAGES = 10;
-const RECENT_RUNS = 30;
-const VERDICT_ARTIFACT = "ai-review-verdict";
 const VERDICT_FILE = "verdict.json";
 const TEST_CHECK = "test";
-const AI_REVIEW_WORKFLOW = "ai-review.yml";
-// The teams behind CODEOWNERS' entries, as operator-approval reads them:
-// membership in `internal` allows the author outright, and membership in
-// `internal-agents` allows the agency's own agents.
+// The team behind CODEOWNERS' entry, as operator-approval reads it:
+// membership in `internal` allows an author outright (#109 — agents are in
+// no team; the roster, read beside it, says who they are).
 const INTERNAL_TEAM = "internal";
-const INTERNAL_AGENTS_TEAM = "internal-agents";
+// The workflow whose verdict artifacts name the pull requests they reviewed.
+const AI_REVIEW = "ai-review";
 
 try {
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH ?? "", "utf8"));
@@ -63,7 +68,7 @@ try {
   // places, and each pull request is judged on the head SHA it answers
   // with now, never on this run's.
   const commitPulls = await github("GET", `/commits/${sha}/pulls?per_page=100`);
-  const artifactNumbers = event.workflow_run.name === AI_REVIEW_WORKFLOW.replace(/\.yml$/, "")
+  const artifactNumbers = event.workflow_run.name === AI_REVIEW
     ? verdictArtifactNumbers(await github("GET", `/actions/runs/${event.workflow_run.id}/artifacts?per_page=100`))
     : [];
   const numbers = openCandidates(event.workflow_run.pull_requests, commitPulls, artifactNumbers);
@@ -95,28 +100,35 @@ try {
 async function decide(pr) {
   const number = pr.number;
   const sha = pr.head.sha;
+  const author = pr.user?.login;
   const repo = String(process.env.SANDBOX_REPO ?? "").toLowerCase();
   const org = repo.split("/")[0];
-  const [paths, internal, internalAgents, codeowners, test] = await Promise.all([
+  const [paths, internal, codeowners, test, builders, fromApi] = await Promise.all([
     changedFiles(pr),
     readTeam(org, INTERNAL_TEAM),
-    readTeam(org, INTERNAL_AGENTS_TEAM),
     textAtBase(".github/CODEOWNERS", pr.base.ref),
     latestTest(sha),
+    rosterAtBase(pr.base.ref),
+    rosterApi(author),
   ]);
   if (codeowners === null) {
     console.log(`staging-approval: CODEOWNERS could not be read at ${pr.base.ref}, so no file can be covered`);
   }
+  // The roster's two homes resolved as operator-approval resolves them: the
+  // coordinator's record wins when it has one, roster.json answers when the
+  // coordinator does not know the login, and neither readable fails closed
+  // in the verdict (lib/staging-approval.mjs).
+  const roster = combineRoster(builders ? rosterRecord(builders, author) : { status: "unreadable" }, fromApi);
   // head.repo is GitHub's own word for where the branch lives; a null one
   // (a deleted fork) reads as a fork, which fails the same check.
   const fork = pr.head?.repo?.full_name?.toLowerCase() !== repo;
-  const verdict = await verdictFor(sha, number, pr.head?.ref);
+  const verdict = await verdictFor(number);
   const { outcome, reason } = stagingApproval({
     base: pr.base.ref,
     fork,
-    author: pr.user?.login,
+    author,
     internal,
-    internalAgents,
+    roster,
     paths,
     rules: codeownersRules(codeowners ?? ""),
     test: testVerdict(test),
@@ -124,7 +136,7 @@ async function decide(pr) {
     sha,
   });
   console.log(`staging-approval ${outcome} on #${number} at ${sha}: ${reason}`);
-  console.log(`  author @${pr.user?.login}, head ${pr.head?.repo?.full_name ?? "unknown"}, files ${paths.length}, teams: internal ${describe(internal)}, internal-agents ${describe(internalAgents)}, test ${testVerdict(test) ?? "missing"}, verdict ${verdict ? `from an ai-review run (${verdict.important} Important)` : "none"}`);
+  console.log(`  author @${author}, head ${pr.head?.repo?.full_name ?? "unknown"}, files ${paths.length}, teams: internal ${describe(internal)}, roster ${roster.status}, test ${testVerdict(test) ?? "missing"}, verdict ${verdict ? `from an ai-review run (${verdict.important} Important)` : "none"}`);
   if (outcome !== "approve") return;
   // The reads above take time, and a push in between moves the head the
   // checks were judged on. The approval names one SHA: re-read the pull
@@ -182,11 +194,11 @@ async function changedFiles(pr) {
   throw new Error(`more than ${FILE_PAGES * 100} changed files on pull request #${pr.number}`);
 }
 
-// A team's members as GitHub answers for it. Team `internal` returning null
-// fails the approval closed (lib/staging-approval.mjs). Team
-// `internal-agents` does not exist yet: a 404 means nobody is in it, and any
-// other failure after one retry reads as nobody too — an unreadable team can
-// only ever keep an author out, never let one past.
+// Team `internal`'s members, as GitHub answers for it. Null when it cannot
+// be read — a failed read or a team that does not exist — which fails the
+// approval closed (lib/staging-approval.mjs): an unreadable team can only
+// ever keep an author out, never let one past. One retry, as the roster
+// read gets: runners share their egress with the rest of GitHub.
 async function readTeam(org, slug, tries = 2) {
   const path = slug => `/orgs/${encodeURIComponent(org)}/teams/${encodeURIComponent(slug)}/members?per_page=100&page=`;
   for (let attempt = 1; attempt <= tries; attempt++) {
@@ -199,19 +211,12 @@ async function readTeam(org, slug, tries = 2) {
       }
       throw new Error("more than 1000 members");
     } catch (error) {
-      if (String(error.message).includes(": 404 ")) {
-        // internal-agents does not exist yet: nobody is in it. internal
-        // missing is a read that failed — fail closed like any other.
-        if (slug === INTERNAL_TEAM) return null;
-        console.error(`team ${slug} does not exist, so nobody is in it`);
-        return [];
-      }
       if (attempt < tries) {
         await new Promise(resolve => setTimeout(resolve, 3000));
         continue;
       }
       console.error(`team ${slug} could not be read: ${error.message}`);
-      return slug === INTERNAL_TEAM ? null : [];
+      return null;
     }
   }
 }
@@ -227,6 +232,39 @@ async function textAtBase(path, ref) {
   }
 }
 
+// The roster as the base branch holds it — never the pull request's copy.
+// Null builders when the file cannot be read as one; combineRoster then
+// lets the coordinator's answer stand alone (lib/operator-approval.mjs).
+async function rosterAtBase(ref) {
+  try {
+    const parsed = JSON.parse(await textAtBase("roster.json", ref));
+    return Array.isArray(parsed?.builders) ? parsed.builders : null;
+  } catch {
+    return null;
+  }
+}
+
+// The coordinator's roster record for one login: roster.json as deployed,
+// plus members an owner admitted on the board, which the file alone does
+// not know. One retry on a rejected or throttled answer, as operator-approval's
+// read gets: a required decision should not turn on one 429.
+async function rosterApi(login, tries = 2) {
+  const url = `${process.env.ROSTER_URL ?? "https://demo.multiagency.ai"}/api/roster/${encodeURIComponent(login)}`;
+  for (let attempt = 1; attempt <= tries; attempt++) {
+    try {
+      const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(10_000) });
+      if (response.ok) return rosterFromApi(await response.json());
+      if (attempt < tries) {
+        const wait = Math.min(Number(response.headers.get("retry-after")) * 1000 || 3000, 10_000);
+        await new Promise(resolve => setTimeout(resolve, wait));
+      }
+    } catch {
+      if (attempt < tries) await new Promise(resolve => setTimeout(resolve, 3000));
+    }
+  }
+  return { status: "unreadable" };
+}
+
 // The `test` check's newest run for this exact head SHA, or null when none
 // ran: check ids only grow, so the largest id is the newest.
 async function latestTest(sha) {
@@ -239,34 +277,51 @@ async function latestTest(sha) {
   return null;
 }
 
-// The verdict for this head SHA, from the ai-review run's own artifact —
-// never from a comment. The artifact is named for the pull request it
-// reviewed (ai-review-verdict-<number>), so one pull request's verdict can
-// never decide another's. The newest ai-review run of this pull request's
-// own branch decides, whatever it left: one still running holds (its
-// verdict is coming), one that failed, was cancelled, or succeeded without
-// a verdict artifact holds, and only a succeeded one decides, through its
-// artifact — an older run's verdict never stands in, because the newer
-// review may be the one that found something. The run's head SHA is its
-// base branch's head, so the verdict counts only when the base branch
-// carries that commit: a run from a side branch's modified copy of the
-// workflow — even one a pull request to the base branch carries on its
-// head — decides nothing. Downloaded with `gh run download`, which unzips
-// the artifact GitHub stores.
-async function verdictFor(sha, number, branch) {
-  const name = `${VERDICT_ARTIFACT}-${number}`;
-  const runs = await github("GET", `/actions/workflows/${AI_REVIEW_WORKFLOW}/runs?event=pull_request_target&per_page=${RECENT_RUNS}`);
-  const run = (runs.workflow_runs ?? []).find(candidate => candidate.head_branch === branch);
-  if (!run) {
-    console.log(`staging-approval: no ai-review run has reviewed a branch named ${branch}`);
+// The verdict for this pull request, from the ai-review run's own artifact
+// — never from a comment, which a pull request can fake. Nothing a
+// workflow run reports names the pull request the run reviewed: a
+// `pull_request_target` run answers with the base branch as its head_branch
+// and head_sha, so the run is found through its verdict artifact, whose
+// name carries the pull request's number (ai-review-verdict-<number>) and
+// whose verdict.json carries the head SHA the review judged — compared
+// against the head SHA the pull request answers with now, in the verdict
+// (stagingApproval). The newest verdict artifact still held decides,
+// whatever run left it: a run still going holds (its verdict is coming),
+// one that failed, was cancelled, or succeeded without a verdict artifact
+// leaves nothing newer to trust, and only a succeeded run's artifact
+// decides — through a download with `gh run download`, which unzips the
+// artifact GitHub stores. The run's own head_sha is still read for one
+// check, the one about the run and not the pull request: its verdict
+// counts only when the base branch carries that commit, so a run from a
+// side branch's modified copy of the workflow — even one a pull request to
+// the base branch carries on its head — decides nothing.
+async function verdictFor(number) {
+  const name = verdictArtifactName(number);
+  let artifact = null;
+  try {
+    const listed = await github("GET", `/actions/artifacts?name=${encodeURIComponent(name)}&per_page=100`);
+    artifact = newestVerdictArtifact(listed.artifacts, number);
+  } catch (error) {
+    console.log(`staging-approval: the verdict artifacts for #${number} could not be read: ${error.message}`);
+    return null;
+  }
+  if (!artifact) {
+    console.log(`staging-approval: no ai-review run has left a verdict artifact for #${number}, so nothing is approved`);
+    return null;
+  }
+  let run = null;
+  try {
+    run = await github("GET", `/actions/runs/${artifact.workflow_run.id}`);
+  } catch (error) {
+    console.log(`staging-approval: the run behind #${number}'s verdict artifact could not be read: ${error.message}`);
     return null;
   }
   if (run.conclusion == null) {
-    console.log(`staging-approval: the ai-review run ${run.id} for branch ${branch} is still running, so #${number} waits for its verdict`);
+    console.log(`staging-approval: the ai-review run ${run.id} behind #${number}'s verdict is still running, so #${number} waits for it`);
     return null;
   }
   if (run.conclusion !== "success") {
-    console.log(`staging-approval: the newest ai-review run ${run.id} for branch ${branch} ended ${run.conclusion}, so nothing is approved`);
+    console.log(`staging-approval: the newest ai-review run ${run.id} with a verdict for #${number} ended ${run.conclusion}, so nothing is approved`);
     return null;
   }
   let offBase = `${BASE} does not carry ${run.head_sha}`;
@@ -278,11 +333,6 @@ async function verdictFor(sha, number, branch) {
   }
   if (offBase) {
     console.log(`staging-approval: ai-review run ${run.id} ran from a commit ${offBase}, so its verdict counts for nothing`);
-    return null;
-  }
-  const listed = await github("GET", `/actions/runs/${run.id}/artifacts?per_page=100`);
-  if (!(listed.artifacts ?? []).some(artifact => artifact.name === name && !artifact.expired)) {
-    console.log(`staging-approval: ai-review run ${run.id} left no verdict artifact for #${number}, so nothing is approved`);
     return null;
   }
   const dir = mkdtempSync(join(tmpdir(), "staging-approval-"));

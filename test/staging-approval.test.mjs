@@ -7,12 +7,14 @@ import {
   authorAllowed,
   codeownersMatches,
   codeownersRules,
+  newestVerdictArtifact,
   openCandidates,
   ownersForPath,
   reviewerCovers,
   stagingApproval,
   testVerdict,
   uncoveredPath,
+  verdictArtifactName,
   verdictArtifactNumbers,
   verdictFrom,
 } from "../lib/staging-approval.mjs";
@@ -35,7 +37,7 @@ const passing = (over = {}) => ({
   fork: false,
   author: "saadiqbal-dev",
   internal: ["saadiqbal-dev"],
-  internalAgents: [],
+  roster: { status: "absent" },
   paths: ["docs/setup.md", "lib/brief.mjs"],
   rules: rules(),
   test: "passed",
@@ -59,16 +61,45 @@ describe("stagingApproval", () => {
     assert.match(reason, /fork/);
   });
 
-  test("check 3: an author outside team internal, internal-agents and the agency account holds", () => {
+  test("check 3: an author outside team internal, the agency account and the roster holds", () => {
     const { outcome, reason } = stagingApproval(passing({ author: "drive-by", internal: ["saadiqbal-dev"] }));
     assert.equal(outcome, "hold");
-    assert.match(reason, /@drive-by is not in/);
+    assert.match(reason, /@drive-by is not in team internal/);
   });
 
   test("check 3: a team internal that cannot be read fails closed, whoever the author is", () => {
     const { outcome, reason } = stagingApproval(passing({ internal: null }));
     assert.equal(outcome, "hold");
     assert.match(reason, /internal could not be read/);
+  });
+
+  test("check 3: a rostered agent whose operator is in team internal passes", () => {
+    const agent = passing({ author: "agency-builder", internal: ["jlwaugh"], roster: { status: "record", kind: "agent", operator: "jlwaugh" } });
+    assert.equal(stagingApproval(agent).outcome, "approve");
+  });
+
+  test("check 3: a rostered agent whose operator is outside team internal holds", () => {
+    const { outcome, reason } = stagingApproval(passing({ author: "agency-builder", internal: ["saadiqbal-dev"], roster: { status: "record", kind: "agent", operator: "someone-else" } }));
+    assert.equal(outcome, "hold");
+    assert.match(reason, /@agency-builder is not in team internal/);
+  });
+
+  test("check 3: a rostered agent with no operator, or a record naming no kind, holds", () => {
+    for (const roster of [{ status: "record", kind: "agent", operator: null }, { status: "record", kind: null, operator: "jlwaugh" }]) {
+      const { outcome } = stagingApproval(passing({ author: "agency-builder", internal: ["saadiqbal-dev"], roster }));
+      assert.equal(outcome, "hold");
+    }
+  });
+
+  test("check 3: a roster that cannot be read fails closed for an author the team alone cannot allow", () => {
+    const { outcome, reason } = stagingApproval(passing({ author: "drive-by", internal: ["saadiqbal-dev"], roster: { status: "unreadable" } }));
+    assert.equal(outcome, "hold");
+    assert.match(reason, /roster could not be read/);
+  });
+
+  test("check 3: an unreadable roster does not hold an author team internal allows", () => {
+    const { outcome } = stagingApproval(passing({ roster: { status: "unreadable" } }));
+    assert.equal(outcome, "approve");
   });
 
   test("check 4: a test check that has not passed holds", () => {
@@ -129,11 +160,6 @@ describe("stagingApproval", () => {
     assert.equal(stagingApproval(passing({ paths: ["docs/new.md", "docs/old.md"] })).outcome, "approve");
   });
 
-  test("an author in internal-agents passes like one in internal", () => {
-    const agent = passing({ author: "agency-builder", internal: ["jlwaugh"], internalAgents: ["agency-builder"] });
-    assert.equal(stagingApproval(agent).outcome, "approve");
-  });
-
   test("a second allowlist line after the reviewer's keeps a file off the allowlist", () => {
     const overridden = codeownersRules(`${CODEOWNERS}\n/lib/brief.mjs          @jlwaugh @MultiAgency/internal`);
     const { outcome } = stagingApproval(passing({ rules: overridden }));
@@ -149,17 +175,27 @@ describe("stagingApproval", () => {
 });
 
 describe("authorAllowed", () => {
-  test("the three names the issue allows, case apart", () => {
+  test("the names the issue allows, case apart", () => {
     assert.equal(authorAllowed({ author: AGENCY }), true);
     assert.equal(authorAllowed({ author: "jlwaugh", internal: ["jlwaugh"] }), true);
-    assert.equal(authorAllowed({ author: "agency-builder", internalAgents: ["agency-builder"] }), true);
+    assert.equal(authorAllowed({ author: "agency-builder", internal: ["jlwaugh"], roster: { status: "record", kind: "agent", operator: "jlwaugh" } }), true);
     assert.equal(authorAllowed({ author: "JLWAUGH", internal: ["jlwaugh"] }), true);
   });
 
-  test("nobody else, and an unreadable team holds nobody in", () => {
+  test("nobody else, and an unreadable team or roster holds nobody in", () => {
     assert.equal(authorAllowed({ author: "stranger" }), false);
     assert.equal(authorAllowed({ author: "stranger", internal: null }), false);
-    assert.equal(authorAllowed({ author: "stranger", internalAgents: null }), false);
+    assert.equal(authorAllowed({ author: "stranger", roster: { status: "unreadable" } }), false);
+    assert.equal(authorAllowed({ author: "agency-builder", internal: ["jlwaugh"], roster: { status: "record", kind: "agent", operator: "someone-else" } }), false);
+    assert.equal(authorAllowed({ author: "agency-builder", internal: ["jlwaugh"], roster: { status: "record", kind: "agent", operator: null } }), false);
+    assert.equal(authorAllowed({ author: "agency-builder", internal: ["jlwaugh"], roster: { status: "record", kind: "human", operator: "jlwaugh" } }), false);
+    assert.equal(authorAllowed({ author: "agency-builder", internal: ["jlwaugh"], roster: { status: "absent" } }), false);
+  });
+
+  test("the roster answers for who the agent is, never for who answers for it", () => {
+    // The operator counts only as a member GitHub's own team read names;
+    // the roster pairing agent with operator is not itself the membership.
+    assert.equal(authorAllowed({ author: "agency-builder", internal: [], roster: { status: "record", kind: "agent", operator: "jlwaugh" } }), false);
   });
 });
 
@@ -185,6 +221,39 @@ describe("verdictArtifactNumbers", () => {
     );
     assert.deepEqual(verdictArtifactNumbers([]), []);
     assert.deepEqual(verdictArtifactNumbers(null), []);
+  });
+});
+
+describe("newestVerdictArtifact", () => {
+  test("the newest artifact still held and named for the pull request decides", () => {
+    const artifacts = [
+      { id: 31, name: "ai-review-verdict-108", expired: false, workflow_run: { id: 901 } },
+      { id: 30, name: "ai-review-verdict-108", expired: false, workflow_run: { id: 900 } },
+      { id: 29, name: "ai-review-verdict-12", expired: false, workflow_run: { id: 899 } },
+      { id: 28, name: "ai-review-verdict-108", expired: true, workflow_run: { id: 898 } },
+      { id: 27, name: "other", expired: false, workflow_run: { id: 897 } },
+      { name: "ai-review-verdict-108" },
+    ];
+    assert.equal(newestVerdictArtifact(artifacts, 108)?.workflow_run?.id, 901);
+    assert.equal(newestVerdictArtifact(artifacts, 12)?.workflow_run?.id, 899);
+    assert.deepEqual(verdictArtifactName(108), "ai-review-verdict-108");
+  });
+
+  test("a pull_request_target run's head_branch names the base branch, and the artifact decides anyway", () => {
+    // GitHub answers a pull_request_target run with head_branch "staging"
+    // and staging's head as its head_sha, so nothing the run reports names
+    // the pull request it reviewed. The artifact's name ties the verdict to
+    // #108, and the run behind it is read from the artifact itself.
+    const found = newestVerdictArtifact([{ id: 31, name: "ai-review-verdict-108", expired: false, workflow_run: { id: 901 } }], 108);
+    assert.equal(found.workflow_run.id, 901);
+  });
+
+  test("nothing held, nothing named for the pull request, or no run behind it, is no artifact", () => {
+    assert.equal(newestVerdictArtifact([], 108), null);
+    assert.equal(newestVerdictArtifact(null, 108), null);
+    assert.equal(newestVerdictArtifact([{ id: 31, name: "ai-review-verdict-108", expired: true, workflow_run: { id: 901 } }], 108), null);
+    assert.equal(newestVerdictArtifact([{ id: 31, name: "ai-review-verdict-108", expired: false }], 108), null);
+    assert.equal(newestVerdictArtifact([{ id: 31, name: "ai-review-verdict-12", expired: false, workflow_run: { id: 901 } }], 108), null);
   });
 });
 
