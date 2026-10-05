@@ -744,9 +744,12 @@ describe("the registry backfill", () => {
       20: { state: "closed", state_reason: "not_planned", closed_at: "2026-10-02T00:00:00.000Z" },
       22: { state: "closed", state_reason: "duplicate", closed_at: "2026-10-03T00:00:00.000Z" },
       23: { state: "closed", state_reason: "completed", closed_at: "2026-10-03T09:00:00.000Z" },
-      // The joiner's reopen-and-closeagain after the owner's close: the
+      // The joiner's reopen-and-close-again after the owner's close: the
       // issue's own closed_at is the stranger's, the admission is not.
       24: { state: "closed", state_reason: "completed", closed_at: "2026-10-03T23:00:00.000Z" },
+      // The reverse: the owner's refusal stands even after the joiner has
+      // closed the issue as completed since.
+      25: { state: "closed", state_reason: "completed", closed_at: "2026-10-04T09:00:00.000Z" },
     };
     const events = {
       18: [{ event: "closed", actor: { login: "multi-agency" }, created_at: closed }],
@@ -759,6 +762,13 @@ describe("the registry backfill", () => {
         { event: "closed", actor: { login: "multi-agency" }, created_at: "2026-10-02T08:00:00.000Z" },
         { event: "reopened", actor: { login: "self-closer" }, created_at: "2026-10-03T22:00:00.000Z" },
         { event: "closed", actor: { login: "self-closer" }, created_at: "2026-10-03T23:00:00.000Z" },
+      ],
+      // As GitHub records it: a refusal carries its reason on the event; a
+      // completed close's event carries none.
+      25: [
+        { event: "closed", actor: { login: "multi-agency" }, created_at: "2026-10-03T08:00:00.000Z", state_reason: "not_planned" },
+        { event: "reopened", actor: { login: "self-closer" }, created_at: "2026-10-04T08:00:00.000Z" },
+        { event: "closed", actor: { login: "self-closer" }, created_at: "2026-10-04T09:00:00.000Z", state_reason: "completed" },
       ],
     };
     const reads = [];
@@ -782,13 +792,14 @@ describe("the registry backfill", () => {
       rosterRecord("doubled", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/22" }),
       rosterRecord("selfclosed", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/23" }),
       rosterRecord("redated", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/24" }),
+      rosterRecord("overruled", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/25" }),
       rosterRecord("own-stamp", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/18", admittedAt: "2026-10-01T00:00:00.000Z" }),
       rosterRecord("elsewhere", { proof: "https://github.com/MultiAgency/near-agencies/issues/55" }),
     ], {
       commitFor: () => ({ url: "https://github.com/MultiAgency/near-agencies/commit/def", date: "2026-09-29T00:00:00.000Z", sha: "def" }),
       joinIssueAdmission,
     });
-    assert.deepEqual(reads, ["18", "19", "20", "22", "23", "24"], "only records without their own stamp have their board join issue read — own-stamp's and elsewhere's proof is no unread board join issue");
+    assert.deepEqual(reads, ["18", "19", "20", "22", "23", "24", "25"], "only records without their own stamp have their board join issue read — own-stamp's and elsewhere's proof is no unread board join issue");
     assert.deepEqual(writes.map(w => w.login), ["dated", "redated", "own-stamp", "elsewhere"]);
     assert.equal(writes[0].proof.from, "record", "the join issue stays the proof");
     assert.equal(writes[0].admittedAt.value, closed, "the stamp is the board's close of the issue");
@@ -799,11 +810,12 @@ describe("the registry backfill", () => {
     assert.equal(writes[3].proof.from, "record", "a proof outside the board repo is kept");
     assert.equal(writes[3].admittedAt.value, "2026-09-29T00:00:00.000Z", "its stamp is the commit fallback's, the path rob-agent's stamp once exercised end to end");
     assert.equal(writes[3].admittedAt.from, "commit");
-    assert.equal(problems.length, 4);
+    assert.equal(problems.length, 5);
     assert.match(problems[0], /waiting: no admission date — its join issue \(#19\) is still open — not written/);
     assert.match(problems[1], /refused: no admission date — its join issue \(#20\) was closed as not planned — not written/);
     assert.match(problems[2], /doubled: no admission date — its join issue \(#22\) was closed as duplicate — not written/, "the problem names the close's actual reason, not assumed not-planned");
     assert.match(problems[3], /selfclosed: no admission date — its join issue \(#23\) was last closed by @self-closer, not the board or an owner — not written/, "a close the joiner made themselves admits nobody");
+    assert.match(problems[4], /overruled: no admission date — its join issue \(#25\) was closed as not planned — not written/, "the owner's refusal stands; the joiner's later completed close dates nothing");
   });
 
   test("a join issue the board cannot answer about is a reported problem, not a crash", async () => {

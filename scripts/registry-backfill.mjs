@@ -271,8 +271,16 @@ export async function joinIssueAdmission(number) {
   if (!admitted) {
     return { why: last ? `was last closed by @${last.actor.login}, not the board or an owner` : "has no close the board records" };
   }
-  if (joined.state_reason !== "completed") {
-    return { why: joined.state_reason ? `was closed as ${joined.state_reason.replaceAll("_", " ")}` : "was closed without a stated reason" };
+  // The reason belongs to the close that would date the admission — the
+  // board's or the owner's — not to the issue's current one, which is the
+  // latest close's, possibly the joiner's. GitHub records it on the event
+  // when it refuses (not planned); for a completed close it reads null, and
+  // the issue's own state_reason says completed unless someone has closed
+  // it differently since — in which case the record stays unwritten, which
+  // is the honest side to err on.
+  const reason = admitted.state_reason ?? joined.state_reason;
+  if (reason !== "completed") {
+    return { why: reason ? `was closed as ${reason.replaceAll("_", " ")}` : "was closed without a stated reason" };
   }
   if (!admitted.created_at) return { why: "was closed without a date GitHub reports" };
   return { at: admitted.created_at };
