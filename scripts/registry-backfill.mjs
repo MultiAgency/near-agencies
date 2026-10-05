@@ -26,8 +26,9 @@
 //   logins lowercased;
 // - `status: "admitted"` needs a proof and a date: a record with a join issue
 //   keeps its join issue URL, and takes its admission date from that issue —
-//   the coordinator admitting the member is what closed it as completed —
-//   when the record carries no stamp of its own; an older roster.json entry
+//   the close of it the board or an owner made, which is the coordinator
+//   admitting the member — when the record carries no stamp of its own; an
+//   older roster.json entry
 //   with no join issue uses the GitHub URL of the commit that added it to
 //   roster.json as both proofUrl and the account proof, and that commit's
 //   date as admittedAt. No signature is ever invented: an entry nothing can
@@ -45,10 +46,11 @@
 // is written; it needs no token. Nothing here reads or prints the token.
 import { execFileSync } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { basename, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { issue, repoUrl } from "../lib/github.mjs";
+import { allEvents } from "../lib/guard.mjs";
+import { isTrusted, issue, repoUrl } from "../lib/github.mjs";
 import { KINDS } from "../lib/onboarding.mjs";
 import { network } from "../lib/network.mjs";
 import { putMember, putMemberBody, rosterStoreFiles } from "../lib/roster.mjs";
@@ -245,19 +247,35 @@ export const joinIssueOf = proof => {
 };
 
 /**
- * The admission a join issue records: when the coordinator closed it as
- * completed — the moment they admitted the member. An issue still open, or
- * closed as not planned, admits nobody; an issue the board cannot answer
- * about throws, and the caller reports the record rather than guessing.
+ * The admission a join issue records: the issue's last close by the board or
+ * an owner — the coordinator admitting the member — and when it happened.
+ * Not the issue's own `closed_at`: the joiner opened the issue and can close
+ * it again whenever they like, and `closed_at` is always the latest close,
+ * theirs included. This reads the close events the way `closeVerified` does
+ * (lib/guard.mjs), and reports an issue whose closes are all strangers', or
+ * that was closed as not planned. An issue the board cannot answer about
+ * throws, and the caller reports the record rather than guessing.
  */
 export async function joinIssueAdmission(number) {
   const joined = await issue(number);
   if (joined.state !== "closed") return { why: "is still open" };
+  const closes = (await allEvents(number)).filter(e => e?.event === "closed" && e?.actor?.login);
+  const last = closes.at(-1);
+  let admitted = null;
+  for (let i = closes.length - 1; i >= 0; i--) {
+    if (await isTrusted(closes[i].actor.login)) {
+      admitted = closes[i];
+      break;
+    }
+  }
+  if (!admitted) {
+    return { why: last ? `was last closed by @${last.actor.login}, not the board or an owner` : "has no close the board records" };
+  }
   if (joined.state_reason !== "completed") {
     return { why: joined.state_reason ? `was closed as ${joined.state_reason.replaceAll("_", " ")}` : "was closed without a stated reason" };
   }
-  if (!joined.closed_at) return { why: "was closed without a date GitHub reports" };
-  return { at: joined.closed_at };
+  if (!admitted.created_at) return { why: "was closed without a date GitHub reports" };
+  return { at: admitted.created_at };
 }
 
 // --- the plan ----------------------------------------------------------------
@@ -342,7 +360,7 @@ export async function planWrites(members, { commitFor, joinIssueAdmission: admis
       }
       if (!proof) {
         if (!commit.url) {
-          problems.push(`${login}: no join issue on the record, and the commit that added it (${commit.sha.slice(0, 12)}) has no GitHub URL to prove it — not written`);
+          problems.push(`${login}: no proof on the record, and the commit that added it (${commit.sha.slice(0, 12)}) has no GitHub URL to prove it — not written`);
           continue;
         }
         proof = { value: commit.url, from: "commit" };
@@ -445,6 +463,15 @@ async function main() {
     console.error("--admitted-store and --no-admitted-store contradict each other: give the store's path, or say this host has none — not both.");
     process.exitCode = 1;
     return;
+  }
+  if (admittedStoreArg !== undefined) {
+    const name = basename(admittedStoreArg);
+    const wanted = `roster-admitted.${network.networkId}.json`;
+    if (name !== wanted) {
+      console.error(`--admitted-store names ${name}, not ${wanted}: the file name is what ties a store to its network, and this run writes ${network.networkId} — a store of another network would write members it never admitted.`);
+      process.exitCode = 1;
+      return;
+    }
   }
   if (!REGISTRY_URL) {
     console.error("REGISTRY_URL is not set: nowhere to write. Set it (and REGISTRY_TOKEN, to write).");

@@ -743,38 +743,67 @@ describe("the registry backfill", () => {
       19: { state: "open", state_reason: null, closed_at: null },
       20: { state: "closed", state_reason: "not_planned", closed_at: "2026-10-02T00:00:00.000Z" },
       22: { state: "closed", state_reason: "duplicate", closed_at: "2026-10-03T00:00:00.000Z" },
+      23: { state: "closed", state_reason: "completed", closed_at: "2026-10-03T09:00:00.000Z" },
+      // The joiner's reopen-and-closeagain after the owner's close: the
+      // issue's own closed_at is the stranger's, the admission is not.
+      24: { state: "closed", state_reason: "completed", closed_at: "2026-10-03T23:00:00.000Z" },
+    };
+    const events = {
+      18: [{ event: "closed", actor: { login: "multi-agency" }, created_at: closed }],
+      20: [{ event: "closed", actor: { login: "multi-agency" }, created_at: "2026-10-02T00:00:00.000Z" }],
+      22: [{ event: "closed", actor: { login: "multi-agency" }, created_at: "2026-10-03T00:00:00.000Z" }],
+      23: [{ event: "closed", actor: { login: "self-closer" }, created_at: "2026-10-03T09:00:00.000Z" }],
+      24: [
+        { event: "closed", actor: { login: "self-closer" }, created_at: "2026-10-01T00:00:00.000Z" },
+        { event: "reopened", actor: { login: "self-closer" }, created_at: "2026-10-01T01:00:00.000Z" },
+        { event: "closed", actor: { login: "multi-agency" }, created_at: "2026-10-02T08:00:00.000Z" },
+        { event: "reopened", actor: { login: "self-closer" }, created_at: "2026-10-03T22:00:00.000Z" },
+        { event: "closed", actor: { login: "self-closer" }, created_at: "2026-10-03T23:00:00.000Z" },
+      ],
     };
     const reads = [];
     globalThis.fetch = async url => {
-      const match = String(url).match(/^https:\/\/api\.github\.com\/repos\/MultiAgency\/kanban-sandbox\/issues\/(\d+)$/);
-      if (!match) throw new Error(`unexpected fetch: ${url}`);
-      reads.push(match[1]);
-      return new Response(JSON.stringify(issues[match[1]] ?? {}), { status: 200, headers: { "content-type": "application/json" } });
+      const u = String(url);
+      const issues_ = u.match(/^https:\/\/api\.github\.com\/repos\/MultiAgency\/kanban-sandbox\/issues\/(\d+)$/);
+      const events_ = u.match(/^https:\/\/api\.github\.com\/repos\/MultiAgency\/kanban-sandbox\/issues\/(\d+)\/events\?/);
+      if (issues_) {
+        reads.push(issues_[1]);
+        return new Response(JSON.stringify(issues[issues_[1]] ?? {}), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (events_) return new Response(JSON.stringify(events[events_[1]] ?? []), { status: 200, headers: { "content-type": "application/json" } });
+      if (u === "https://api.github.com/user") return new Response(JSON.stringify({ login: "multi-agency" }), { status: 200, headers: { "content-type": "application/json" } });
+      if (u.includes("/collaborators/self-closer/permission")) return new Response(JSON.stringify({ role_name: "read" }), { status: 200, headers: { "content-type": "application/json" } });
+      throw new Error(`unexpected fetch: ${url}`);
     };
     const { writes, problems } = await planWrites([
       rosterRecord("dated", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/18" }),
       rosterRecord("waiting", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/19" }),
       rosterRecord("refused", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/20" }),
       rosterRecord("doubled", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/22" }),
+      rosterRecord("selfclosed", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/23" }),
+      rosterRecord("redated", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/24" }),
       rosterRecord("own-stamp", { proof: "https://github.com/MultiAgency/kanban-sandbox/issues/18", admittedAt: "2026-10-01T00:00:00.000Z" }),
       rosterRecord("elsewhere", { proof: "https://github.com/MultiAgency/near-agencies/issues/55" }),
     ], {
       commitFor: () => ({ url: "https://github.com/MultiAgency/near-agencies/commit/def", date: "2026-09-29T00:00:00.000Z", sha: "def" }),
       joinIssueAdmission,
     });
-    assert.deepEqual(reads, ["18", "19", "20", "22"], "only records without their own stamp have their board join issue read — own-stamp's and elsewhere's proof is no unread board join issue");
-    assert.deepEqual(writes.map(w => w.login), ["dated", "own-stamp", "elsewhere"]);
+    assert.deepEqual(reads, ["18", "19", "20", "22", "23", "24"], "only records without their own stamp have their board join issue read — own-stamp's and elsewhere's proof is no unread board join issue");
+    assert.deepEqual(writes.map(w => w.login), ["dated", "redated", "own-stamp", "elsewhere"]);
     assert.equal(writes[0].proof.from, "record", "the join issue stays the proof");
-    assert.equal(writes[0].admittedAt.value, closed, "the stamp is the issue's close as completed");
+    assert.equal(writes[0].admittedAt.value, closed, "the stamp is the board's close of the issue");
     assert.equal(writes[0].admittedAt.from, "join issue");
-    assert.equal(writes[1].admittedAt.from, "record", "a record with its own stamp keeps it");
-    assert.equal(writes[2].proof.from, "record", "a proof outside the board repo is kept");
-    assert.equal(writes[2].admittedAt.value, "2026-09-29T00:00:00.000Z", "its stamp is the commit fallback's, the path rob-agent's stamp once exercised end to end");
-    assert.equal(writes[2].admittedAt.from, "commit");
-    assert.equal(problems.length, 3);
+    assert.equal(writes[1].admittedAt.value, "2026-10-02T08:00:00.000Z", "the stamp is the last close the board or an owner made, however the joiner re-closed it since");
+    assert.equal(writes[1].admittedAt.from, "join issue");
+    assert.equal(writes[2].admittedAt.from, "record", "a record with its own stamp keeps it");
+    assert.equal(writes[3].proof.from, "record", "a proof outside the board repo is kept");
+    assert.equal(writes[3].admittedAt.value, "2026-09-29T00:00:00.000Z", "its stamp is the commit fallback's, the path rob-agent's stamp once exercised end to end");
+    assert.equal(writes[3].admittedAt.from, "commit");
+    assert.equal(problems.length, 4);
     assert.match(problems[0], /waiting: no admission date — its join issue \(#19\) is still open — not written/);
     assert.match(problems[1], /refused: no admission date — its join issue \(#20\) was closed as not planned — not written/);
     assert.match(problems[2], /doubled: no admission date — its join issue \(#22\) was closed as duplicate — not written/, "the problem names the close's actual reason, not assumed not-planned");
+    assert.match(problems[3], /selfclosed: no admission date — its join issue \(#23\) was last closed by @self-closer, not the board or an owner — not written/, "a close the joiner made themselves admits nobody");
   });
 
   test("a join issue the board cannot answer about is a reported problem, not a crash", async () => {
@@ -796,7 +825,7 @@ describe("the registry backfill", () => {
       proof: "https://github.com/MultiAgency/near-agencies/issues/55",
       admittedAt: "2026-10-01T00:00:00.000Z",
     })] }));
-    const copy = join(repo, "staging-admitted.json"); // a copy of the coordinator's store
+    const copy = join(repo, "roster-admitted.testnet.json"); // a copy of the coordinator's store, its name intact
     writeFileSync(copy, JSON.stringify({ builders: [rosterRecord("boardmate", {
       proof: "https://github.com/MultiAgency/near-agencies/issues/56",
       admittedAt: "2026-10-02T00:00:00.000Z",
@@ -807,7 +836,7 @@ describe("the registry backfill", () => {
     const env = { REGISTRY_URL: "https://registry.test/api/rpc/builders", ROSTER_FILE: rosterFile };
 
     const dry = await backfillRun(["--dry-run", "--admitted-store", copy], env, repo);
-    assert.match(dry, /admitted store .*staging-admitted\.json: 1 record/, "the run reads the store the flag names, not ADMITTED_FILE's");
+    assert.match(dry, /admitted store .*roster-admitted\.testnet\.json: 1 record/, "the run reads the store the flag names, not ADMITTED_FILE's");
     assert.match(dry, /2 members to write/);
     assert.match(dry, /^1\. pat —/m);
     assert.match(dry, /^2\. boardmate —/m);
@@ -817,6 +846,15 @@ describe("the registry backfill", () => {
     assert.match(stopped, /the admitted store is missing/);
     assert.ok(stopped.includes(missing), "the error names the path the flag gave");
     assert.doesNotMatch(stopped, /members to write/);
+
+    // The store's file name is what ties it to its network: a copy renamed
+    // away from roster-admitted.<network>.json could hold any network's
+    // admissions, and this run refuses to guess.
+    const misnamed = join(repo, "staging-admitted.json");
+    writeFileSync(misnamed, JSON.stringify({ builders: [] }));
+    const misnamedRun = await backfillRun(["--dry-run", "--admitted-store", misnamed], env, repo);
+    assert.match(misnamedRun, /--admitted-store names staging-admitted\.json, not roster-admitted\.testnet\.json/);
+    assert.doesNotMatch(misnamedRun, /members to write/);
 
     const contradictory = await backfillRun(["--dry-run", "--admitted-store", copy, "--no-admitted-store"], env, repo);
     assert.match(contradictory, /--admitted-store and --no-admitted-store contradict each other/);
