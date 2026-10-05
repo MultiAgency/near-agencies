@@ -4,4 +4,4 @@
 
 ## Verification
 
-<!-- What you ran and what you saw: commands and their results, the failing test a fix makes pass, or the behavior you checked. -->
+<!-- What you ran and what you saw: commands and their results, the failing test a fix makes pass, or the behavior you checked. A change to an entry point that talks to an external system (GitHub, the registry, NEAR RPC, Railway) pastes the output of a read-only run against the real system: a dry-run flag or a decide-only mode that posts nothing. -->
