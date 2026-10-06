@@ -26,7 +26,7 @@ const REG = "MultiAgency/near-agencies";
 const REG_URL = `/repos/${REG}`;
 const SOURCE = `${REG}#600`;
 
-let boardIssues, boardEvents, boardThreads, regIssues, regTimeline, regThreads, regSingle, lastEdited, pulls, roles, teams, created, createFails, patchFails, reactions, self, calls;
+let boardIssues, boardEvents, boardThreads, regIssues, regTimeline, regThreads, regSingle, lastEdited, pulls, roles, teams, created, createFails, patchFails, labelFails, reactions, self, calls;
 
 const reset = () => {
   boardIssues = {};
@@ -42,6 +42,7 @@ const reset = () => {
   teams = {};
   created = [];
   createFails = 0;
+  labelFails = 0;
   patchFails = 0;
   reactions = [];
   self = "jlwaugh";
@@ -219,6 +220,14 @@ function serveBoard() {
       if (method === "POST") reactions.push({ id: Number(m[3]), ...JSON.parse(options.body) });
       return json(reactions.filter(r => r.id === Number(m[3])));
     }
+    if ((m = /^\/repos\/([^/]+)\/([^/]+)\/issues\/(\d+)\/labels\/([^/]+)$/.exec(u.pathname)) && method === "DELETE") {
+      if (labelFails) { labelFails -= 1; return json({ message: "boom" }, 403); }
+      const key = `${m[1]}/${m[2]}`;
+      const found = (regIssues[key] ?? []).find(i => i.number === Number(m[3]));
+      if (!found) return json({ message: "Not Found" }, 404);
+      found.labels = found.labels.filter(l => l.name !== decodeURIComponent(m[4]));
+      return json(found.labels);
+    }
     if ((m = /^\/repos\/([^/]+)\/([^/]+)\/issues\/(\d+)\/comments$/.exec(u.pathname))) {
       const key = `${m[1]}/${m[2]}#${m[3]}`;
       const thread = (m[1] === "MultiAgency" && m[2] === "kanban-sandbox" ? boardThreads : regThreads)[key] ??= [];
@@ -374,6 +383,45 @@ describe("opening auto jobs", () => {
     assert.equal(created.length, 2, "the epic and its task, once");
     assert.equal(regThreads[`${REG}#600`].length, 1, "the answer was not said again");
     assert.match(autoJobsHealth().skipped.find(s => s.issue === SOURCE).why, /a job already stands for it/);
+  });
+
+  // #119: #137 and #136 raced for #61, which carried `good first issue`
+  // beside `ready-for-agent`: the label invited an outside contributor to
+  // build what the board's worker was already building.
+  test("the job's making takes `good first issue` off its source issue, and only that label", async () => {
+    reset();
+    roles.jlwaugh = "admin";
+    regIssues[REG] = [{ ...registryIssue(600), labels: [{ name: "ready-for-agent" }, { name: "good first issue" }, { name: "bug" }] }];
+    regTimeline[`${REG}#600`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
+    serveBoard();
+    await settle();
+    assert.equal(created.length, 2, "the job opened");
+    assert.deepEqual(regIssues[REG][0].labels.map(l => l.name), ["ready-for-agent", "bug"], "the invitation is withdrawn, the rest stay");
+    assert.ok(calls.some(c => c.startsWith("DELETE") && c.endsWith("/issues/600/labels/good%20first%20issue")));
+  });
+
+  test("an issue without the label draws no removal, and a removal GitHub refuses leaves the job standing and is tried again", async () => {
+    reset();
+    roles.jlwaugh = "admin";
+    regIssues[REG] = [registryIssue(600)];
+    regTimeline[`${REG}#600`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
+    serveBoard();
+    await settle();
+    assert.equal(calls.some(c => c.startsWith("DELETE")), false, "nothing to remove");
+
+    reset();
+    roles.jlwaugh = "admin";
+    regIssues[REG] = [{ ...registryIssue(601), labels: [{ name: "ready-for-agent" }, { name: "good first issue" }] }];
+    regTimeline[`${REG}#601`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
+    labelFails = 1;
+    serveBoard();
+    await settle();
+    assert.equal(created.length, 2, "the job stands though the label stayed");
+    assert.equal(regThreads[`${REG}#601`].length, 1, "and the issue was answered");
+    assert.equal(regIssues[REG][0].labels.length, 2, "the refused removal changed nothing");
+    await settle();
+    assert.equal(created.length, 2, "no second job");
+    assert.deepEqual(regIssues[REG][0].labels.map(l => l.name), ["ready-for-agent"], "the next sweep removes it");
   });
 
   test("a lost answer comment is said again from the epic, and a lost team assembles again, never opening a second job", async () => {
