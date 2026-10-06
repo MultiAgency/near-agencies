@@ -14,8 +14,7 @@ Every pull request gets these three passes. `AGENTS.md` defines the contracts an
   - the diff does what the PR body's **Plan** says, and its **Verification** is credible;
   - a bug fix comes with a test that fails without the fix;
   - a change to a board format changes its parser and tests with it;
-  - text people read uses the agency vocabulary from `AGENTS.md`;
-  - the PR body and every commit message carry the change's own description only: a tool attribution line (a `Co-Authored-By` trailer, a "Generated with" footer) or an empty probe commit is an **Important** finding (`AGENTS.md`, #117).
+  - text people read uses the agency vocabulary from `AGENTS.md`.
 
 ## Severity
 
