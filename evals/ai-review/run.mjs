@@ -66,6 +66,7 @@ for (const name of cases) {
       "github.repository": REPO,
       "github.event.pull_request.number || github.event.issue.number": String(spec.pr),
       "github.event.pull_request.head.sha": spec.head,
+      "steps.pr.outputs.sha": spec.head,
     }) + ADAPTER;
     const claudeArgs = splitArgs(config.claudeArgs);
     const tools = claudeArgs.indexOf("--allowedTools") + 1;
