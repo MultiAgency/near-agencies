@@ -15,6 +15,8 @@ const PULL_REQUEST = {
   base: { ref: "staging" },
   head: { sha: "0".repeat(40), repo: { full_name: "MultiAgency/near-agencies" } },
   changed_files: 0,
+  commits: 0,
+  body: "",
 };
 
 const base64 = value => Buffer.from(value, "utf8").toString("base64");
@@ -23,6 +25,7 @@ const reply = body => new Response(JSON.stringify(body), { status: 200, headers:
 const routes = [
   [/\/commits\/[0-9a-f]{40}\/pulls/, []],
   [/\/pulls\/1\/files/, []],
+  [/\/pulls\/1\/commits/, []],
   [/\/pulls\/1$/, PULL_REQUEST],
   [/\/orgs\/[^/]+\/teams\/internal\/members/, [{ login: "jlwaugh" }]],
   [/\/commits\/[0-9a-f]{40}\/check-runs/, { check_runs: [{ name: "test", id: 1, status: "completed", conclusion: "success" }], total_count: 1 }],
