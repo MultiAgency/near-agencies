@@ -1,0 +1,140 @@
+diff --git a/lib/operator-approval.mjs b/lib/operator-approval.mjs
+index 33a7d46..23b6918 100644
+--- a/lib/operator-approval.mjs
++++ b/lib/operator-approval.mjs
+@@ -11,31 +11,6 @@
+ 
+ const same = (a, b) => String(a ?? "").toLowerCase() === String(b ?? "").toLowerCase();
+ 
+-/**
+- * The org teams whose members the operator-approval check reads from GitHub:
+- * CODEOWNERS' team entry made concrete. Exactly one, `internal` — people
+- * only; agents are in no team (#109), the roster saying who they are, and
+- * `operatorApproval` consumes no other team's members. #93's check also read
+- * a second team, one that was never created: that read could not succeed and
+- * every same-repo PR failed closed.
+- */
+-export const REVIEWED_TEAMS = ["internal"];
+-
+-/**
+- * The members `operatorApproval` judges, from the script's team reads keyed
+- * by slug: team internal's, the one team the verdict consumes. A read plan
+- * that drifted from what the verdict judges — any other slug, none, or
+- * several — throws rather than mis-shaping a positional result or dropping
+- * an unread team's members unjudged.
+- */
+-export function judgedTeamMembers(teams) {
+-  const slugs = Object.keys(teams ?? {});
+-  if (slugs.length !== 1 || slugs[0] !== "internal") {
+-    throw new Error(`the verdict judges team internal alone, but the team reads name ${slugs.length ? slugs.join(", ") : "nothing"}`);
+-  }
+-  return teams.internal;
+-}
+-
+ /**
+  * The reviewers whose approvals count: each reviewer's latest verdict,
+  * where a comment is transparent — it leaves an earlier approval standing,
+diff --git a/scripts/operator-approval.mjs b/scripts/operator-approval.mjs
+index 669c5a5..0833c1b 100644
+--- a/scripts/operator-approval.mjs
++++ b/scripts/operator-approval.mjs
+@@ -21,11 +21,9 @@ import {
+   combineRoster,
+   countableApprovals,
+   countedApprovals,
+-  judgedTeamMembers,
+   operatorApproval,
+   ownersFromCodeowners,
+   ownersFromEnv,
+-  REVIEWED_TEAMS,
+   rosterFromApi,
+   rosterRecord,
+   unrecognizedApprovals,
+@@ -33,10 +31,10 @@ import {
+ 
+ const REVIEW_PAGES = 10;
+ const TEAM_PAGES = 10;
+-// The teams whose members the check reads come from lib's REVIEWED_TEAMS —
+-// one team, `internal`, the entry CODEOWNERS names. Agents are in no team
+-// (#109); the roster says who they are. The list is pinned by test, so a
+-// second team cannot creep back into these reads unjudged.
++// The team behind CODEOWNERS' `@MultiAgency/internal` entry: a member of
++// `internal` is one of the people whose approvals count. Agents are in no
++// team (#109); the roster says who they are.
++const INTERNAL_TEAM = "internal";
+ 
+ try {
+   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH ?? "", "utf8"));
+@@ -53,19 +51,13 @@ try {
+   // team internal cannot be read.
+   const fork = event.pull_request.head.repo?.full_name !== event.repository?.full_name;
+ 
+-  // The team reads start alongside the others and land keyed by slug;
+-  // judgedTeamMembers picks the one team the verdict consumes and throws if
+-  // the pinned list drifted from it, failing closed.
+-  const teamReads = new Map(REVIEWED_TEAMS.map(slug => [slug, teamMembers(org, slug)]));
+-  const [reviews, codeowners, builders, fromApi] = await Promise.all([
++  const [reviews, codeowners, builders, fromApi, internal] = await Promise.all([
+     allReviews(number),
+     textAtBase(".github/CODEOWNERS", base),
+     buildersAtBase(base),
+     rosterApi(author),
++    teamMembers(org, INTERNAL_TEAM),
+   ]);
+-  const teams = {};
+-  for (const [slug, read] of teamReads) teams[slug] = await read;
+-  const internal = judgedTeamMembers(teams);
+   if (codeowners === null) {
+     console.log("CODEOWNERS could not be read at the base branch, so only the owner's and the internal team's approvals count");
+   }
+diff --git a/test/operator-approval.test.mjs b/test/operator-approval.test.mjs
+index fde53c9..b59bcfc 100644
+--- a/test/operator-approval.test.mjs
++++ b/test/operator-approval.test.mjs
+@@ -5,11 +5,9 @@ import {
+   combineRoster,
+   countableApprovals,
+   countedApprovals,
+-  judgedTeamMembers,
+   operatorApproval,
+   ownersFromCodeowners,
+   ownersFromEnv,
+-  REVIEWED_TEAMS,
+   rosterFromApi,
+   rosterRecord,
+   unrecognizedApprovals,
+@@ -196,34 +194,6 @@ describe("ownersFromEnv", () => {
+   });
+ });
+ 
+-describe("REVIEWED_TEAMS", () => {
+-  test("the script reads one team only, and one that exists (#109)", () => {
+-    // #93's script also read a second team, one that was never created: the
+-    // read could not succeed and the unreadable-teams gate failed every
+-    // same-repo PR closed. The script takes the teams it reads from this
+-    // list, so a second team cannot creep back into the reads without
+-    // changing it here — and this test with it.
+-    assert.deepEqual(REVIEWED_TEAMS, ["internal"]);
+-  });
+-});
+-
+-describe("judgedTeamMembers", () => {
+-  test("answers team internal's members, the one team the verdict consumes", () => {
+-    assert.deepEqual(judgedTeamMembers({ internal: ["saadiqbal-dev"] }), ["saadiqbal-dev"]);
+-  });
+-
+-  test("an unread team reads as null, which fails closed in the verdict", () => {
+-    assert.deepEqual(judgedTeamMembers({ internal: null }), null);
+-  });
+-
+-  test("a read plan drifted from the verdict throws instead of passing unjudged", () => {
+-    assert.throws(() => judgedTeamMembers({}));
+-    assert.throws(() => judgedTeamMembers(undefined));
+-    assert.throws(() => judgedTeamMembers({ elsewhere: ["stranger"] }));
+-    assert.throws(() => judgedTeamMembers({ internal: ["saadiqbal-dev"], elsewhere: ["stranger"] }));
+-  });
+-});
+-
+ describe("operatorApproval", () => {
+   const staging = { base: "staging", owners: ["jlwaugh"] };
+ 

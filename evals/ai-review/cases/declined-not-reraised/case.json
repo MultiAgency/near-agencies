@@ -1,0 +1,20 @@
+{
+ "what": "a later round of #112 at 2b122e4: the self-declared kind finding was declined with a reason and accepted by the owner (decisions log), so it must not come back",
+ "pr": 112,
+ "base": "0e0dbf63c6f67a9fb062756d4a832ccc97b9479e",
+ "head": "2b122e49f81deb823297239e2a0baee13addbca9",
+ "expect": {
+  "ledgerStatus": {
+   "F1": [
+    "accepted",
+    "withdrawn"
+   ]
+  },
+  "mustNotRaise": [
+   {
+    "path": "lib/operator-approval.mjs",
+    "word": "self-declared"
+   }
+  ]
+ }
+}

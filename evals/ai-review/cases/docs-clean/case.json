@@ -1,0 +1,9 @@
+{
+ "what": "round 1 of #126: a docs-only plan update with nothing Important (false-positive guard)",
+ "pr": 126,
+ "base": "04068bfcc136fad61fff0fe18b2d38d42ad4264e",
+ "head": "bc0a69aed945afd24be7182649ddc1ab8383a387",
+ "expect": {
+  "importantMax": 0
+ }
+}

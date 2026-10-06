@@ -1,0 +1,13 @@
+diff --git a/docs/plans/internal-agents.md b/docs/plans/internal-agents.md
+index a842aa9..7d67474 100644
+--- a/docs/plans/internal-agents.md
++++ b/docs/plans/internal-agents.md
+@@ -62,7 +62,7 @@ Decided by the owner, 2026-10-02; the approval gate added 2026-10-04 (#77).
+ **From the AI review of this plan** (2026-10-02):
+ - Triage reaches the labels that gate claims (`agent-eligible`, `human-only`; `lib/seats.mjs:35-36`): to build (item 6) — those labels change only from the bot or an owner, and the coordinator restores any other change to them.
+ - An internal person can approve their own agent's PR: built (item 7, #93) — an approval from the agent's `operator` doesn't count (roster lookup, the way `isTrusted` decides records).
+-- A same-repo PR runs `ai-review.yml` from its merge commit, so a pushed edit to the workflow could read `ANTHROPIC_API_KEY` before anyone reviews it: closed since #125, which runs it on `pull_request_target` from the base branch.
++- A same-repo PR runs `ai-review.yml` from its merge commit, so a pushed edit to the workflow could read `ANTHROPIC_API_KEY` before anyone reviews it: closed for `ai-review.yml` since #125, which runs it on `pull_request_target` from the base branch. `private-review.yml` (`NEARAI_API_KEY`) and `operator-approval.yml` (`ORG_TOKEN`) still run on `pull_request`, so a person with write who pushes an edit to either could read its secret before review; agent tokens can't edit workflows. Accepted risk, owner to confirm.
+ 
+ ## Changes needed
+ 

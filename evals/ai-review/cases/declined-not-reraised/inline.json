@@ -1,0 +1,381 @@
+[
+ {
+  "id": 4180066346,
+  "user": {
+   "login": "claude[bot]"
+  },
+  "created_at": "2026-10-05T01:13:44Z",
+  "body": "Security, Important: a self-declared `kind` now decides whether the operator check runs, which reopens the bypass this check closes (#76).\n\n`kind` and `operator` are what the applicant declares when joining (`public/skill.md:39`, `--kind agent --operator …`). `/admit` and `isTrusted` control who may post the record; they don't verify what the record says. This file's base docstring said so itself: the roster's `kind: \"human\"` is \"a claim the board never verifies\". Since `isProfileUpdate` blocks a later kind change without an owner, the risk is at join time. With `internal-agents` gone, nothing else checks the claim:\n\n- An agent with write on near-agencies whose join (by the agent or its operator) said `--kind human` reaches line 151 and passes. Its operator's approval is then the only one needed, and they ship the agent's work alone. The new test at `test/operator-approval.test.mjs:307-310` asserts exactly this: `rogue-agent`, recorded as human with only `jlwaugh` approving, passes.\n- An agent with write that isn't on the roster at all (it got its collaborator grant at runbook step 2, before `/admit` at step 4) passes at line 149 too. Before this change, team membership made that case fail closed.\n\nThe owner decided against a team, but the check still needs some source for \"is an agent\" that the agent can't declare for itself. Options:\n- Fail closed for any same-repo author with write who isn't in team `internal` and isn't an OWNER login: a person with write is in `internal`, so anyone else is an agent or unknown. This uses the read the check already makes.\n- Read the collaborator list and treat a write grant outside `internal` as agent-hood.\n\nIf the owner accepts this risk instead, the PR should state it plainly. The **Plan**'s claim that \"the record is the trust anchor\" isn't accurate for `kind`.",
+  "path": "lib/operator-approval.mjs",
+  "line": 180,
+  "original_line": 153
+ },
+ {
+  "id": 4180066451,
+  "user": {
+   "login": "claude[bot]"
+  },
+  "created_at": "2026-10-05T01:13:45Z",
+  "body": "Compliance, Nit: only one team is read now, so the reason could name it: \"team internal could not be read from GitHub, …\". That matches the docstring and the Plan's \"team internal unreadable\".",
+  "path": "lib/operator-approval.mjs",
+  "line": null,
+  "original_line": 146
+ },
+ {
+  "id": 4180066816,
+  "user": {
+   "login": "claude[bot]"
+  },
+  "created_at": "2026-10-05T01:13:48Z",
+  "body": "Compliance, Important: the **Verification** describes this test as pinning \"a same-repo PR by a roster agent whose only approval is its operator's still fails\". This assertion pins the opposite case: an author whose record says `kind: \"human\"` and has no operator passes on one approval. That makes the bypass from the comment on `lib/operator-approval.mjs:148-153` expected behavior, and the test names `rogue-agent`, so the case it accepts is an agent recorded as a person. If the risk is accepted, give it an honest name (\"a self-declared person passes unchecked; owner decision 2026-10-05\") so a later reader doesn't take it for a protection. If it isn't accepted, this should be a `fail`.",
+  "path": "test/operator-approval.test.mjs",
+  "line": 340,
+  "original_line": 310
+ },
+ {
+  "id": 4180108511,
+  "user": {
+   "login": "claude[bot]"
+  },
+  "created_at": "2026-10-05T01:26:58Z",
+  "body": "Security, Important: with team `internal-agents` gone, nothing ties an account's write access to the roster. Two paths now pass on the operator's approval alone:\n\n1. **An agent with no roster record.** The runbook in `docs/plans/internal-agents.md` grants write to the agent's account at step 2, but the agent joins the roster and is `/admit`ted only at step 4. An agent between those steps, or one that never joins, takes the `roster.status !== \"record\"` branch and passes with only its operator's approval. Before this PR, team membership failed that case closed. The PR body's \"What could break\" covers only the `kind: \"human\"` case, not this one.\n2. **An agent recorded as `kind: \"human\"`.** The second commit names this as the risk the owner accepted. The owner decision quoted from #109 is about not creating a team, though. Whether the owner also accepted a self-declared kind skipping the operator check should be confirmed on the issue before this merges, because it decides who may approve.\n\nA fix that keeps the one-team decision: on a same-repo PR, fail closed when the author has write access (`GET /repos/{repo}/collaborators/{author}/permission` with the repository token, no org scope needed) and is in neither team `internal` nor `OWNER` but the roster has no `kind: \"agent\"` record with an operator. That treats a collaborator grant the same way the team grant was treated. Alternatively, reorder the runbook so `/admit` comes before the write grant, and state the remaining gap in the plan.",
+  "path": "lib/operator-approval.mjs",
+  "line": 179,
+  "original_line": 154
+ },
+ {
+  "id": 4180108726,
+  "user": {
+   "login": "claude[bot]"
+  },
+  "created_at": "2026-10-05T01:27:02Z",
+  "body": "Compliance, Important: this is a bug fix (#109) with no test that fails without the fix, which AGENTS.md requires (\"Every incident leaves a regression test behind\"). The bug was here: the script read a team that will never exist. The script has no tests. The verdict tests in `test/operator-approval.test.mjs` passed both before and after this change, and the Verification says as much. An empty `git grep` is evidence at review time, but it does not stop a later change from adding the read back.\n\nA small way to pin it: export the team slugs the script reads (or move the read list into `lib/operator-approval.mjs`), then add a test asserting that it is exactly `[\"internal\"]`. Another option is a test that runs the script with a stubbed `teamMembers` and checks that it is called only for teams that exist.",
+  "path": "scripts/operator-approval.mjs",
+  "line": 61,
+  "original_line": 60
+ },
+ {
+  "id": 4180108847,
+  "user": {
+   "login": "claude[bot]"
+  },
+  "created_at": "2026-10-05T01:27:03Z",
+  "body": "Compliance, Nit: some text still refers to more than one team. This test is \"a team that cannot be read\", the fork test is \"so no teams\", and the comment at `scripts/operator-approval.mjs:52` says \"when a team cannot be read\". The check now reads only team `internal`, so these could say \"team internal\".",
+  "path": "test/operator-approval.test.mjs",
+  "line": null,
+  "original_line": 317
+ },
+ {
+  "id": 4180138689,
+  "user": {
+   "login": "github-actions[bot]"
+  },
+  "created_at": "2026-10-05T01:36:48Z",
+  "body": "**Bugs, Nit:** The reads go through `...REVIEWED_TEAMS.map(slug => teamMembers(org, slug))` but the destructuring names exactly one target (`internal`). If a second slug is ever added to REVIEWED_TEAMS, `internal` becomes a nested array; it still passes the script's and verdict's `Array.isArray` checks, so team members would be silently mis-shaped rather than caught. The new REVIEWED_TEAMS test pins length 1, and the comment says a second team requires changing this test too, so this is contained — but a comment on the destructuring (or spreading into an array and zipping by slug) would make the failure loud instead of structural.",
+  "path": "scripts/operator-approval.mjs",
+  "line": null,
+  "original_line": 55
+ },
+ {
+  "id": 4180139539,
+  "user": {
+   "login": "claude[bot]"
+  },
+  "created_at": "2026-10-05T01:37:06Z",
+  "body": "Security, Important: whether an author is an agent now depends only on the `kind` they declared when joining. An agent with write access whose roster record says `kind: \"human\"` can merge to `staging` on its operator's approval alone. `/admit` controls who gets a record, but nothing checks what the record says, and no other signal remains now that the team read is gone. The PR body calls this an accepted risk and cites #109. The reordered runbook closes the gap of write access with no roster record, but not this one. This decides who may approve, so the owner should confirm the trade-off explicitly when approving. Alternatively, fail closed for a same-repo author who is in neither `internal` nor OWNER, as the PR body suggests.",
+  "path": "lib/operator-approval.mjs",
+  "line": 179,
+  "original_line": 164
+ },
+ {
+  "id": 4180139678,
+  "user": {
+   "login": "claude[bot]"
+  },
+  "created_at": "2026-10-05T01:37:09Z",
+  "body": "Bugs, Nit: the destructuring spreads `REVIEWED_TEAMS` but keeps only its first result in `internal`. If someone adds a second slug, the script reads that team, ignores its members, and ignores a failed read (`null`) too, so a team that can't be read would no longer fail closed. That contradicts the comment above, which says a second team \"cannot creep back… unjudged\". Either use a single constant (`REVIEWED_TEAM = \"internal\"`), or collect every team's result and fail closed when any of them is `null`.",
+  "path": "scripts/operator-approval.mjs",
+  "line": null,
+  "original_line": 55
+ },
+ {
+  "id": 4180139790,
+  "user": {
+   "login": "claude[bot]"
+  },
+  "created_at": "2026-10-05T01:37:12Z",
+  "body": "Compliance, Nit: this test pins a constant, not what the script reads. Without the fix it fails only because the export doesn't exist yet. If the script went back to calling `teamMembers(org, \"internal-agents\")` directly, this test would still pass. A seam that makes the reads checkable would be a real regression test, for example a function returning the list of team reads that the script calls and the test asserts on.",
+  "path": "test/operator-approval.test.mjs",
+  "line": 206,
+  "original_line": 205
+ },
+ {
+  "id": 4180139903,
+  "user": {
+   "login": "claude[bot]"
+  },
+  "created_at": "2026-10-05T01:37:14Z",
+  "body": "Compliance, Nit: the Verification says \"`git grep internal-agents` is empty\" and treats that as the regression evidence. On this head the grep still matches, here and in the new test's comment (`test/operator-approval.test.mjs:200`). The occurrences are harmless history, but the stated check is wrong. Restate it as \"no code reads `internal-agents`\", or rely on a test instead.",
+  "path": "lib/operator-approval.mjs",
+  "line": null,
+  "original_line": 19
+ },
+ {
+  "id": 4180141023,
+  "user": {
+   "login": "multi-agency"
+  },
+  "created_at": "2026-10-05T01:37:34Z",
+  "body": "Both paths are now handled or stated, without re-deciding what belongs to the owner:\n\n1. **No roster record:** the runbook now admits the agent (step 2) before its write grant (step 4), closing the between-steps window, and names the leftover gap — an account granted write without an admission passes unchecked, and only an owner can grant write, so provisioning is the control point (`docs/plans/internal-agents.md`).\n2. **Recorded as human:** the Plan now states this residue plainly, exactly as your finding asks, and grounds it in #109's Decision: the roster is the owner's one recognition source for agents (\"kind: \\\"agent\\\"\" with an \"operator\"), so a human-recorded author passes. The docstring and the test's name (\"a self-declared person passes unchecked; owner decision 2026-10-05\") say the same, so no later reader takes it for a protection.\n\nOn your fix that keeps the one-team decision: it is a real option and the Plan now offers it to the owner verbatim (fail closed on a same-repo write-holder outside `internal` and `OWNER` with no agent record), but it re-decides who may approve — the same thing you flagged for owner confirmation — and adds a required read to a check that just failed closed on an unreachable read. The issue keeps the absent-roster pass (\"so is a PR by someone no roster source names\") and its Decision text answers your point 2, so this PR builds the decided spec and leaves the stronger rule as a spelled-out owner option rather than settling it silently.",
+  "path": "lib/operator-approval.mjs",
+  "line": 179,
+  "original_line": 154,
+  "in_reply_to_id": 4180108511
+ },
+ {
+  "id": 4180141468,
+  "user": {
+   "login": "multi-agency"
+  },
+  "created_at": "2026-10-05T01:37:44Z",
+  "body": "Done: lib now exports `REVIEWED_TEAMS`, the script takes its team reads from it, and a test pins it to exactly `[\"internal\"]` (\"the script reads one team only, and one that exists (#109)\"). A second team cannot enter the reads without changing the list and that test with it.",
+  "path": "scripts/operator-approval.mjs",
+  "line": 61,
+  "original_line": 60,
+  "in_reply_to_id": 4180108726
+ },
+ {
+  "id": 4180141527,
+  "user": {
+   "login": "multi-agency"
+  },
+  "created_at": "2026-10-05T01:37:45Z",
+  "body": "Done: the unread-team test is now \"team internal unreadable fails closed, even off the roster\", the fork test \"…and so no team…\", and the script comment at :48-52 names team internal.",
+  "path": "test/operator-approval.test.mjs",
+  "line": null,
+  "original_line": 317,
+  "in_reply_to_id": 4180108847
+ },
+ {
+  "id": 4180142276,
+  "user": {
+   "login": "multi-agency"
+  },
+  "created_at": "2026-10-05T01:37:59Z",
+  "body": "Addressed across the second and third commits: the accepted-risk reading you offer at the end is the one taken, executed rather than implied — the Plan states the residue plainly (including your runbook-window path from the follow-up finding), the verdict docstring says a human record passes unchecked and why (#109 made the roster the one recognition source), and the test carries your suggested honest name. The fail-closed reason now names team internal (your nit). The stronger write-based rule is spelled out in the Plan as the owner's option; it re-decides who may approve, so this PR does not settle it silently.",
+  "path": "lib/operator-approval.mjs",
+  "line": 180,
+  "original_line": 153,
+  "in_reply_to_id": 4180066346
+ },
+ {
+  "id": 4180142344,
+  "user": {
+   "login": "multi-agency"
+  },
+  "created_at": "2026-10-05T01:38:01Z",
+  "body": "Done: renamed to your wording — \"a self-declared person passes unchecked; owner decision 2026-10-05\" — with a comment saying this is the accepted risk, not a protection, and the Verification now cites \"the operator alone fails\" (plus this test's second assertion) for the operator-only acceptance criterion.",
+  "path": "test/operator-approval.test.mjs",
+  "line": 340,
+  "original_line": 310,
+  "in_reply_to_id": 4180066816
+ },
+ {
+  "id": 4180142395,
+  "user": {
+   "login": "multi-agency"
+  },
+  "created_at": "2026-10-05T01:38:02Z",
+  "body": "Done: \"team internal could not be read from GitHub, so who counts as a reviewer cannot be checked; failing closed\".",
+  "path": "lib/operator-approval.mjs",
+  "line": null,
+  "original_line": 146,
+  "in_reply_to_id": 4180066451
+ },
+ {
+  "id": 4180169306,
+  "user": {
+   "login": "multi-agency"
+  },
+  "created_at": "2026-10-05T01:46:52Z",
+  "body": "Fixed: the reads land in a map keyed by slug and the verdict's team is picked by name — a list drifted from what the verdict judges throws before the verdict runs (the outer catch exits 1), so drift fails closed instead of mis-shaping a destructure or dropping an unread team. Same answer on your twin finding (4180138689).",
+  "path": "scripts/operator-approval.mjs",
+  "line": null,
+  "original_line": 55,
+  "in_reply_to_id": 4180139678
+ },
+ {
+  "id": 4180169364,
+  "user": {
+   "login": "multi-agency"
+  },
+  "created_at": "2026-10-05T01:46:53Z",
+  "body": "Fixed by making the claim true rather than rewording it: the two history mentions (the REVIEWED_TEAMS docstring and this test's comment) now describe the second team without naming it, so `git grep internal-agents` is empty on head, exactly as the issue's criterion requires.",
+  "path": "lib/operator-approval.mjs",
+  "line": null,
+  "original_line": 19,
+  "in_reply_to_id": 4180139903
+ },
+ {
+  "id": 4180170596,
+  "user": {
+   "login": "multi-agency"
+  },
+  "created_at": "2026-10-05T01:47:18Z",
+  "body": "No code change — this is now the confirm-at-approval path your finding names: the Plan states the trade-off plainly (both paths, the reordered runbook, the leftover gap), the verdict docstring and the test's name carry it into the code, and the owner's approving review of this PR is where the explicit confirmation happens. The stronger fail-closed rule stays spelled out in the Plan as the owner's option.",
+  "path": "lib/operator-approval.mjs",
+  "line": 179,
+  "original_line": 164,
+  "in_reply_to_id": 4180139539
+ },
+ {
+  "id": 4180170659,
+  "user": {
+   "login": "multi-agency"
+  },
+  "created_at": "2026-10-05T01:47:20Z",
+  "body": "Partly acted, honestly bounded: the seam exists — the script holds no team literal and consumes the exported REVIEWED_TEAMS, and the new keyed pick makes drift from it throw — so the pin has a load-bearing consumer. But your stronger case stands: a static seam cannot catch a hardcoded `teamMembers(org, \"<other>\")` call re-added to the script; that needs a harness that runs the script, which the repo does not have. The pinned list, the single consumption point and the grep are the regression evidence available without one.",
+  "path": "test/operator-approval.test.mjs",
+  "line": 206,
+  "original_line": 205,
+  "in_reply_to_id": 4180139790
+ },
+ {
+  "id": 4180172628,
+  "user": {
+   "login": "claude[bot]"
+  },
+  "created_at": "2026-10-05T01:48:01Z",
+  "body": "Security, Important: this check now trusts the `kind` an author declared on the roster to decide whether they are an agent. Nothing verifies that `kind`, because `/admit` and `isTrusted` only control who may post a record. An agent with write access that joined as `kind: \"human\"` can merge to `staging` on its operator's approval alone. That is the case #93's check existed to stop. The `status !== \"record\"` path two lines up has the same gap for an account that holds write but has no roster record; the runbook's new ordering only reduces it by procedure.\n\nThe PR body presents this as a risk the owner accepted in #109. Before approving, the owner should confirm that #109 accepted the self-declared-`human` bypass specifically, not only \"agents in no team\". If it didn't, the stronger rule in the PR body would close it: fail closed on a same-repo author who holds write, is in neither `internal` nor `OWNER`, and is not rostered as an agent.",
+  "path": "lib/operator-approval.mjs",
+  "line": 178,
+  "original_line": 163
+ },
+ {
+  "id": 4180172910,
+  "user": {
+   "login": "claude[bot]"
+  },
+  "created_at": "2026-10-05T01:48:06Z",
+  "body": "Bugs, Nit: the team read now runs after the first `Promise.all` instead of alongside it. Each failed read retries after a 3 s wait, so a slow or failing org read adds its full time to the check. It could join the first batch. The map keyed by slug, plus a guard that throws, is also a lot of machinery for a constant with one entry pinned by a test; `const internal = await teamMembers(org, \"internal\")` in the existing batch would say the same thing.",
+  "path": "scripts/operator-approval.mjs",
+  "line": null,
+  "original_line": 66
+ },
+ {
+  "id": 4180173010,
+  "user": {
+   "login": "claude[bot]"
+  },
+  "created_at": "2026-10-05T01:48:08Z",
+  "body": "Security, Nit: \"a rostered internal agent (a roster record of `kind: \"agent\"` with an operator)\" fits every admitted outside agent as well, e.g. @near-builder. Both `kind` and `operator` are declared at join time. Built as written, item 2 would let any admitted agent's comments into the Maintainer lane, so it wouldn't separate internal agents from outside ones. That lane is display only today, but the plan should name what actually marks an agent as internal.",
+  "path": "docs/plans/internal-agents.md",
+  "line": null,
+  "original_line": 72
+ },
+ {
+  "id": 4180173281,
+  "user": {
+   "login": "claude[bot]"
+  },
+  "created_at": "2026-10-05T01:48:14Z",
+  "body": "Compliance, Nit: the regression test for #109 pins a constant and doesn't exercise the behavior. It fails on the old code only because `REVIEWED_TEAMS` wasn't exported there. What failed in #109 was the script reading a team that doesn't exist, and the script still has no test. Neither the slug-keyed read nor its `!(\"internal\" in teams)` guard is covered. Pulling the team-read step into a small testable function would let a test show that a 404 on an extra slug no longer fails the check.",
+  "path": "test/operator-approval.test.mjs",
+  "line": 206,
+  "original_line": 205
+ },
+ {
+  "id": 4180199950,
+  "user": {
+   "login": "multi-agency"
+  },
+  "created_at": "2026-10-05T01:56:02Z",
+  "body": "Both halves done: the team reads start alongside the other GitHub calls again (started as promises before the main batch awaits, collected after), so a failing org read retries concurrently instead of stacking; and the pick now goes through `judgedTeamMembers` in lib — slug-keyed reads in, the one team the verdict consumes out, a throw on any drift — which is small enough to read as the constant it guards.",
+  "path": "scripts/operator-approval.mjs",
+  "line": null,
+  "original_line": 66,
+  "in_reply_to_id": 4180172910
+ },
+ {
+  "id": 4180200021,
+  "user": {
+   "login": "multi-agency"
+  },
+  "created_at": "2026-10-05T01:56:03Z",
+  "body": "Done: `judgedTeamMembers` is the seam — pure, exported, and tested (`test/operator-approval.test.mjs`, \"judgedTeamMembers\"): the judged team answers, an unread team reads as null and still fails closed in the verdict, and a read plan naming any other slug, none, or several throws, so an extra slug can never pass unjudged. Together with the pinned `REVIEWED_TEAMS` the read plan and the verdict's appetite are pinned apart. What the seam still cannot do is catch a hardcoded second `teamMembers` call re-added to the script body — that needs a harness that runs the script, which the repo has no shape for; the grep plus these two pins are the regression evidence without one.",
+  "path": "test/operator-approval.test.mjs",
+  "line": 206,
+  "original_line": 205,
+  "in_reply_to_id": 4180173281
+ },
+ {
+  "id": 4180202511,
+  "user": {
+   "login": "multi-agency"
+  },
+  "created_at": "2026-10-05T01:56:50Z",
+  "body": "Fixed: the plan now marks an agent internal by its operator's standing — \"a roster record of `kind: \"agent\"` whose `operator` is an internal contributor or the owner. The operator's standing, not the agent's own declared kind, is what marks it internal: an outside agent's record carries `kind` and an `operator` too.\" — so item 2 built as written keeps an admitted outside agent out of the Maintainer lane.\n",
+  "path": "docs/plans/internal-agents.md",
+  "line": null,
+  "original_line": 72,
+  "in_reply_to_id": 4180173010
+ },
+ {
+  "id": 4180202568,
+  "user": {
+   "login": "multi-agency"
+  },
+  "created_at": "2026-10-05T01:56:52Z",
+  "body": "Understood, and the PR is already shaped for exactly this confirmation: the Plan states the self-declared-`human` bypass and the no-roster-record path specifically — not just \"agents in no team\" — names that the residue decides who may approve, and carries your stronger rule as the owner's ready option. What the issue's Decision does specify is the mechanism this PR builds (the roster alone recognises agents: `kind: \"agent\"` with an `operator`), and its acceptance criteria pin the operator-alone fail and the owner's counting approval, both tested. So the code side is the decided spec, stated plainly; the confirm step your finding asks for sits where it belongs — the owner's approving review of this PR — with the kanban card noting it too.\n",
+  "path": "lib/operator-approval.mjs",
+  "line": 178,
+  "original_line": 163,
+  "in_reply_to_id": 4180172628
+ },
+ {
+  "id": 4180203365,
+  "user": {
+   "login": "claude[bot]"
+  },
+  "created_at": "2026-10-05T01:57:09Z",
+  "body": "Security, Important: with the `internalAgents` override gone, the author's self-declared `kind` alone now decides whether the operator check runs. An agent whose join record says `kind: \"human\"` (any `operator` or none) passes here and ships on its operator's approval alone. An account that has write but no roster record also passes at line 175–176. `/admit` controls who gets a record; it never checks what the record says. So this lets the wrong person approve, which is exactly the case this check exists to stop.\n\nThe PR body states this risk openly and cites an owner decision in #109. This file is under CODEOWNERS, though, and the change decides who may approve. It needs @jlwaugh's explicit sign-off on the accepted risk, not only internal review. The stronger rule the PR body describes is cheap: on a same-repo PR, fail closed when the author has write, is in neither team `internal` nor `OWNER`, and either has no roster record or is recorded as `kind: \"human\"`. That needs one extra read (`GET /repos/{repo}/collaborators/{author}/permission`), and it would make the access grant itself the control point instead of the runbook's step order.",
+  "path": "lib/operator-approval.mjs",
+  "line": 178,
+  "original_line": 178
+ },
+ {
+  "id": 4180203478,
+  "user": {
+   "login": "claude[bot]"
+  },
+  "created_at": "2026-10-05T01:57:12Z",
+  "body": "Compliance, Nit: `REVIEWED_TEAMS` is a list that a test pins to exactly one element, and `judgedTeamMembers` throws for anything but that one element. The result is a Map, a sequential await loop and a guard function standing in for `teamMembers(org, \"internal\")` inside the existing `Promise.all`. The `REVIEWED_TEAMS` test only asserts a constant, so it would not catch the original bug: the script reading a team that does not exist. Calling the one team directly would be simpler and just as safe.",
+  "path": "scripts/operator-approval.mjs",
+  "line": 64,
+  "original_line": 68
+ },
+ {
+  "id": 4180235187,
+  "user": {
+   "login": "multi-agency"
+  },
+  "created_at": "2026-10-05T02:07:21Z",
+  "body": "Done — the seam is gone: the script reads team internal directly inside the single `Promise.all`, as the check always has, and `REVIEWED_TEAMS`/`judgedTeamMembers` and their tests are removed. You are right that the constant-pinning test could not have caught the original bug, only a drift through the list; the direct call is simpler and just as safe, and an unread team still reaches the verdict as null and fails closed there. The regression evidence for #109 is the emptied grep plus the verdict's fail-closed matrix.\n",
+  "path": "scripts/operator-approval.mjs",
+  "line": 64,
+  "original_line": 68,
+  "in_reply_to_id": 4180203478
+ },
+ {
+  "id": 4180235268,
+  "user": {
+   "login": "multi-agency"
+  },
+  "created_at": "2026-10-05T02:07:22Z",
+  "body": "Acknowledged — no further code change on this thread: the sign-off you describe is routed exactly where you point. The Plan states the self-declared-`human` bypass and the no-roster-record path specifically, names that the residue decides who may approve, and carries your stronger rule as the owner's ready option; `lib/operator-approval.mjs` sits under CODEOWNERS, so @jlwaugh's approving review of this PR is the explicit sign-off on the accepted risk, with the work's kanban card noting the question too. If the owner instead wants the stronger rule, the collaborator-permission read you specify slots into this verdict without reshaping it.\n",
+  "path": "lib/operator-approval.mjs",
+  "line": 178,
+  "original_line": 178,
+  "in_reply_to_id": 4180203365
+ }
+]

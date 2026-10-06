@@ -1,0 +1,14 @@
+{
+ "what": "round 3 of #126 at 24ec161: the earlier Nit (\"closed\" overstated) is fixed by the delta",
+ "pr": 126,
+ "base": "04068bfcc136fad61fff0fe18b2d38d42ad4264e",
+ "head": "24ec161f53e1af8fb1bda514afc2337564774c00",
+ "expect": {
+  "importantMax": 0,
+  "ledgerStatus": {
+   "F1": [
+    "fixed"
+   ]
+  }
+ }
+}
