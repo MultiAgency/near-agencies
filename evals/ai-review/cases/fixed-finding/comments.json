@@ -1,0 +1,10 @@
+[
+ {
+  "id": 1,
+  "user": {
+   "login": "github-actions[bot]"
+  },
+  "created_at": "2026-10-05T05:22:30Z",
+  "body": "AI review (synthetic earlier round for this eval: the live history predates the findings list).\n\n<!-- ai-review-ledger {\"sha\": \"ba8fbc7093ed96873e83b22d5aa92b80f480d5cb\", \"findings\": [{\"id\": \"F1\", \"path\": \"docs/plans/internal-agents.md\", \"line\": 65, \"pass\": \"Security\", \"severity\": \"Nit\", \"status\": \"open\", \"gist\": \"\\\"closed\\\" overstated: private-review.yml and operator-approval.yml still run on pull_request with secrets\"}]} -->"
+ }
+]

@@ -14,6 +14,7 @@ Every pull request gets these three passes. `AGENTS.md` defines the contracts an
   - the diff does what the PR body's **Plan** says, and its **Verification** is credible;
   - a bug fix comes with a test that fails without the fix;
   - a change to a board format changes its parser and tests with it;
+  - a change to an entry point that talks to an external system (GitHub, the registry, NEAR RPC, Railway) shows, under **Verification**, the output of a read-only run against the real system, and its tests stub that system with captured responses (`test/fixtures/github/`), not hand-written ones (#130);
   - text people read uses the agency vocabulary from `AGENTS.md`.
 
 ## Severity

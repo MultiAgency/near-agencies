@@ -1,0 +1,50 @@
+[
+ {
+  "id": 5986442868,
+  "user": {
+   "login": "claude[bot]"
+  },
+  "created_at": "2026-10-05T01:13:54Z",
+  "body": "**Review summary (REVIEW.md passes):** 3 findings.\n\n- Security: 1 Important\n- Compliance: 1 Important, 1 Nit\n- Bugs: none\n\nImportant:\n- **Security** (`lib/operator-approval.mjs:148-153`): a self-declared roster `kind: \"human\"`, or no roster record at all, now skips the operator check. An agent with write can then ship on its operator's approval alone. `/admit` and `isTrusted` control who may post a record; they don't verify its `kind`.\n- **Compliance** (`test/operator-approval.test.mjs:307-310`): the new test asserts that `rogue-agent` recorded as human passes. That pins the bypass as expected behavior, while the Verification presents the test as evidence of a protection."
+ },
+ {
+  "id": 5986552907,
+  "user": {
+   "login": "claude[bot]"
+  },
+  "created_at": "2026-10-05T01:27:08Z",
+  "body": "**Review summary (REVIEW.md passes), head a96aa1a:** 3 findings.\n\n- Bugs: none\n- Security: 1 Important\n- Compliance: 1 Important, 1 Nit\n\nImportant:\n- **Security** (`lib/operator-approval.mjs:150-154`): an agent with write access but no roster record passes on its operator's approval alone, because the runbook grants write at step 2, before `/admit` at step 4. Whether the owner also accepted a self-declared `kind: \"human\"` skipping the check should be confirmed on #109.\n- **Compliance** (`scripts/operator-approval.mjs:60`): the #109 fix has no regression test. The bug was a read in the script, the script has no tests, and `git grep` is not a test."
+ },
+ {
+  "id": 5986636317,
+  "user": {
+   "login": "claude[bot]"
+  },
+  "created_at": "2026-10-05T01:37:18Z",
+  "body": "**Review summary (REVIEW.md passes), head 9e18d41:** 4 findings.\n\n- Bugs: 1 Nit\n- Security: 1 Important\n- Compliance: 2 Nits\n\nImportant:\n- **Security** (`lib/operator-approval.mjs:164`): whether an author is an agent now depends only on the `kind` they declared on the roster, so an agent with write access recorded as `kind: \"human\"` can merge on its operator's approval alone. The PR body says the owner accepted this risk in #109; the owner should confirm that when approving."
+ },
+ {
+  "id": 5986727979,
+  "user": {
+   "login": "claude[bot]"
+  },
+  "created_at": "2026-10-05T01:48:18Z",
+  "body": "**Review summary (REVIEW.md passes), head e531fd6:** 4 findings.\n\n- Bugs: 1 Nit\n- Security: 1 Important, 1 Nit\n- Compliance: 1 Nit\n\nImportant:\n- **Security** (`lib/operator-approval.mjs:163`): whether an author is an agent now rests only on the roster `kind` they declared, which nothing verifies. An agent with write access recorded as `kind: \"human\"`, or with no roster record, can merge to `staging` on its operator's approval alone. Before approving, the owner should confirm that #109 accepted this specific bypass."
+ },
+ {
+  "id": 5986801865,
+  "user": {
+   "login": "claude[bot]"
+  },
+  "created_at": "2026-10-05T01:57:17Z",
+  "body": "**AI review (REVIEW.md):** 2 findings.\n\n- Bugs: none. The team read still fails closed: `teamMembers` returns null on error, and `judgedTeamMembers` throws into the script's fail-closed catch.\n- Security: 1 Important.\n- Compliance: 1 Nit.\n\nImportant:\n- Security, `lib/operator-approval.mjs:178`: the author's self-declared roster `kind: \"human\"` (or no roster record, for an account with write) now skips the operator check entirely, so an agent can ship on its operator's approval alone. The PR body names this as an accepted risk; it needs @jlwaugh's explicit sign-off as owner, or the collaborator-permission fail-closed rule the PR body itself proposes."
+ },
+ {
+  "id": 1,
+  "user": {
+   "login": "github-actions[bot]"
+  },
+  "created_at": "2026-10-05T01:56:00Z",
+  "body": "AI review (synthetic earlier round for this eval: the live history predates the findings list).\n\n<!-- ai-review-ledger {\"sha\": \"c58d0bdc59cb890c5cc278dac6b3e5179a2d7392\", \"findings\": [{\"id\": \"F1\", \"path\": \"lib/operator-approval.mjs\", \"line\": 153, \"pass\": \"Security\", \"severity\": \"Important\", \"status\": \"open\", \"gist\": \"a self-declared roster kind decides whether the operator check runs, reopening the #76 bypass\"}]} -->"
+ }
+]

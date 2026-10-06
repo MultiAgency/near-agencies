@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { afterEach, describe, test } from "node:test";
 import { readFileSync } from "node:fs";
 
-import { autoJobsHealth, closeIfHandedOff, coordinatorHealth, settleAutoJobs, settlePayouts } from "../lib/coordinator.mjs";
+import { autoJobsHealth, closeIfHandedOff, coordinatorHealth, planAutoJobRounds, settleAutoJobRounds, settleAutoJobs, settlePayouts } from "../lib/coordinator.mjs";
 import { listEngagements, loadEngagement } from "../lib/engagement-state.mjs";
 import { fence, fenced } from "../lib/github.mjs";
+import { ledgerOf } from "../lib/ledger.mjs";
 import { USDC } from "../lib/near.mjs";
 import { teamProblem } from "../lib/team.mjs";
 
@@ -70,12 +71,13 @@ const crossReferenced = (prNumber, at) => ({
   created_at: at,
   source: { issue: { number: prNumber, html_url: `https://github.com/${REG}/pull/${prNumber}`, pull_request: { number: prNumber } } },
 });
-const pull = (number, { state = "open", merged = false, user = "jlwaugh", base = "staging", body = `Closes ${SOURCE}` } = {}) => ({
+const pull = (number, { state = "open", merged = false, user = "jlwaugh", base = "staging", body = `Closes ${SOURCE}`, sha = String(number).padStart(40, "abcde") } = {}) => ({
   number,
   state,
   merged,
   user: { login: user },
   base: { ref: base },
+  head: { sha },
   html_url: `https://github.com/${REG}/pull/${number}`,
   body,
 });
@@ -166,6 +168,10 @@ function serveBoard() {
     // interrupted-run check.
     if (method === "GET" && u.pathname === `${BOARD_URL}/issues` && u.searchParams.get("state") === "all" && !u.searchParams.get("labels")) {
       return json(Object.values(boardIssues).filter(i => !i.pull_request));
+    }
+    // The open list openSeats reads: every open issue, bodies included.
+    if (method === "GET" && u.pathname === `${BOARD_URL}/issues` && u.searchParams.get("state") === "open" && !u.searchParams.get("labels")) {
+      return json(Object.values(boardIssues).filter(i => !i.pull_request && i.state === "open"));
     }
     if (method === "GET" && u.pathname === `${BOARD_URL}/issues` && u.searchParams.get("labels") === "engagement") {
       const all = u.searchParams.get("state") === "all";
@@ -875,5 +881,236 @@ describe("the race problem #119 recorded", () => {
     assert.match(boardThreads[`${BOARD}#900`].at(-1).body, /@agency-builder, the pull request your handoff links is merged, so this task is done\./);
     assert.equal(boardIssues[890].state, "open", "the job completes through the payout sweep, not this one");
     assert.equal(boardThreads[`${BOARD}#900`].filter(c => c.body.includes("**Superseded:**")).length, 0);
+  });
+});
+
+describe("the ai-review revision sweep on an auto task (#159)", () => {
+  // The real shapes, captured 2026-10-05 — the commands, per #130:
+  //   gh api repos/MultiAgency/near-agencies/issues/152/comments  -> test/fixtures/pr-152-comments.json
+  //   gh api repos/MultiAgency/kanban-sandbox/issues/58           -> test/fixtures/auto-issue-58.json
+  //   gh api repos/MultiAgency/kanban-sandbox/issues/58/comments  -> test/fixtures/auto-issue-58-comments.json
+  // The task kanban-sandbox#58 handed off pull request near-agencies#152,
+  // whose ai-review summary carries the ledger with Important F1 open at the
+  // head it reviewed — the pull request the sweep must send back.
+  const fixture = name => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
+  const REAL_SHA = "a390eb169ffc9c6210c6272bb2013840685ec349";
+  const PR152 = `https://github.com/${REG}/pull/152`;
+  const shaOf = n => String(n).padEnd(40, "0");
+
+  // A summary comment as ai-review posts it: findings up front, the ledger
+  // the sweep parses as its last line.
+  const ledgerComment = (sha, findings, { id = 501, body = "" } = {}) => ({
+    id,
+    user: { login: "github-actions[bot]" },
+    created_at: "2026-10-05T16:37:11Z",
+    updated_at: "2026-10-05T16:37:11Z",
+    html_url: `${PR152}#issuecomment-${id}`,
+    body: `${body}\n\n<!-- ai-review-ledger ${JSON.stringify({ sha, findings })} -->`,
+  });
+  const important = (over = {}) => ({ id: "F1", path: "lib/payouts.mjs", line: 239, pass: "Bugs", severity: "Important", status: "open", gist: "cap hold is permanent", ...over });
+  const nit = (over = {}) => ({ id: "F2", path: "lib/payouts.mjs", line: 286, pass: "Compliance", severity: "Nit", status: "open", gist: "PR body lacks the Plan section", ...over });
+  // A coordinator ```changes block as the sweep itself leaves it.
+  const aiRound = (head, id = 601) => ({
+    id,
+    user: { login: BOT },
+    created_at: "2026-10-05T17:00:00Z",
+    updated_at: "2026-10-05T17:00:00Z",
+    html_url: `https://github.com/${BOARD}/issues/900#issuecomment-${id}`,
+    body: `**Changes requested** by ai-review on ${PR152} at ${head.slice(0, 7)}. This task is reopened for another round by @jlwaugh.\n\n> F1 lib/payouts.mjs:239: cap hold is permanent\n\n${fence("changes", { pr: PR152, head, request: `${PR152}#issuecomment-501`, requested_by: "ai-review" })}`,
+  });
+
+  // An auto task that handed pull request 152 off, with whatever thread,
+  // pull request and ai-review comments the test arranges.
+  const build = ({ thread, pullState = {}, prComments = [] } = {}) => {
+    reset();
+    boardIssues[890] = autoEpic(890, 900);
+    boardIssues[900] = autoTask(900, 890);
+    boardThreads[`${BOARD}#900`] = thread ?? [handoffBy("jlwaugh", PR152)];
+    pulls[152] = pull(152, { sha: shaOf(152), ...pullState });
+    regThreads[`${REG}#152`] = prComments;
+    serveBoard();
+  };
+
+  const sweep = () => settleAutoJobRounds({ now: now += 200_000 });
+
+  test("an Important open at the head posts one round with the block the worker revises on", async () => {
+    build({ prComments: [ledgerComment(shaOf(152), [important(), nit()])] });
+    const [d] = await planAutoJobRounds();
+    assert.equal(d.task, 900);
+    assert.equal(d.action, "round", JSON.stringify(d));
+    assert.equal(d.round, 1);
+    assert.equal(d.pr, PR152);
+    assert.equal(d.head, shaOf(152));
+    assert.deepEqual(d.findings, ["F1 lib/payouts.mjs:239: cap hold is permanent"], "only the open Importants ask for the round");
+    await sweep();
+    const said = boardThreads[`${BOARD}#900`].at(-1);
+    assert.equal(said.user.login, BOT);
+    assert.match(said.body, /^\*\*Changes requested\*\* by ai-review on https:\/\/github\.com\/MultiAgency\/near-agencies\/pull\/152 at 1520000\. This task is reopened for another round by @jlwaugh\./);
+    assert.match(said.body, /^> F1 lib\/payouts\.mjs:239: cap hold is permanent$/m, "each open Important, quoted");
+    assert.doesNotMatch(said.body, /F2/, "a Nit asks nobody for a round");
+    assert.deepEqual(fenced(said.body, "changes"), {
+      pr: PR152,
+      head: shaOf(152),
+      request: `${PR152}#issuecomment-501`,
+      requested_by: "ai-review",
+    });
+    assert.equal(autoJobsHealth().review_rounds, 1);
+    assert.equal(autoJobsHealth().review_capped, 0);
+  });
+
+  test("a second sweep at the same head posts nothing", async () => {
+    build({ prComments: [ledgerComment(shaOf(152), [important()])] });
+    await sweep();
+    assert.equal(boardThreads[`${BOARD}#900`].length, 2);
+    await sweep();
+    assert.equal(boardThreads[`${BOARD}#900`].length, 2, "the round stands once per head");
+    assert.equal(autoJobsHealth().review_rounds, 0);
+    const [d] = await planAutoJobRounds();
+    assert.match(d.why, /round 1 already stands at this head/);
+  });
+
+  test("a new head with an Important posts a second round", async () => {
+    build({ prComments: [ledgerComment(shaOf(152), [important()])] });
+    await sweep();
+    // The worker pushed; ai-review reviewed the new head and kept an Important
+    // open: a second ledger comment, for the head it saw.
+    pulls[152].head.sha = shaOf(999);
+    regThreads[`${REG}#152`].push(ledgerComment(shaOf(999), [{ ...important(), id: "F3", line: 300, gist: "the fix opened a new hole" }], { id: 502 }));
+    const [d] = await planAutoJobRounds();
+    assert.equal(d.action, "round");
+    assert.equal(d.round, 2, "the block at the old head is the round already posted");
+    await sweep();
+    const said = boardThreads[`${BOARD}#900`].at(-1);
+    assert.match(said.body, /^\*\*Changes requested\*\* by ai-review on .* at 9990000\. /m);
+    assert.match(said.body, /^> F3 lib\/payouts\.mjs:300: the fix opened a new hole$/m);
+    assert.equal(fenced(said.body, "changes").head, shaOf(999));
+    const rounds = boardThreads[`${BOARD}#900`].filter(c => fenced(c.body, "changes")?.requested_by === "ai-review");
+    assert.equal(rounds.length, 2);
+    assert.equal(autoJobsHealth().review_rounds, 1);
+  });
+
+  test("nits only, an older ledger, no ledger yet, and a merged pull request decide nothing", async () => {
+    // Nits only.
+    build({ prComments: [ledgerComment(shaOf(152), [nit()])] });
+    assert.match((await planAutoJobRounds())[0].why, /ai-review leaves no Important open/);
+    await sweep();
+    assert.equal(boardThreads[`${BOARD}#900`].length, 1);
+
+    // A ledger for an older head: a push is being reviewed.
+    build({ prComments: [ledgerComment(shaOf(151), [important()])] });
+    assert.match((await planAutoJobRounds())[0].why, /ai-review last saw an older head/);
+    await sweep();
+    assert.equal(boardThreads[`${BOARD}#900`].length, 1);
+
+    // No ledger yet: a fork's review waits on /review.
+    build({});
+    assert.match((await planAutoJobRounds())[0].why, /no ai-review ledger yet/);
+    await sweep();
+    assert.equal(boardThreads[`${BOARD}#900`].length, 1);
+
+    // A ledger that does not parse reads as none, whatever an earlier round
+    // carried: the sweep never revises on a list it cannot read.
+    build({ prComments: [{ id: 503, user: { login: "github-actions[bot]" }, created_at: "2026-10-05T16:37:11Z", updated_at: "2026-10-05T16:37:11Z", html_url: `${PR152}#issuecomment-503`, body: "oops\n\n<!-- ai-review-ledger {nope" }] });
+    assert.equal(ledgerOf("x\n<!-- ai-review-ledger {nope"), null);
+    assert.match((await planAutoJobRounds())[0].why, /no ai-review ledger yet/);
+
+    // Merged: settleSourceIssue closes the task on it; the sweep adds nothing.
+    build({ pullState: { state: "closed", merged: true }, prComments: [ledgerComment(shaOf(152), [important()])] });
+    assert.match((await planAutoJobRounds())[0].why, /merged or closed/);
+    await sweep();
+    assert.equal(boardThreads[`${BOARD}#900`].length, 1);
+  });
+
+  test("the fourth round posts the cap comment once, and no block", async () => {
+    build({
+      thread: [handoffBy("jlwaugh", PR152), aiRound(shaOf(1), 601), aiRound(shaOf(2), 602), aiRound(shaOf(3), 603)],
+      prComments: [ledgerComment(shaOf(152), [important()])],
+    });
+    await sweep();
+    const said = boardThreads[`${BOARD}#900`].at(-1);
+    assert.equal(said.body, `ai-review still finds Important issues after 3 rounds at ${shaOf(152).slice(0, 7)}; a person decides whether to merge, fix or close ${PR152}.`);
+    assert.equal(fenced(said.body, "changes"), null, "a cap opens no round");
+    assert.equal(boardThreads[`${BOARD}#900`].filter(c => fenced(c.body, "changes")?.requested_by === "ai-review").length, 3);
+    assert.equal(autoJobsHealth().review_capped, 1);
+    assert.equal(autoJobsHealth().review_rounds, 0);
+    // The cap stands: another sweep says nothing again.
+    await sweep();
+    assert.equal(boardThreads[`${BOARD}#900`].length, 5);
+    assert.equal(autoJobsHealth().review_capped, 0);
+    const [d] = await planAutoJobRounds();
+    assert.match(d.why, /the cap stands/);
+  });
+
+  test("a task with a review seat — not an auto job — is untouched", async () => {
+    reset();
+    boardIssues[890] = autoEpic(890, 900);
+    // The same shape, its terms carrying no ```engagement source: a task a
+    // review seat reviews, whose rounds routeChangeRequests opens.
+    boardIssues[900] = {
+      ...autoTask(900, 890),
+      body: `Part of job #890.\n\nBuild it.\n\n${fence("terms", { engagement: 890, key: "build", amount: "0", asset: USDC, repo: REG })}`,
+    };
+    boardThreads[`${BOARD}#900`] = [handoffBy("jlwaugh", PR152)];
+    pulls[152] = pull(152);
+    regThreads[`${REG}#152`] = [ledgerComment(shaOf(152), [important()])];
+    serveBoard();
+    assert.deepEqual(await planAutoJobRounds(), [], "only a ```terms.source marks an auto job's task");
+    await sweep();
+    assert.equal(boardThreads[`${BOARD}#900`].length, 1, "nothing was posted");
+    assert.equal(autoJobsHealth().review_rounds, 0);
+  });
+
+  test("the captured #58 and #152 decide one due round with F1, and post it once", async () => {
+    reset();
+    boardIssues[58] = fixture("auto-issue-58.json");
+    boardThreads[`${BOARD}#58`] = fixture("auto-issue-58-comments.json");
+    regThreads[`${REG}#152`] = fixture("pr-152-comments.json");
+    pulls[152] = { number: 152, state: "open", merged: false, user: { login: "agency-builder" }, base: { ref: "staging" }, head: { sha: REAL_SHA }, html_url: PR152, body: "Closes MultiAgency/near-agencies#149" };
+    serveBoard();
+    const [d] = await planAutoJobRounds();
+    assert.equal(d.task, 58);
+    assert.equal(d.action, "round", JSON.stringify(d));
+    assert.equal(d.round, 1);
+    assert.equal(d.pr, PR152);
+    assert.equal(d.head, REAL_SHA, "the ledger is for the head the handoff delivered");
+    assert.equal(d.summary, `${PR152}#issuecomment-5998797850`);
+    assert.deepEqual(d.findings, ["F1 lib/payouts.mjs:239: cap hold is permanent: fixed floor and growing last id keep the job capped, so payouts never record and the job never closes"]);
+    await sweep();
+    const said = boardThreads[`${BOARD}#58`].at(-1);
+    assert.equal(said.user.login, BOT);
+    assert.match(said.body, /^\*\*Changes requested\*\* by ai-review on https:\/\/github\.com\/MultiAgency\/near-agencies\/pull\/152 at a390eb1\. This task is reopened for another round by @agency-builder\./);
+    assert.deepEqual(fenced(said.body, "changes"), { pr: PR152, head: REAL_SHA, request: `${PR152}#issuecomment-5998797850`, requested_by: "ai-review" });
+    const afterFirst = boardThreads[`${BOARD}#58`].length;
+    await sweep();
+    assert.equal(boardThreads[`${BOARD}#58`].length, afterFirst, "a second sweep at the same head says nothing more");
+    const rounds = boardThreads[`${BOARD}#58`].filter(c => fenced(c.body, "changes")?.requested_by === "ai-review");
+    assert.equal(rounds.length, 1);
+  });
+
+  test("a task closed between the plan and the write hears nothing", async () => {
+    build({ prComments: [ledgerComment(shaOf(152), [important()])] });
+    const planned = await planAutoJobRounds();
+    assert.equal(planned[0].action, "round");
+    // The merge closed the task (settleSourceIssue) before the sweep ran.
+    boardIssues[900].state = "closed";
+    await sweep();
+    assert.equal(boardThreads[`${BOARD}#900`].length, 1);
+    assert.equal(autoJobsHealth().review_rounds, 0);
+  });
+});
+
+describe("the ai-review ledger parser", () => {
+  test("a summary's last marker wins, and anything unreadable is none", () => {
+    const inner = JSON.stringify({ sha: "a".repeat(40), findings: [{ id: "F1", severity: "Important", status: "open" }] });
+    const carried = `## AI review\n\n- F1 something\n\n<!-- ai-review-ledger ${inner} -->`;
+    assert.deepEqual(ledgerOf(carried), { sha: "a".repeat(40), findings: [{ id: "F1", severity: "Important", status: "open" }] });
+    // A quote of an earlier summary sits above the writer's own ledger.
+    assert.deepEqual(ledgerOf(`> <!-- ai-review-ledger {"sha": "old"} -->\n\n${carried}`).sha, "a".repeat(40));
+    assert.equal(ledgerOf("no ledger here"), null);
+    assert.equal(ledgerOf("<!-- ai-review-ledger {nope -->"), null, "a list that does not parse is none");
+    assert.equal(ledgerOf(`<!-- ai-review-ledger {"findings": []} -->`), null, "a ledger without its sha is none");
+    assert.equal(ledgerOf(`<!-- ai-review-ledger {"sha": "x"} -->`), null, "a ledger without its findings list is none");
+    assert.equal(ledgerOf(undefined), null);
+    assert.equal(ledgerOf("<!-- ai-review-ledger {\"sha\": \"x\"}"), null, "a marker never closed is none");
   });
 });
