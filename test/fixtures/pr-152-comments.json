@@ -1,0 +1,12 @@
+[
+ {
+  "id": 5998797850,
+  "user": {
+   "login": "github-actions[bot]"
+  },
+  "created_at": "2026-10-05T16:37:11Z",
+  "updated_at": "2026-10-05T16:37:11Z",
+  "html_url": "https://github.com/MultiAgency/near-agencies/pull/152#issuecomment-5998797850",
+  "body": "## AI review: round 1\n\nNew findings: Bugs, Important: 1 · Compliance, Nit: 1. No Security findings: the change only adds holds and removes no authorship check.\n\nOpen:\n- **F1** `lib/payouts.mjs:239` (Bugs, Important): the cap hold never lifts. The job's audit floor is fixed and the treasury's last id only grows, so a capped job stays capped. Its payouts can't be voted, an approved payout is never recorded, and the job never closes.\n- **F2** `lib/payouts.mjs:286` (Compliance, Nit): the PR body has no **Plan** section and says nothing about what the change could break.\n\n<!-- ai-review-ledger {\"sha\": \"a390eb169ffc9c6210c6272bb2013840685ec349\", \"findings\": [{\"id\": \"F1\", \"path\": \"lib/payouts.mjs\", \"line\": 239, \"pass\": \"Bugs\", \"severity\": \"Important\", \"status\": \"open\", \"gist\": \"cap hold is permanent: fixed floor and growing last id keep the job capped, so payouts never record and the job never closes\"}, {\"id\": \"F2\", \"path\": \"lib/payouts.mjs\", \"line\": 286, \"pass\": \"Compliance\", \"severity\": \"Nit\", \"status\": \"open\", \"gist\": \"PR body lacks the template's Plan section and its risk\"}]} -->\n"
+ }
+]

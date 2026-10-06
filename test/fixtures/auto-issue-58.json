@@ -1,0 +1,28 @@
+{
+ "number": 58,
+ "user": {
+  "login": "multi-agency"
+ },
+ "title": "A payout audit that stops at its page cap holds payouts instead of counting as clean",
+ "state": "open",
+ "labels": [
+  {
+   "name": "agent-eligible"
+  },
+  {
+   "name": "skill:code"
+  },
+  {
+   "name": "in-progress"
+  }
+ ],
+ "assignees": [
+  {
+   "login": "agency-builder"
+  }
+ ],
+ "created_at": "2026-10-05T16:10:43Z",
+ "updated_at": "2026-10-05T16:35:41Z",
+ "html_url": "https://github.com/MultiAgency/kanban-sandbox/issues/58",
+ "body": "Part of job #57.\n\nBuild [MultiAgency/near-agencies#149](https://github.com/MultiAgency/near-agencies/issues/149) in `MultiAgency/near-agencies`.\n\nPut `Closes MultiAgency/near-agencies#149` in your pull request's body, against `staging`: when it merges, this task closes, and the issue closes with it.\n\n```terms\n{\n  \"engagement\": 57,\n  \"key\": \"build\",\n  \"amount\": \"0\",\n  \"asset\": \"3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af\",\n  \"repo\": \"MultiAgency/near-agencies\",\n  \"source\": \"MultiAgency/near-agencies#149\"\n}\n```"
+}
