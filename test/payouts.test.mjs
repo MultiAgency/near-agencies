@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, describe, test } from "node:test";
 
 import { USDC } from "../lib/near.mjs";
-import { AUDIT_PAGE_CAP, closeIfPaid, duplicatePayoutProblem, filedProposal, payoutAuditCapped, pendingPayouts, payoutProblem, proposalDescription, proposePayouts, recordApprovals } from "../lib/payouts.mjs";
+import { AUDIT_PAGE_CAP, closeIfPaid, duplicatePayoutProblem, filedProposal, payoutAuditCapped, pendingPayouts, payoutProblem, proposalDescription, proposePayouts, recordApprovals, resetPayoutAudit } from "../lib/payouts.mjs";
 import { digest, fence } from "../lib/github.mjs";
 
 process.env.GITHUB_TOKEN ??= "test-token";
@@ -296,7 +296,7 @@ describe("filing proposals and closing a job", async () => {
   const { coordinatorHealth, settlePayouts } = await import("../lib/coordinator.mjs");
   const { loadEngagement } = await import("../lib/engagement-state.mjs");
   const realFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = realFetch; });
+  afterEach(() => { globalThis.fetch = realFetch; resetPayoutAudit(); });
 
   const rpcValue = value => new Response(JSON.stringify({
     jsonrpc: "2.0",
@@ -309,10 +309,12 @@ describe("filing proposals and closing a job", async () => {
   // commentAt reads a deliverable), pull requests from `pulls`, open `jobs`
   // for the sweep's listing, and the treasury's reads from `proposals` —
   // windowed as the chain reads them: `get_proposals` carries `from_index`
-  // and `limit` in its contract args, and returns ids from `from_index` up —
-  // one proposal from `proposal`, and the indexed vote transactions in `txs`.
-  // `lastId` is the treasury's proposal counter, which may sit far above the
-  // proposals a job's audit must still see.
+  // and `limit` in its contract args, and returns ids from `from_index` up;
+  // `get_proposal` carries the single `id` it reads fresh, found in
+  // `proposals` by that id, or `proposal` where a test names none there. The
+  // indexed vote transactions come from `txs`. `lastId` is the treasury's
+  // proposal counter, which may sit far above the proposals a job's audit
+  // must still see.
   const serve = ({ issues = {}, threads = {}, proposals = [], jobs = [], proposal = null, txs = [], pulls = {}, lastId = null } = {}) => {
     const reads = [];
     const writes = [];
@@ -329,7 +331,7 @@ describe("filing proposals and closing a job", async () => {
           const from = args.from_index ?? 0;
           return rpcValue(proposals.filter(p => p.id >= from && p.id < from + args.limit));
         }
-        if (body.params?.method_name === "get_proposal") return rpcValue(proposal);
+        if (body.params?.method_name === "get_proposal") return rpcValue(proposals.find(p => p.id === args.id) ?? proposal);
         if (u.pathname === "/v0/account") return json({ account_txs: txs.map(t => ({ transaction_hash: t.transaction.hash })) });
         if (u.pathname === "/v0/transactions") return json({ transactions: txs });
         throw new Error(`unexpected rpc: ${body.method} ${body.params?.method_name ?? body.params?.request_type}`);
@@ -653,7 +655,7 @@ describe("filing proposals and closing a job", async () => {
       },
       receipts: [{ receipt: { block_height: 500 } }],
     };
-    const { writes } = serve(dupBoard([onChain(41), onChain(42)], { proposalStatus: "Approved", txs: [vote] }));
+    const { writes } = serve(dupBoard([onChain(41, "Approved"), onChain(42)], { proposalStatus: "Approved", txs: [vote] }));
     await settlePayouts("multi-agency", { now: 4_000_000 });
     const paid = writes.filter(w => w.path.endsWith("/issues/30/comments") && w.body.body.startsWith("**Paid:**"));
     assert.equal(paid.length, 1, "recorded once, from the proposal the task's payout names");
@@ -757,6 +759,10 @@ describe("filing proposals and closing a job", async () => {
     assert.equal(paidOn(run.writes).length, 0, "the proposals leaving the newest-100 window must not turn a double payment into a recording");
     assert.equal(doublesOn(run.writes).length, 1, "the double payment is still reported on the task");
     assert.equal(closesJob(run.writes), false);
+    // A restart keeps nothing of the audit's progress in memory: simulated
+    // here by forgetting it explicitly, rather than by the small board
+    // happening to need only one call's worth of pages either way.
+    resetPayoutAudit();
     const restarted = serve(restartedBoard);
     await settlePayouts("multi-agency", { now: 8_121_000 });
     assert.equal(paidOn(restarted.writes).length, 0, "still nothing records once nothing is memoized");
@@ -814,6 +820,26 @@ describe("filing proposals and closing a job", async () => {
     const job = await loadEngagement(28);
     await recordApprovals(job, () => {});
     assert.equal(paidOn(run.writes).length, 0, "a capped audit must not record a payment it cannot fully vouch for");
+  });
+
+  // A fixed floor beside a treasury that only grows must not hold a job
+  // forever: each sweep picks up the audit where the last one stopped, so a
+  // job whose range outgrows one sweep's page budget still finishes, over
+  // however many sweeps it takes, and its payout records once it does.
+  test("a page cap that outgrows one sweep still lifts, and the payout records", async () => {
+    const run = serve(dupBoard([onChain(41, "Approved")], {
+      proposalStatus: "Approved",
+      txs: [vote(41, "votetx")],
+      lastId: 1050,
+    }));
+    await recordApprovals(await loadEngagement(28), () => {});
+    assert.equal(paidOn(run.writes).length, 0, "the first sweep's read falls short of the treasury's tip");
+    assert.equal(payoutAuditCapped().length, 1, "the cap shows on /api/health while the audit is incomplete");
+    await recordApprovals(await loadEngagement(28), () => {});
+    assert.equal(paidOn(run.writes).length, 1, "a second sweep's read reaches the tip, and the payment records");
+    assert.equal(payoutAuditCapped().length, 0, "the cap is gone once the audit catches up");
+    await closeIfPaid(28, () => {});
+    assert.equal(closesJob(run.writes), true, "the job closes once its only payout is recorded");
   });
 
   // The recorded proposal can die beside live extras — expired while an
