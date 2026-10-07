@@ -261,9 +261,12 @@ async function run() {
     // how it ended. Delivered: the saved branch has nothing left to hold.
     // Anything else — out of turns, out of budget, thrown — the worker's own
     // code saves to wip/task-n before the clone is removed, and hands the
-    // task back once its attempts are spent (#169). A save that cannot run
-    // (the model never cloned, git failed) leaves the run as it was: the
-    // next one starts from the base branch.
+    // task back once its attempts are spent (#169) — unless the run could
+    // not start from the round's saved branch (its setup failed after the
+    // lookup found it): then nothing is saved, because pushing would
+    // overwrite the ledger the next run is to resume. A save that cannot
+    // run at all (the model never cloned, git failed) leaves the run as it
+    // was: the next one starts from the base branch.
     try {
       if (code && ended?.subtype === "success") {
         await deleteSaved({ remote: deliveryRemote(access, repo, login), n, cwd });
@@ -273,19 +276,23 @@ async function run() {
           resumed: Boolean(resume), cwd, repo,
           subtype: ended.subtype, turns: ended.turns, cost: ended.cost,
         });
-        const reason = handBackReason({
-          saves: saved.run,
-          sameTree: saved.previousTree !== null && saved.tree === saved.previousTree,
-        });
-        if (reason) {
-          await comment(n, handBackComment({
-            n,
-            branch: wipBranchOf(n),
-            remote: access === "fork" ? `${login}/${repo.name.split("/")[1]}` : repo.name,
-            reason,
-            note: saved.message,
-          }));
-          console.log(`worker: #${n} handed back: ${reason}`);
+        if (saved.skipped) {
+          console.log(`worker: #${n} saved nothing: ${wipBranchOf(n)} still holds this round's saved work, this run did not start from it, and pushing would overwrite it — it waits there for the next run to resume`);
+        } else {
+          const reason = handBackReason({
+            saves: saved.run,
+            sameTree: saved.previousTree !== null && saved.tree === saved.previousTree,
+          });
+          if (reason) {
+            await comment(n, handBackComment({
+              n,
+              branch: wipBranchOf(n),
+              remote: access === "fork" ? `${login}/${repo.name.split("/")[1]}` : repo.name,
+              reason,
+              note: saved.message,
+            }));
+            console.log(`worker: #${n} handed back: ${reason}`);
+          }
         }
       }
     } catch (error) {

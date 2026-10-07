@@ -234,6 +234,30 @@ describe("saving an unfinished run", () => {
     }
   });
 
+  test("a saved branch this run did not start from is left standing: nothing is saved, nothing pushed", async () => {
+    const w = await workspace();
+    try {
+      await w.edit("lib.js", "// step one\n");
+      await save(w);
+      // A later run whose setup failed: it builds on the base branch instead,
+      // so it did not start from the saved work — resumed reads false — and
+      // its own work must not land on top of what it never saw.
+      const run = git();
+      await w.edit("other.js", "// a fallback run's work\n");
+      const saved = await save(w, { run });
+      assert.equal(saved.skipped, true, "the save refused to overwrite this round's ledger");
+      assert.equal(saved.record.run, 1, "and names the save it would have overwritten");
+      assert.equal(run.calls.some(c => c.args[0] === "push"), false, "nothing was pushed");
+      assert.equal(run.calls.some(c => c.args[0] === "commit"), false, "nothing was committed either");
+      const [wipRef] = (await w.refs()).filter(l => l.endsWith("refs/heads/wip/task-14"));
+      assert.equal(saved.tip, wipRef.split("\t")[0], "the branch's tip is untouched");
+      const tip = await w.tipMessage("wip/task-14");
+      assert.match(tip, /^wip: task #14 run 1 saved unfinished/, "the ledger still holds the first run's save alone");
+    } finally {
+      await w.cleanup();
+    }
+  });
+
   test("a changed tree without a commit by the model is progress; an unchanged one is not", async () => {
     const w = await workspace();
     try {

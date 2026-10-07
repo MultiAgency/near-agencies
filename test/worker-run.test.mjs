@@ -73,6 +73,11 @@ for a in "$@"; do
   esac
   args+=("$a")
 done
+case ",$FAIL_RESUME_CHECKOUT," in *,1,*)
+  for a in "\${args[@]}"; do
+    case "$a" in refs/remotes/*) exit 42 ;; esac
+  done ;;
+esac
 printf '=== git %s\\n' "\${args[*]}" >> "$SHIM_LOG"
 exec "$GIT_REAL" "\${args[@]}"
 `;
@@ -309,6 +314,24 @@ export async function* query({ options, prompt }) {
 }
 `;
 
+// The fallback: the saved branch was found but could not be set up, so the
+// run starts at the base branch and works there — and ends unfinished, with
+// work that never saw what the saved branch holds.
+const SCENARIO_FALLBACK = `
+import { execFile } from "node:child_process";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { promisify } from "node:util";
+const run = promisify(execFile);
+export async function* query({ options, prompt }) {
+  await writeFile(join(process.env.SCENARIO_OUT, "prompt.txt"), prompt);
+  await run("git", ["clone", "--branch", "staging", process.env.FAKE_UPSTREAM, "."], { cwd: options.cwd, env: process.env });
+  await run("git", ["checkout", "-b", "task-58"], { cwd: options.cwd, env: process.env });
+  await writeFile(join(options.cwd, "FALLBACK.md"), "work that never saw the saved branch\\\\n");
+  yield { type: "result", subtype: "error_max_turns", num_turns: 9, total_cost_usd: 0.4, result: "" };
+}
+`;
+
 // The delivery: push the branch, end in success — the worker then has a
 // saved branch to delete.
 const SCENARIO_DELIVERS = `
@@ -443,6 +466,26 @@ describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
       const tip = await h.tipMessage(h.upstream, "wip/task-58");
       assert.match(tip, /^wip: task #58 run 1 saved unfinished \(revision round 9001\)/,
         "the ledger starts over: this round's first unfinished run");
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  test("a saved branch whose setup failed is not pushed over: the fallback run saves nothing", async () => {
+    const h = await harness();
+    try {
+      await h.spawn(SCENARIO_STOPS);
+      const pushesBefore = (await h.gitCalls()).filter(wipPush).length;
+      const { stdout } = await h.spawn(SCENARIO_FALLBACK, { FAIL_RESUME_CHECKOUT: "1" });
+      assert.match(stdout, /worker: starting from the base branch: the saved work could not be set up/,
+        "the failed setup fell back, as before");
+      assert.match(stdout, /worker: #58 saved nothing: wip\/task-58 still holds this round's saved work/,
+        "and the run says why it saved nothing");
+      assert.equal((await h.gitCalls()).filter(wipPush).length, pushesBefore,
+        "no push touched the branch: not to force it over, not to update it");
+      assert.match(await h.tipMessage(h.upstream, "wip/task-58"), /^wip: task #58 run 1 saved unfinished/,
+        "the first run's save is still the ledger the next run resumes");
+      assert.deepEqual(h.board.state.posts, [], "no hand-back either: the attempts did not move");
     } finally {
       await h.cleanup();
     }

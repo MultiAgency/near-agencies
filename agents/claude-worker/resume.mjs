@@ -208,14 +208,31 @@ export async function setupResume({ remote, forkFetch = null, baseBranch, n, res
  * checkpoints beneath, any uncommitted change on top — as one save commit
  * recording the run, and push the branch to `wip/task-<n>` on the delivery
  * remote. `round` is the revision round the run worked on (0 for the first),
- * `resumed` whether this run started from the saved branch: a run that did
+ * `resumed` whether this run started from the saved branch. A run that did
  * not (a new round's first save, or a first save at all) forces the push, so
- * a round's ledger replaces the old one's instead of mixing with it. Returns
+ * a round's ledger replaces the old one's instead of mixing with it — but
+ * only once the remote reads as holding no save of this round: a run whose
+ * own lookup found the branch and then could not set up from it (worker.mjs
+ * fell back to the base branch) finds it again here, saves nothing, and
+ * returns `skipped` instead — overwriting the branch would wipe the round's
+ * ledger, its saved work and its run numbers, which the next run is to
+ * resume. Returns
  * what bounding the attempts reads: this run's number among the round's
  * unfinished runs, its saved tree, and the tree the previous save holds.
  * Nothing here touches a pull request branch: the only ref written is
  * `wip/task-<n>`. */
 export async function saveUnfinished({ remote, n, round, resumed, cwd, repo, run = promisify(execFile), subtype, turns, cost }) {
+  // A run that did not start from the round's saved branch must not overwrite
+  // it: the branch is the ledger the next run resumes and counts from. This
+  // run's own lookup found it and then lost it — its setup failed and
+  // worker.mjs fell back to the base branch — so the remote is read fresh
+  // here rather than trusted from before the run: still there, nothing is
+  // committed or pushed, and the caller says why. Gone (or an older round's,
+  // whose ledger a new round replaces): the push below may force.
+  if (!resumed) {
+    const kept = await resumableWork({ remote, n, round, run });
+    if (kept) return { skipped: true, tip: kept.tip, record: kept.record };
+  }
   const before = await savedChain({ cwd, round, run });
   const runNumber = before.length + 1;
   const { failed, ran } = await failingChecks({ repo, cwd, run });
