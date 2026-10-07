@@ -309,38 +309,48 @@ export function ship(access, repo, n, login, revision, reviewed, resumed = false
     // for the next run, which starts from the branch those commits sit on.
     `Work in steps, and \`git commit\` locally after each one that leaves ${pass} passing: \`git add\` only that step's files — never the \`.board/\` comment drafts — and write the message so it says what the step did and what it has left — a run that stops unfinished leaves its finished steps somewhere the next run can take them up.`,
     `\`git add\` only the files you changed, \`git commit\`, and \`git push -u origin ${branch}\`${fork ? " — origin is your fork" : ""}. Every commit carries part of the change: never an empty or probe commit, and no tool attribution in a commit message or the pull request body (AGENTS.md). If ${pulls} shows a pull request already, push to its branch instead of opening another.`,
-    ...(revision ? [] : [
-      `Open the pull request: read \`.github/pull_request_template.md\` from this clone, and if it has one, fill in its headings, keeping the task link, before writing the body to a file in \`.board/\`. With no template, write its body to \`.board/\` first so it links task #${n} and says what changed and how you verified it. Then \`gh pr create --repo ${repo.name} --head ${fork ? `${login}:` : ""}${branch} --base ${repo.base} --title "Task #${n}: <what changed>" --body-file .board/<file>\`.`,
-      ...(autoMerges(access, reviewed) ? [
-        `Then \`gh pr merge ${branch} --repo ${repo.name} --auto --squash\`: it returns at once, and GitHub merges the pull request by itself once the required checks pass and a code owner or the approval gate approves it. You need not wait for it.`,
-      ] : []),
-    ]),
+    ...(revision
+      ? [
+          `If a fix changes behavior, keep the pull request body's Plan and Verification matching what changed: write the updated body to a file in \`.board/\` and run \`gh pr edit ${branch} --repo ${repo.name} --body-file .board/<file>\`.`,
+          `If ${pulls} reports the pull request has a conflict or is behind ${repo.base}, \`${fork ? `git fetch ${upstream} ${repo.base}` : `git fetch origin ${repo.base}`}\` and \`git merge --no-edit FETCH_HEAD\`, resolve any conflict, and push again.`,
+        ]
+      : [
+          `Open the pull request: read \`.github/pull_request_template.md\` from this clone, and if it has one, fill in its headings, keeping the task link, before writing the body to a file in \`.board/\`. With no template, write its body to \`.board/\` first so it links task #${n} and says what changed and how you verified it. Then \`gh pr create --repo ${repo.name} --head ${fork ? `${login}:` : ""}${branch} --base ${repo.base} --title "Task #${n}: <what changed>" --body-file .board/<file>\`.`,
+          ...(autoMerges(access, reviewed) ? [
+            `Then \`gh pr merge ${branch} --repo ${repo.name} --auto --squash\`: it returns at once, and GitHub merges the pull request by itself once the required checks pass and a code owner or the approval gate approves it. You need not wait for it.`,
+          ] : []),
+        ]),
   ];
 }
 
 /** What Claude may run on a seat. Without code mode: read the board, post the
  * deliverable and handoff, and research the subject. With it: shipping this
- * task's branch and opening its pull request — and for git, only the exact
- * commands ship() gives: the clone of the one URL into this directory, and a
- * push of the task's branch alone. The registry's checks for the repository
- * are listed exactly as it writes them, with no prefixes: a prefix would run
- * any arguments after the command. Prefix patterns would otherwise be far too
- * wide here: `git push:*` also allows force-pushing or deleting any
- * unprotected branch, including other agents' task branches, and `git
- * clone:*` accepts `-c` and `--upload-pack`, which run arbitrary commands.
- * Fork mode fetches the base branch from the upstream URL instead of syncing
- * the fork, because no sync can create the branch a fork from before the base
- * lacks: `gh repo sync --branch <base>` asks GitHub's merge-upstream
- * endpoint, which answers 404 Branch not found for a branch the fork lacks,
- * and its fallback only updates an existing ref. `gh api` is absent on
- * purpose: it would put every endpoint the token allows — approving a pull
- * request, closing or relabeling an issue, deleting a comment — behind board
- * comments anyone can write, and the one read it was added for, hashing the
- * deliverable, is the worker's own deliverable_sha256 tool (worker.mjs).
- * `access` is fork or branch (accessFor), `repo` the registry entry the
- * task's terms name, `n` the task's number, `login` the agent's GitHub login,
- * which names its fork, and `reviewed` whether a review task waits on this
- * one (no auto-merge then). */
+ * task's branch, opening its pull request, and the follow-ups a revision
+ * round needs — and for git, only the exact commands ship() gives: the clone
+ * of the one URL into this directory, a push of the task's branch alone, and
+ * catching that branch up with its base (`git fetch origin <base>` in branch
+ * mode, the same fetch fork mode already had from the upstream URL, then
+ * `git merge --no-edit FETCH_HEAD` in either). The registry's checks for the
+ * repository are listed exactly as it writes them, with no prefixes: a prefix
+ * would run any arguments after the command. Prefix patterns would otherwise
+ * be far too wide here: `git push:*` also allows force-pushing or deleting
+ * any unprotected branch, including other agents' task branches, `git
+ * clone:*` accepts `-c` and `--upload-pack`, which run arbitrary commands,
+ * and `gh pr edit:*` would let Claude rewrite another task's pull request —
+ * so only the task's own branch and repository are named, never a prefix of
+ * `gh pr edit`. Fork mode fetches the base branch from the upstream URL
+ * instead of syncing the fork, because no sync can create the branch a fork
+ * from before the base lacks: `gh repo sync --branch <base>` asks GitHub's
+ * merge-upstream endpoint, which answers 404 Branch not found for a branch
+ * the fork lacks, and its fallback only updates an existing ref. `gh api` is
+ * absent on purpose: it would put every endpoint the token allows —
+ * approving a pull request, closing or relabeling an issue, deleting a
+ * comment — behind board comments anyone can write, and the one read it was
+ * added for, hashing the deliverable, is the worker's own
+ * deliverable_sha256 tool (worker.mjs). `access` is fork or branch
+ * (accessFor), `repo` the registry entry the task's terms name, `n` the
+ * task's number, `login` the agent's GitHub login, which names its fork, and
+ * `reviewed` whether a review task waits on this one (no auto-merge then). */
 export function allowedTools(access, repo, n, login, reviewed) {
   const tools = [
     "Read(./**)", "Write(./**)", "Edit(./**)", "Glob", "Grep", "WebSearch", "WebFetch",
@@ -357,13 +367,20 @@ export function allowedTools(access, repo, n, login, reviewed) {
     ...(access === "fork" ? [
       `Bash(git fetch ${upstream} ${repo.base})`,
       `Bash(gh repo fork ${repo.name} --clone=false)`,
-    ] : []),
+    ] : [
+      `Bash(git fetch origin ${repo.base})`,
+    ]),
     // git rm deletes a tracked file in this clone only (#195): Write and Edit
     // can't delete one, and a bare rm would reach past the clone.
     "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git rm:*)", "Bash(git commit:*)",
+    // Catching the task branch up with a base branch that moved on: the fetch
+    // above (fork mode's is the one it already had) leaves the base's tip in
+    // FETCH_HEAD, and this merges it into the branch already checked out.
+    "Bash(git merge --no-edit FETCH_HEAD)",
     `Bash(git push -u origin task-${n})`,
     ...repo.checks.map(c => `Bash(${c})`),
     "Bash(gh pr create:*)", "Bash(gh pr view:*)",
+    `Bash(gh pr edit task-${n} --repo ${repo.name} --body-file:*)`,
     ...(autoMerges(access, reviewed) ? [`Bash(gh pr merge task-${n} --repo ${repo.name} --auto --squash)`] : []),
   );
 }
