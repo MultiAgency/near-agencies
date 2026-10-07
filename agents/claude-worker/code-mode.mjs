@@ -291,8 +291,11 @@ export function ship(access, repo, n, login, revision, reviewed, resumed = false
       ? [
           // A resumed run finds the clone ready-made: the worker's own code
           // started it at the branch the previous unfinished run saved
-          // (resume.mjs), and the prompt carries that run's log and note.
-          `The repository is already cloned in this directory, and branch \`${branch}\` is checked out where a previous run of this task stopped: do not clone, fork or fetch, and do not start the work over — continue from what is here.`,
+          // (resume.mjs), and the prompt carries that run's log and note. On
+          // a revision round the catch-up step below can still call for a
+          // fetch, so the ban on repeating setup only reaches clone and fork
+          // then — never a blanket "or fetch" that step would contradict.
+          `The repository is already cloned in this directory, and branch \`${branch}\` is checked out where a previous run of this task stopped: do not clone${revision ? " or fork" : ", fork or fetch"}, and do not start the work over — continue from what is here.${revision ? " Fetch the base only if the catch-up step below says the pull request is behind or conflicted." : ""}`,
         ]
       : [
           fork
@@ -311,7 +314,7 @@ export function ship(access, repo, n, login, revision, reviewed, resumed = false
     `\`git add\` only the files you changed, \`git commit\`, and \`git push -u origin ${branch}\`${fork ? " — origin is your fork" : ""}. Every commit carries part of the change: never an empty or probe commit, and no tool attribution in a commit message or the pull request body (AGENTS.md). If ${pulls} shows a pull request already, push to its branch instead of opening another.`,
     ...(revision
       ? [
-          `If a fix changes behavior, keep the pull request body's Plan and Verification matching what changed: write the updated body to a file in \`.board/\` and run \`gh pr edit ${branch} --repo ${repo.name} --body-file .board/<file>\`.`,
+          `If a fix changes behavior, keep the pull request body's Plan and Verification matching what changed: write the updated body to \`.board/pr-body.md\` and run \`gh pr edit ${branch} --repo ${repo.name} --body-file .board/pr-body.md\`.`,
           `If ${pulls} reports the pull request has a conflict or is behind ${repo.base}, \`${fork ? `git fetch ${upstream} ${repo.base}` : `git fetch origin ${repo.base}`}\` and \`git merge --no-edit FETCH_HEAD\`, resolve any conflict, and push again.`,
         ]
       : [
@@ -337,8 +340,12 @@ export function ship(access, repo, n, login, revision, reviewed, resumed = false
  * any unprotected branch, including other agents' task branches, `git
  * clone:*` accepts `-c` and `--upload-pack`, which run arbitrary commands,
  * and `gh pr edit:*` would let Claude rewrite another task's pull request —
- * so only the task's own branch and repository are named, never a prefix of
- * `gh pr edit`. Fork mode fetches the base branch from the upstream URL
+ * so `gh pr edit` names the task's own branch, repository, and body file
+ * exactly, with no trailing `:*`: a `--body-file:*` suffix matches the whole
+ * command as a prefix, so it would let any flags after `--body-file` through
+ * too — `--base <another task's branch>`, a second `--repo`. The body always
+ * lands at the one fixed path, `.board/pr-body.md` (ship()), so naming it
+ * exactly costs nothing. Fork mode fetches the base branch from the upstream URL
  * instead of syncing the fork, because no sync can create the branch a fork
  * from before the base lacks: `gh repo sync --branch <base>` asks GitHub's
  * merge-upstream endpoint, which answers 404 Branch not found for a branch
@@ -380,7 +387,7 @@ export function allowedTools(access, repo, n, login, reviewed) {
     `Bash(git push -u origin task-${n})`,
     ...repo.checks.map(c => `Bash(${c})`),
     "Bash(gh pr create:*)", "Bash(gh pr view:*)",
-    `Bash(gh pr edit task-${n} --repo ${repo.name} --body-file:*)`,
+    `Bash(gh pr edit task-${n} --repo ${repo.name} --body-file .board/pr-body.md)`,
     ...(autoMerges(access, reviewed) ? [`Bash(gh pr merge task-${n} --repo ${repo.name} --auto --squash)`] : []),
   );
 }
