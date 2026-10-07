@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, describe, test } from "node:test";
 import { readFileSync } from "node:fs";
 
-import { autoJobsHealth, closeIfHandedOff, coordinatorHealth, planAutoJobRounds, settleAutoJobRounds, settleAutoJobs, settlePayouts } from "../lib/coordinator.mjs";
+import { autoJobsHealth, closeIfHandedOff, coordinatorHealth, planAutoJobRounds, settleAutoChangeRequests, settleAutoJobRounds, settleAutoJobs, settlePayouts } from "../lib/coordinator.mjs";
 import { listEngagements, loadEngagement } from "../lib/engagement-state.mjs";
 import { fence, fenced } from "../lib/github.mjs";
 import { ledgerOf } from "../lib/ledger.mjs";
@@ -223,7 +223,7 @@ function serveBoard() {
       return json(issue);
     }
     if ((m = /^\/repos\/([^/]+)\/([^/]+)\/issues\/comments\/(\d+)\/reactions$/.exec(u.pathname))) {
-      if (method === "POST") reactions.push({ id: Number(m[3]), ...JSON.parse(options.body) });
+      if (method === "POST") reactions.push({ id: Number(m[3]), user: { login: BOT }, ...JSON.parse(options.body) });
       return json(reactions.filter(r => r.id === Number(m[3])));
     }
     if ((m = /^\/repos\/([^/]+)\/([^/]+)\/issues\/(\d+)\/labels\/([^/]+)$/.exec(u.pathname)) && method === "DELETE") {
@@ -1146,5 +1146,132 @@ describe("the ai-review ledger parser", () => {
     assert.equal(ledgerOf(`<!-- ai-review-ledger {"sha": "x"} -->`), null, "a ledger without its findings list is none");
     assert.equal(ledgerOf(undefined), null);
     assert.equal(ledgerOf("<!-- ai-review-ledger {\"sha\": \"x\"}"), null, "a marker never closed is none");
+  });
+});
+
+describe("a person's request for another round on an auto task (#165)", () => {
+  const PR152 = `https://github.com/${REG}/pull/152`;
+  const shaOf = n => String(n).padEnd(40, "0");
+  let nextId = 700;
+  const said = (login, body, at = "2026-10-05T02:00:00Z") => ({
+    id: nextId++,
+    user: { login },
+    created_at: at,
+    updated_at: at,
+    html_url: `https://github.com/${BOARD}/issues/900#issuecomment-${nextId - 1}`,
+    body,
+  });
+  const ask = (login, at) => said(login, "Changes requested: the retry should back off, and the test must cover a 403.", at);
+
+  // An auto task whose claimant handed pull request 152 off at 01:30Z.
+  const build = (...after) => {
+    reset();
+    roles.reviewer = "admin";
+    teams["internal/intern"] = { state: "active" };
+    boardIssues[890] = autoEpic(890, 900);
+    boardIssues[900] = autoTask(900, 890);
+    boardThreads[`${BOARD}#900`] = [handoffBy("jlwaugh", PR152), ...after];
+    pulls[152] = pull(152, { sha: shaOf(152) });
+    serveBoard();
+  };
+  const routed = () => boardThreads[`${BOARD}#900`].filter(c => c.user.login === BOT && fenced(c.body, "changes"));
+
+  test("the owner's request posts one round, quoted, with the block the worker revises on, and is marked seen", async () => {
+    const request = ask("reviewer");
+    build(request);
+    await settleAutoChangeRequests();
+    const [round] = routed();
+    assert.ok(round, "a round was posted");
+    assert.match(round.body, /^\*\*Changes requested\*\* by @reviewer on https:\/\/github\.com\/MultiAgency\/near-agencies\/pull\/152\. This task is reopened for another round by @jlwaugh\./);
+    assert.match(round.body, /^> Changes requested: the retry should back off/m, "the request, quoted");
+    assert.deepEqual(fenced(round.body, "changes"), { pr: PR152, request: request.html_url, requested_by: "reviewer" });
+    assert.deepEqual(reactions.map(r => [r.id, r.content]), [[request.id, "eyes"]]);
+  });
+
+  test("an active member of team internal asks the same, and a second sweep posts nothing more", async () => {
+    build(ask("intern"));
+    await settleAutoChangeRequests();
+    assert.equal(routed().length, 1);
+    assert.equal(fenced(routed()[0].body, "changes").requested_by, "intern");
+    await settleAutoChangeRequests();
+    assert.equal(routed().length, 1, "each request is routed once");
+  });
+
+  test("a stranger's request, or a member who is not active, posts nothing and is not marked", async () => {
+    build(ask("stranger"), ask("pending-invite"));
+    teams["internal/pending-invite"] = { state: "pending" };
+    await settleAutoChangeRequests();
+    assert.equal(routed().length, 0);
+    assert.equal(boardThreads[`${BOARD}#900`].length, 3, "no reply either");
+    assert.equal(reactions.length, 0);
+  });
+
+  test("a team that cannot be read holds the request for the next sweep", async () => {
+    build(ask("intern"));
+    // Without the org's token a 404 cannot tell a non-member from a team the
+    // token may not see, so the read fails and the request waits.
+    delete teams["internal/intern"];
+    delete process.env.ORG_TOKEN;
+    try {
+      await settleAutoChangeRequests();
+    } finally {
+      process.env.ORG_TOKEN = "org-token";
+    }
+    assert.equal(routed().length, 0, "an unreadable team fails closed");
+    assert.equal(reactions.length, 0, "and the request is not marked, so the next sweep reads it again");
+    teams["internal/intern"] = { state: "active" };
+    await settleAutoChangeRequests();
+    assert.equal(routed().length, 1);
+  });
+
+  test("a request that is a coordinator block, a quote, or made before the handoff counts for nothing", async () => {
+    build(said("reviewer", `Changes requested: x\n\n${fence("changes", { pr: PR152, request: "u", requested_by: "reviewer" })}`));
+    boardThreads[`${BOARD}#900`].unshift(ask("reviewer", "2026-10-05T00:30:00Z"));
+    await settleAutoChangeRequests();
+    assert.equal(routed().length, 0);
+    boardThreads[`${BOARD}#900`].push(said("reviewer", "I think it needs changes requested here"));
+    await settleAutoChangeRequests();
+    assert.equal(routed().length, 0);
+  });
+
+  test("a task with no handoff, or one that is not an auto job's, hears nothing", async () => {
+    build(ask("reviewer"));
+    boardThreads[`${BOARD}#900`].shift();
+    await settleAutoChangeRequests();
+    assert.equal(routed().length, 0, "no pull request to name yet");
+
+    build(ask("reviewer"));
+    boardIssues[900] = {
+      ...autoTask(900, 890),
+      body: `Part of job #890.\n\nBuild it.\n\n${fence("terms", { engagement: 890, key: "build", amount: "0", asset: USDC, repo: REG })}`,
+    };
+    await settleAutoChangeRequests();
+    assert.equal(routed().length, 0, "routeChangeRequests owns a task with a review seat");
+  });
+
+  test("a person's round never counts toward ai-review's limit of three", async () => {
+    const aiRound = (head, id) => ({
+      id,
+      user: { login: BOT },
+      created_at: "2026-10-05T17:00:00Z",
+      updated_at: "2026-10-05T17:00:00Z",
+      html_url: `https://github.com/${BOARD}/issues/900#issuecomment-${id}`,
+      body: `**Changes requested** by ai-review on ${PR152} at ${head.slice(0, 7)}.\n\n${fence("changes", { pr: PR152, head, request: `${PR152}#issuecomment-501`, requested_by: "ai-review" })}`,
+    });
+    build(aiRound(shaOf(1), 601), aiRound(shaOf(2), 602), ask("reviewer", "2026-10-05T18:00:00Z"));
+    await settleAutoChangeRequests();
+    assert.equal(routed().length, 3, "two ai-review rounds and the person's");
+    regThreads[`${REG}#152`] = [{
+      id: 501,
+      user: { login: "github-actions[bot]" },
+      created_at: "2026-10-05T19:00:00Z",
+      updated_at: "2026-10-05T19:00:00Z",
+      html_url: `${PR152}#issuecomment-501`,
+      body: `<!-- ai-review-ledger ${JSON.stringify({ sha: shaOf(152), findings: [{ id: "F1", path: "lib/a.mjs", line: 1, pass: "Bugs", severity: "Important", status: "open", gist: "x" }] })} -->`,
+    }];
+    const [d] = await planAutoJobRounds();
+    assert.equal(d.rounds, 2, "ai-review's rounds are counted by ai-review's alone");
+    assert.equal(d.action, "round");
+    assert.equal(d.round, 3, "the third ai-review round is still owed");
   });
 });

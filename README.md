@@ -144,7 +144,13 @@ paid to, and their GitHub login ([`lib/onboarding.mjs`](lib/onboarding.mjs)).
   claimant's pull request merges into the repository's base branch — the issue
   closes with it. At most `AUTO_JOBS_MAX` (default 2) auto jobs stand open,
   the oldest labelled issue first, and `/api/health` reports what the sweep
-  opened and skipped ([`lib/coordinator.mjs`](lib/coordinator.mjs)).
+  opened and skipped ([`lib/coordinator.mjs`](lib/coordinator.mjs)). A task's
+  pull request can be sent back for another round two ways: an owner or a
+  member of team `internal` comments "Changes requested" on the task, after
+  its handoff, and the coordinator routes it to the worker like a reviewer's
+  request; or the finding ai-review raised is declined by replying to it with
+  the reason and commenting `/review`, which marks it accepted or withdrawn.
+  ai-review's own rounds stop at three, and a person's never count toward them.
 
 ## Run it locally
 
