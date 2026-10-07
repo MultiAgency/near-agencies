@@ -135,10 +135,13 @@ describe("allowed tools per CODE_ACCESS", () => {
     assert.deepEqual(allowedTools("branch", near, n, login), [
       ...base,
       "Bash(git clone --branch staging https://github.com/MultiAgency/near-agencies.git .)",
+      "Bash(git fetch origin staging)",
       "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git rm:*)", "Bash(git commit:*)",
+      "Bash(git merge --no-edit FETCH_HEAD)",
       "Bash(git push -u origin task-14)",
       "Bash(npm ci)", "Bash(npm run check)", "Bash(npm test)",
       "Bash(gh pr create:*)", "Bash(gh pr view:*)",
+      "Bash(gh pr edit task-14 --repo MultiAgency/near-agencies --body-file .board/pr-body.md)",
       "Bash(gh pr merge task-14 --repo MultiAgency/near-agencies --auto --squash)",
     ]);
   });
@@ -150,9 +153,11 @@ describe("allowed tools per CODE_ACCESS", () => {
       "Bash(git fetch https://github.com/MultiAgency/near-agencies.git staging)",
       "Bash(gh repo fork MultiAgency/near-agencies --clone=false)",
       "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git rm:*)", "Bash(git commit:*)",
+      "Bash(git merge --no-edit FETCH_HEAD)",
       "Bash(git push -u origin task-14)",
       "Bash(npm ci)", "Bash(npm run check)", "Bash(npm test)",
       "Bash(gh pr create:*)", "Bash(gh pr view:*)",
+      "Bash(gh pr edit task-14 --repo MultiAgency/near-agencies --body-file .board/pr-body.md)",
     ]);
   });
 
@@ -163,9 +168,11 @@ describe("allowed tools per CODE_ACCESS", () => {
       "Bash(git fetch https://github.com/MultiAgency/legion-social.git staging)",
       "Bash(gh repo fork MultiAgency/legion-social --clone=false)",
       "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git rm:*)", "Bash(git commit:*)",
+      "Bash(git merge --no-edit FETCH_HEAD)",
       "Bash(git push -u origin task-7)",
       ...legion.checks.map(c => `Bash(${c})`),
       "Bash(gh pr create:*)", "Bash(gh pr view:*)",
+      "Bash(gh pr edit task-7 --repo MultiAgency/legion-social --body-file .board/pr-body.md)",
     ]);
   });
 
@@ -175,6 +182,32 @@ describe("allowed tools per CODE_ACCESS", () => {
       assert.equal(tools.includes("Bash(git push -u origin task-15)"), true);
       assert.equal(tools.includes("Bash(git push -u origin task-14)"), false);
     }
+  });
+
+  test("gh pr edit is the task's own branch, repository and body file only, in every mode, and never a prefix", () => {
+    for (const [access, repo] of [["branch", near], ["fork", near], ["fork", legion]]) {
+      const tools = allowedTools(access, repo, 15, login);
+      assert.equal(tools.includes(`Bash(gh pr edit task-15 --repo ${repo.name} --body-file .board/pr-body.md)`), true, `${access} ${repo.name}`);
+      assert.equal(tools.includes(`Bash(gh pr edit task-14 --repo ${repo.name} --body-file .board/pr-body.md)`), false, "another task's branch is not editable");
+      assert.equal(tools.some(t => t.startsWith("Bash(gh pr edit:*)")), false, "no prefix would let Claude rewrite another task's pull request");
+      const edit = tools.find(t => t.includes("gh pr edit"));
+      assert.equal(edit.endsWith(":*)"), false, "a :* suffix would let --base or a second --repo ride in after --body-file");
+    }
+    assert.equal(allowedTools(null, near, 15, login).some(t => t.includes("gh pr edit")), false, "no code mode, no gh pr edit");
+  });
+
+  test("the base catch-up merges FETCH_HEAD only, in every mode, with no prefix", () => {
+    for (const [access, repo] of [["branch", near], ["fork", near], ["fork", legion]]) {
+      const tools = allowedTools(access, repo, n, login);
+      assert.equal(tools.includes("Bash(git merge --no-edit FETCH_HEAD)"), true, `${access} ${repo.name}`);
+      assert.equal(tools.some(t => t.startsWith("Bash(git merge:*)")), false, "a prefix would allow merging an arbitrary ref or --no-ff onto another branch");
+    }
+    assert.equal(allowedTools(null, near, n, login).some(t => t.includes("git merge")), false, "no code mode, no git merge");
+  });
+
+  test("branch mode fetches the base from origin by name, the same base its clone checked out", () => {
+    assert.equal(allowedTools("branch", near, n, login).includes("Bash(git fetch origin staging)"), true);
+    assert.equal(allowedTools("fork", near, n, login).includes("Bash(git fetch origin staging)"), false, "fork mode already fetches staging, from upstream");
   });
 
   test("no mode allows gh api: the token would reach every endpoint a planted comment names", () => {
@@ -213,6 +246,8 @@ describe("allowed tools per CODE_ACCESS", () => {
       assert.equal(tools.includes("Bash(git config:*)"), false);
       assert.equal(tools.includes("Bash(git push:*)"), false, "push:* would also allow --force and --delete on any branch");
       assert.equal(tools.includes("Bash(git clone:*)"), false, "clone:* accepts -c and --upload-pack, which run commands");
+      assert.equal(tools.includes("Bash(git merge:*)"), false, "merge:* would allow merging an arbitrary ref");
+      assert.equal(tools.includes("Bash(gh pr edit:*)"), false, "edit:* would reach another task's pull request");
       assert.equal(tools.includes("Bash(npm install:*)"), false);
       assert.equal(tools.includes("Bash(npm publish:*)"), false);
       assert.equal(tools.includes("Bash(cargo:*)"), false, "the checks are exact commands, not prefixes: cargo publish would ride a prefix");
@@ -270,6 +305,48 @@ describe("the shipping instructions", () => {
     }
   });
 
+  test("a revision round says to update the pull request body and to merge the base when behind or conflicted", () => {
+    for (const [repo, access] of shipping) {
+      const text = ship(access, repo, 14, "near-builder", true).join("\n");
+      assert.match(text, /update|keep.*matching what changed/i, `${repo.name} ${access}: mentions updating the body`);
+      assert.match(text, /`gh pr edit task-14 --repo MultiAgency\/[\w-]+ --body-file \.board\/pr-body\.md`/, `${repo.name} ${access}`);
+      assert.match(text, /conflict.*behind/, `${repo.name} ${access}: mentions merging the base`);
+      assert.match(text, /`git merge --no-edit FETCH_HEAD`/, `${repo.name} ${access}`);
+    }
+    // Branch mode re-fetches the base from origin; fork mode reuses the fetch
+    // from the upstream URL it already had.
+    assert.match(ship("branch", near, 14, "near-builder", true).join("\n"), /`git fetch origin staging`/);
+    assert.match(ship("fork", near, 14, "near-builder", true).join("\n"), /`git fetch https:\/\/github\.com\/MultiAgency\/near-agencies\.git staging`/);
+  });
+
+  test("the open-pull-request round names no catch-up: there is nothing yet to be behind", () => {
+    for (const [repo, access] of shipping) {
+      const text = ship(access, repo, 14, "near-builder", false).join("\n");
+      assert.equal(text.includes("gh pr edit"), false);
+    }
+  });
+
+  test("a resumed, opening round still rules out a fetch: there is no catch-up step to need one", () => {
+    for (const [repo, access] of shipping) {
+      const text = ship(access, repo, 14, "near-builder", false, false, true).join("\n");
+      assert.match(text, /do not clone, fork or fetch/);
+      assert.equal(text.includes("git fetch"), false, "nothing below permits one, so the ban names it too");
+    }
+  });
+
+  test("a resumed revision round does not ban the fetch its own catch-up step calls for", () => {
+    for (const [repo, access] of shipping) {
+      const text = ship(access, repo, 14, "near-builder", true, false, true).join("\n");
+      assert.equal(/do not clone, fork or fetch/.test(text), false,
+        "banning fetch outright would contradict telling Claude to fetch when the pull request is behind");
+      assert.match(text, /do not clone.*or fork.*and do not start the work over/, "still rules out re-cloning or re-forking the resumed checkout");
+      assert.match(text, /fetch the base only if the catch-up step below/i);
+      // The catch-up step itself is still there, unaffected by resumed.
+      assert.match(text, /`gh pr edit task-14 --repo MultiAgency\/[\w-]+ --body-file \.board\/pr-body\.md`/, `${repo.name} ${access}`);
+      assert.match(text, /`git merge --no-edit FETCH_HEAD`/, `${repo.name} ${access}`);
+    }
+  });
+
   test("the pull request instruction names the template, the drafts directory, and keeps the no-template wording", () => {
     for (const [repo, access] of shipping) {
       const text = ship(access, repo, 14, "near-builder", false).join("\n");
@@ -299,10 +376,12 @@ describe("the shipping instructions", () => {
   test("every command the instructions give is one the allowlist allows", () => {
     for (const [repo, access] of shipping) {
       for (const revision of [false, true]) {
-        const commands = commanded(ship(access, repo, 14, "near-builder", revision));
-        assert.equal(commands.length > 5, true, `${repo.name} ${access}: the instructions do name commands`);
-        for (const cmd of commands) {
-          assert.equal(allowed(allowedTools(access, repo, 14, "near-builder"), cmd), true, `${repo.name} ${access}: ${cmd}`);
+        for (const resumed of [false, true]) {
+          const commands = commanded(ship(access, repo, 14, "near-builder", revision, false, resumed));
+          assert.equal(commands.length > 0, true, `${repo.name} ${access} revision=${revision} resumed=${resumed}: the instructions do name commands`);
+          for (const cmd of commands) {
+            assert.equal(allowed(allowedTools(access, repo, 14, "near-builder"), cmd), true, `${repo.name} ${access} revision=${revision} resumed=${resumed}: ${cmd}`);
+          }
         }
       }
     }

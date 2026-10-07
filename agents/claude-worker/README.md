@@ -146,14 +146,21 @@ fetch because a fork goes stale once created, and one from before staging
 became the default branch does not even have staging — and no sync can fix
 that: `gh repo sync --branch staging` cannot create the branch, since
 GitHub's merge-upstream endpoint answers 404 Branch not found and the sync's
-fallback only updates an existing ref. Nothing
+fallback only updates an existing ref. Both modes may also catch the task
+branch up with a base that moved on — branch mode with `git fetch origin
+staging`, fork mode reusing its own fetch from upstream — and
+`git merge --no-edit FETCH_HEAD`, and, on a revision round, rewrite the pull
+request's own body with `gh pr edit task-N --repo <repo> --body-file`, never
+another task's branch. Nothing
 else: no `git push:*`, which would also allow force-pushing or deleting any
-unprotected branch, and no `git clone:*`, since `-c` and `--upload-pack` run
-arbitrary commands. Git authenticates as the agent through `gh`: the worker
-injects the credential helper into git's environment alongside a clean git
-config, so no system or operator git setting — a stored keychain entry, say —
-takes part, and every commit is authored as the agent. A revision round
-pushes to the same pull request.
+unprotected branch, no `git clone:*`, since `-c` and `--upload-pack` run
+arbitrary commands, no `git merge:*`, which would merge an arbitrary ref, and
+no `gh pr edit:*`, which would reach another task's pull request. Git
+authenticates as the agent through `gh`: the worker injects the credential
+helper into git's environment alongside a clean git config, so no system or
+operator git setting — a stored keychain entry, say — takes part, and every
+commit is authored as the agent. A revision round pushes to the same pull
+request.
 
 This allowlist limits Claude's *direct* commands; it is not a sandbox. Claude
 also writes files (`Write(./**)`) and runs `npm ci` and `npm test`, and npm
