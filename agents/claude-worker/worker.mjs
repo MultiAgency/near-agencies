@@ -16,9 +16,10 @@ import { join } from "node:path";
 import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 
-import { accessFor, allowedTools, codeAccess, deliversCodeSeat, ship, termsOf, SDK_SETTINGS } from "./code-mode.mjs";
+import { accessFor, allowedTools, codeAccess, deliversCodeSeat, handBackComment, ship, termsOf, SDK_SETTINGS } from "./code-mode.mjs";
 import { nextTask as selectTask } from "./next-task.mjs";
 import { gitEnv, probeDelivery } from "./preflight.mjs";
+import { deleteSaved, deliveryRemote, handBackReason, resumableWork, saveUnfinished, setupResume, wipBranchOf } from "./resume.mjs";
 import { codeRepo } from "./repos.mjs";
 
 const env = name => {
@@ -45,6 +46,10 @@ const codeMode = codeAccess(skills, process.env.CODE_ACCESS);
 // (next-task.mjs).
 const toolchain = process.env.WORKER_TOOLCHAIN ?? "node";
 const board = process.env.BOARD ?? "MultiAgency/kanban-sandbox";
+// Where the board's API lives: the real GitHub unless another root answers
+// for it (a GitHub Enterprise root, or the stub the spawned tests run
+// against). gh keeps its own host setting; only these two fetches read it.
+const api = process.env.GITHUB_API_URL ?? "https://api.github.com";
 const skillUrl = process.env.SKILL_URL ?? "https://demo.multiagency.ai/skill.md";
 const model = process.env.MODEL ?? "claude-sonnet-5";
 const maxBudgetUsd = Number(process.env.MAX_BUDGET_USD ?? "3");
@@ -65,7 +70,7 @@ if (!dryRun) env("ANTHROPIC_API_KEY");
 if (codeMode) Object.assign(process.env, gitEnv(login));
 
 async function github(path) {
-  const response = await fetch(`https://api.github.com/repos/${board}${path}`, {
+  const response = await fetch(`${api}/repos/${board}${path}`, {
     headers: { authorization: `Bearer ${process.env.GH_TOKEN}`, accept: "application/vnd.github+json" },
   });
   if (!response.ok) throw new Error(`GitHub GET ${path}: ${response.status}`);
@@ -75,7 +80,7 @@ async function github(path) {
 // Posts a comment on a seat: the one board write the task selection makes,
 // the refusal a run without code mode leaves on an assigned skill:code seat.
 async function comment(number, body) {
-  const response = await fetch(`https://api.github.com/repos/${board}/issues/${number}/comments`, {
+  const response = await fetch(`${api}/repos/${board}/issues/${number}/comments`, {
     method: "POST",
     headers: { authorization: `Bearer ${process.env.GH_TOKEN}`, accept: "application/vnd.github+json" },
     body: JSON.stringify({ body }),
@@ -105,7 +110,26 @@ const helpers = createSdkMcpServer({
   ],
 });
 
-function instructions(task) {
+// Where a resumed prompt says the previous run stopped: the commits it made
+// after the round's base, then the note its save left. Both were read by the
+// worker's own code (resume.mjs) — the model runs no git to see them, so
+// nothing joins the allowlist for this.
+const stoppedAt = resume =>
+  [
+    "A previous run of this task stopped unfinished; this clone starts from the branch it saved, and the work it finished is already here.",
+    "",
+    "What it did, its commits newest first:",
+    "",
+    ...resume.log.trimEnd().split("\n").map(l => `  ${l}`),
+    "",
+    "The note its last commit carries (what that run was, and which checks failed):",
+    "",
+    ...resume.note.trimEnd().split("\n").map(l => `  ${l}`),
+    "",
+    "Continue the work from what is here: whatever those commits already did is done.",
+  ].join("\n");
+
+function instructions(task, resume = null) {
   const n = task.seat.number;
   // With code mode off, an assigned skill:code seat cannot be delivered:
   // the shipping steps would name commands the run is not allowed to run.
@@ -128,7 +152,7 @@ function instructions(task) {
       ? [
           `Deliver task #${n}, which is assigned to you.${revisionNote(task.round)}`,
           "Read the task, the job it names, and the deliverables of any tasks it depends on. Do the work, citing sources inline as links.",
-          ...ship(accessFor(repo, codeMode), repo, n, login, task.revision, task.reviewed),
+          ...ship(accessFor(repo, codeMode), repo, n, login, task.revision, task.reviewed, Boolean(resume)),
           `Then post the deliverable comment, naming the pull request, get its sha256 with the deliverable_sha256 tool, and post the handoff comment, exactly as the rules say. The coordinator closes the task once the handoff checks out.`,
         ].join("\n")
       : [
@@ -140,11 +164,16 @@ function instructions(task) {
     `You are @${login}, an AI agent on the MultiAgency roster with skills ${skills.join(", ")}. Your roster NEAR account, for payout.account_id, is ${nearAccount}.`,
     "",
     doing,
+    ...(resume ? ["", stoppedAt(resume)] : []),
     "",
     `Use \`gh\` for GitHub; it is authenticated as you. The board is ${board}: pass \`--repo ${board}\`. Write each comment to a file in the current directory first and post it with \`gh issue comment ${n} --repo ${board} --body-file <file>\`, which prints the new comment's URL.`,
     "Work on this one task only. If you cannot do the work, comment on the task saying why, and stop.",
   ].join("\n");
 }
+
+// The one line of an error worth a worker log: git and the SDK both write
+// multi-line errors, and the second line onward is rarely more than detail.
+const oneLine = error => String(error?.stack ?? error).split("\n")[0].slice(0, 200);
 
 async function run() {
   const task = await nextTask();
@@ -162,10 +191,44 @@ async function run() {
   // for any repository but near-agencies (accessFor).
   const repo = code ? codeRepo(termsOf(task.seat)) : null;
   const skill = await (await fetch(skillUrl)).text();
-  const cwd = await mkdtemp(join(tmpdir(), `seat-${task.seat.number}-`));
+  const n = task.seat.number;
+  const access = code ? accessFor(repo, codeMode) : null;
+  const round = task.round?.id ?? 0;
+  let cwd = await mkdtemp(join(tmpdir(), `seat-${n}-`));
+  // A code run continues what an unfinished one saved (#169): the branch
+  // wip/task-n holds the work of every run that stopped, and a save from
+  // this very round means this clone starts there instead of at the base.
+  // A setup that fails falls back to the fresh start, in a clean directory.
+  let resume = null;
+  if (code) {
+    try {
+      const found = await resumableWork({ remote: deliveryRemote(access, repo, login), n, round });
+      if (found) {
+        resume = {
+          round,
+          ...await setupResume({
+            remote: deliveryRemote(access, repo, login), forkFetch: access === "fork"
+              ? [`https://github.com/${repo.name}.git`, repo.base]
+              : null,
+            baseBranch: repo.base, n, resume: found, cwd,
+          }),
+        };
+        console.log(`worker: #${n} continues run ${found.record.run} of this round (${wipBranchOf(n)})`);
+      }
+    } catch (error) {
+      console.log(`worker: starting from the base branch: the saved work could not be set up (${oneLine(error)})`);
+      await rm(cwd, { recursive: true, force: true });
+      cwd = await mkdtemp(join(tmpdir(), `seat-${n}-`));
+      resume = null;
+    }
+  }
+  // What the model run ended with: the result message's fields, or the
+  // marker of a run the SDK threw out — which used to crash this process
+  // with the clone's work still in it.
+  let ended = null;
   try {
     for await (const message of query({
-      prompt: instructions(task),
+      prompt: instructions(task, resume),
       options: {
         cwd,
         model,
@@ -177,7 +240,7 @@ async function run() {
         mcpServers: { multiagency: helpers },
         tools: ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch"],
         permissionMode: "dontAsk",
-        allowedTools: allowedTools(code ? accessFor(repo, codeMode) : null, repo, task.seat.number, login, task.reviewed),
+        allowedTools: allowedTools(access, repo, n, login, task.reviewed),
       },
     })) {
       if (message.type === "assistant") {
@@ -185,12 +248,51 @@ async function run() {
           if (block.type === "tool_use") console.log(`  tool ${block.name} ${JSON.stringify(block.input).slice(0, 160)}`);
         }
       } else if (message.type === "result") {
-        console.log(`worker: ${message.subtype} after ${message.num_turns} turns, $${message.total_cost_usd.toFixed(2)}`);
+        ended = { subtype: message.subtype, turns: message.num_turns, cost: message.total_cost_usd };
+        console.log(`worker: ${message.subtype} on #${n} after ${message.num_turns} turns, $${message.total_cost_usd.toFixed(2)}`);
         if (message.subtype === "success") console.log(message.result);
       }
     }
+  } catch (error) {
+    ended = { subtype: "thrown" };
+    console.log(`worker: the model run threw: ${oneLine(error)}`);
   } finally {
-    await rm(cwd, { recursive: true, force: true });
+    // The clone goes either way; what a code run leaves behind depends on
+    // how it ended. Delivered: the saved branch has nothing left to hold.
+    // Anything else — out of turns, out of budget, thrown — the worker's own
+    // code saves to wip/task-n before the clone is removed, and hands the
+    // task back once its attempts are spent (#169). A save that cannot run
+    // (the model never cloned, git failed) leaves the run as it was: the
+    // next one starts from the base branch.
+    try {
+      if (code && ended?.subtype === "success") {
+        await deleteSaved({ remote: deliveryRemote(access, repo, login), n, cwd });
+      } else if (code && ended) {
+        const saved = await saveUnfinished({
+          remote: deliveryRemote(access, repo, login), n, round,
+          resumed: Boolean(resume), cwd, repo,
+          subtype: ended.subtype, turns: ended.turns, cost: ended.cost,
+        });
+        const reason = handBackReason({
+          saves: saved.run,
+          sameTree: saved.previousTree !== null && saved.tree === saved.previousTree,
+        });
+        if (reason) {
+          await comment(n, handBackComment({
+            n,
+            branch: wipBranchOf(n),
+            remote: access === "fork" ? `${login}/${repo.name.split("/")[1]}` : repo.name,
+            reason,
+            note: saved.message,
+          }));
+          console.log(`worker: #${n} handed back: ${reason}`);
+        }
+      }
+    } catch (error) {
+      console.log(`worker: the end of the run could not be settled (${oneLine(error)})`);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   }
 }
 

@@ -34,7 +34,6 @@ export const deliveryRemote = (access, repo, login) =>
   access === "fork"
     ? `https://github.com/${login}/${repo.name.split("/")[1]}.git`
     : `https://github.com/${repo.name}.git`;
-
 // A git call that hangs must not hang the run past its own cron slot: the
 // clone, the pushes and the reads all answer well inside this on a healthy
 // connection, and a kill reads as the failed save it is.
@@ -141,8 +140,7 @@ export async function failingChecks({ repo, cwd, run = promisify(execFile) }) {
  * remote, then — only when it exists — its tip commit's record, read from a
  * one-commit fetch into a scratch repository. Saves from an earlier round
  * (or another task's, or a hand-written one) read as none. */
-export async function resumableWork({ access, repo, login, n, round, run = promisify(execFile) }) {
-  const remote = deliveryRemote(access, repo, login);
+export async function resumableWork({ remote, n, round, run = promisify(execFile) }) {
   const branch = wipBranchOf(n);
   let tip = null;
   try {
@@ -170,16 +168,16 @@ export async function resumableWork({ access, repo, login, n, round, run = promi
  * the delivery instructions give, started at the saved branch instead of the
  * base, with the work checked out as the local branch `task-<n>` the
  * delivery pushes. `resume` is resumableWork's answer for this run; the
- * caller has already decided to resume. Returns what the prompt tells the
- * model: where the previous run stopped — its commits after the round's
- * base, and its last note. The model runs no git here: reading the log is
- * the worker's own code, and nothing joins the allowlist for it. */
-export async function setupResume({ access, repo, login, n, resume, cwd, run = promisify(execFile) }) {
-  const remote = deliveryRemote(access, repo, login);
-  const cloneArgs = access === "fork" ? ["clone", remote, "."] : ["clone", "--branch", repo.base, remote, "."];
-  await run("git", cloneArgs, { cwd, timeout: GIT_TIMEOUT_MS });
-  if (access === "fork") {
-    await run("git", ["fetch", `https://github.com/${repo.name}.git`, repo.base], { cwd, timeout: GIT_TIMEOUT_MS });
+ * caller has already decided to resume. `forkFetch` is the upstream fetch
+ * fork mode's setup makes — the pair of URL and base branch — and null in
+ * branch mode, whose clone already carries the base. Returns what the prompt
+ * tells the model: where the previous run stopped — its commits after the
+ * round's base, and its last note. The model runs no git here: reading the
+ * log is the worker's own code, and nothing joins the allowlist for it. */
+export async function setupResume({ remote, forkFetch = null, baseBranch, n, resume, cwd, run = promisify(execFile) }) {
+  await run("git", forkFetch ? ["clone", remote, "."] : ["clone", "--branch", baseBranch, remote, "."], { cwd, timeout: GIT_TIMEOUT_MS });
+  if (forkFetch) {
+    await run("git", ["fetch", forkFetch[0], forkFetch[1]], { cwd, timeout: GIT_TIMEOUT_MS });
   }
   await run("git", ["checkout", "-b", `task-${n}`, `refs/remotes/origin/${wipBranchOf(n)}`], { cwd, timeout: GIT_TIMEOUT_MS });
   // Where the round started: the pull request's branch on a revision round
@@ -187,7 +185,7 @@ export async function setupResume({ access, repo, login, n, resume, cwd, run = p
   // upstream's, fetched above, in fork mode.
   const base = resume.record.round
     ? `refs/remotes/origin/task-${n}`
-    : access === "fork" ? "FETCH_HEAD" : repo.base;
+    : forkFetch ? "FETCH_HEAD" : baseBranch;
   const read = async args => {
     try {
       return (await run("git", args, { cwd, timeout: GIT_TIMEOUT_MS })).stdout;
@@ -213,7 +211,7 @@ export async function setupResume({ access, repo, login, n, resume, cwd, run = p
  * unfinished runs, its saved tree, and the tree the previous save holds.
  * Nothing here touches a pull request branch: the only ref written is
  * `wip/task-<n>`. */
-export async function saveUnfinished({ access, repo, login, n, round, resumed, cwd, run = promisify(execFile), subtype, turns, cost }) {
+export async function saveUnfinished({ remote, n, round, resumed, cwd, repo, run = promisify(execFile), subtype, turns, cost }) {
   const before = await savedChain({ cwd, round, run });
   const runNumber = before.length + 1;
   const message = saveMessage({
@@ -227,11 +225,11 @@ export async function saveUnfinished({ access, repo, login, n, round, resumed, c
   const tree = stdout.trim();
   const args = ["push", ...(resumed ? [] : ["--force"]), "origin", `HEAD:refs/heads/${wipBranchOf(n)}`];
   await run("git", args, { cwd, timeout: GIT_TIMEOUT_MS });
-  return { run: runNumber, tree, previousTree: before[0]?.tree ?? null };
+  return { run: runNumber, tree, previousTree: before[0]?.tree ?? null, message };
 }
 
 /** Delete the saved branch after a delivery: nothing is waiting to resume,
  * and the next task on this number starts clean. */
-export async function deleteSaved({ access, repo, login, n, cwd, run = promisify(execFile) }) {
+export async function deleteSaved({ remote, n, cwd, run = promisify(execFile) }) {
   await run("git", ["push", "origin", "--delete", wipBranchOf(n)], { cwd, timeout: GIT_TIMEOUT_MS });
 }

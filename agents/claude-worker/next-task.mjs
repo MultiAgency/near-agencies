@@ -7,6 +7,7 @@
 import {
   CODE_ACCESS_REFUSAL_FIRST_LINE, CODE_IMAGE_REFUSAL_FIRST_LINE,
   CODE_REPO_REFUSAL_FIRST_LINE, CODE_REFUSAL, DELIVERY_BLOCKED_FIRST_LINE,
+  HAND_BACK_FIRST_LINE,
   accessFor, blockerStands, codeAccessRefusal, codeImageRefusal, codeRepoRefusal,
   canShip, deliveryBlockedPush, deliveryBlockedRead, isCodeSeat,
   mayClaim, refusalPosted, termsOf,
@@ -77,6 +78,11 @@ export async function nextTask({ github, comment, login, skills, codeMode, bot, 
     const since = latestChangesRound(thread, trusted);
     const handedOff = thread.slice(since + 1).some(c => same(c.user.login, login) && c.body.includes("```handoff\n"));
     if (handedOff) continue;
+    // A hand-back spends this agent's attempts on the seat for the round
+    // (#169): the run that gave it up waits out the coordinator's stale
+    // release like anyone else, and no later run of the same round picks the
+    // seat up to loop over it again. A new round asks anew.
+    if (await refusalPosted(thread, login, trusted, HAND_BACK_FIRST_LINE)) continue;
     // Native GitHub assignment counts as a claim without a skill check, so a
     // run without code mode can find a skill:code seat assigned to it: the
     // shipping steps would name commands it is not allowed to run. Say so on
@@ -168,6 +174,10 @@ export async function nextTask({ github, comment, login, skills, codeMode, bot, 
     }
     const thread = await github(`/issues/${seat.number}/comments?per_page=100`);
     if (thread.some(c => same(c.user.login, login) && c.body.trim().startsWith("/claim"))) continue;
+    // Nor does this agent re-claim a seat it handed back unfinished this
+    // round (#169): the stale release may make it claimable again, but the
+    // attempts it spent stay spent until the round changes.
+    if (await refusalPosted(thread, login, trusted, HAND_BACK_FIRST_LINE)) continue;
     // The claim is cheap, but it is the delivery's first step: claiming a
     // seat whose pull request these credentials could never ship takes the
     // coordinator's assignment for a run that could only refuse it (#115).
