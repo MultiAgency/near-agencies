@@ -136,6 +136,25 @@ describe("the save commit's message", () => {
     assert.equal(savedRun(message).round, 777001);
   });
 
+  test("a model call that failed reads as failed in the note, and its record carries isError", () => {
+    // The SDK ends such a run with subtype "success" and is_error: true;
+    // the note must never read as a delivery.
+    const message = saveMessage({
+      n: 14, run: 1, round: 0, subtype: "success", isError: true, turns: 4, cost: 0.31,
+      checks: [], checksTotal: 3,
+    });
+    assert.match(message, /^wip: task #14 run 1 saved unfinished/);
+    assert.match(message, /failed \(success\) after 4 turns at \$0\.31/);
+    const record = savedRun(message);
+    assert.equal(record.subtype, "success");
+    assert.equal(record.isError, true);
+    // A run that ended cleanly records no isError at all.
+    const clean = savedRun(saveMessage({
+      n: 14, run: 1, round: 0, subtype: "success", turns: 4, cost: 0.31, checks: [], checksTotal: 3,
+    }));
+    assert.equal("isError" in clean, false);
+  });
+
   test("anything that is not a save reads as none", () => {
     assert.equal(savedRun("a plain commit message"), null);
     assert.equal(savedRun(`${RUN_RECORD_PREFIX}not json`), null);

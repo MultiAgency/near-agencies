@@ -332,6 +332,24 @@ export async function* query({ options, prompt }) {
 }
 `;
 
+// A model call that failed: the SDK ends the run with subtype "success"
+// carrying is_error, and nothing was delivered — reproduced 2026-10-07 with
+// the worker's SDK (0.3.283): an out-of-credit API error reads exactly so.
+const SCENARIO_MODEL_ERROR = `
+import { execFile } from "node:child_process";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { promisify } from "node:util";
+const run = promisify(execFile);
+export async function* query({ options, prompt }) {
+  await writeFile(join(process.env.SCENARIO_OUT, "prompt.txt"), prompt);
+  await run("git", ["clone", "--branch", "staging", process.env.FAKE_UPSTREAM, "."], { cwd: options.cwd, env: process.env });
+  await run("git", ["checkout", "-b", "task-58"], { cwd: options.cwd, env: process.env });
+  await writeFile(join(options.cwd, "WORK.md"), "written before the model call failed\\\\n");
+  yield { type: "result", subtype: "success", is_error: true, num_turns: 4, total_cost_usd: 0.31, result: "API Error: Your credit balance is too low" };
+}
+`;
+
 // The delivery: push the branch, end in success — the worker then has a
 // saved branch to delete.
 const SCENARIO_DELIVERS = `
@@ -501,6 +519,26 @@ describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
         "the branch is deleted; only the delivered pull request head is left");
       const calls = await h.gitCalls();
       assert.match(calls.filter(wipPush).at(-1), /^git push origin --delete wip\/task-58$/);
+      assert.deepEqual(h.board.state.posts, []);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  test("a model call that failed reads as unfinished: the errored success saves instead of deleting, and the log says failed", async () => {
+    const h = await harness();
+    try {
+      const { stdout } = await h.spawn(SCENARIO_MODEL_ERROR);
+      assert.match(stdout, /worker: failed \(success\) on #58 after 4 turns, \$0\.31/,
+        "the result line reads failed — the subtype alone never passes for a delivery");
+      assert.match(stdout, /Your credit balance is too low/, "the log carries the result text");
+      assert.equal(stdout.includes("worker: success on #58"), false);
+      assert.deepEqual(await h.refs(h.upstream), ["refs/heads/staging", "refs/heads/wip/task-58"],
+        "an errored success delivered nothing: its work is saved, not cleaned up");
+      const tip = await h.tipMessage(h.upstream, "wip/task-58");
+      assert.match(tip, /^wip: task #58 run 1 saved unfinished/);
+      assert.match(tip, /failed \(success\) after 4 turns at \$0\.31/, "so does the note the next run reads");
+      assert.match(tip, /"subtype":"success","isError":true/);
       assert.deepEqual(h.board.state.posts, []);
     } finally {
       await h.cleanup();

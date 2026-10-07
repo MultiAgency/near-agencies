@@ -57,17 +57,17 @@ export const RUN_RECORD_PREFIX = "multiagency-run: ";
 
 /** The message of a save commit: the run it records on the title line, the
  * failing checks in the body, and the record itself as one JSON line. */
-export function saveMessage({ n, run, round, subtype, turns, cost, checks, ran, checksTotal }) {
+export function saveMessage({ n, run, round, subtype, isError, turns, cost, checks, ran, checksTotal }) {
   const ended = subtype === "thrown" || turns === undefined
     ? "the model run ended without a result"
-    : `${subtype} after ${turns} turns at $${Number(cost ?? 0).toFixed(2)}`;
+    : `${isError ? `failed (${subtype})` : subtype} after ${turns} turns at $${Number(cost ?? 0).toFixed(2)}`;
   const roundNote = round ? `revision round ${round}` : "the first round";
   const failed = checks ?? [];
   const untried = checksTotal - (ran ?? checksTotal);
   const checksNote = failed.length
     ? `Checks: ${failed.join(", ")} failed${untried > 0 ? `; ${untried} ${untried === 1 ? "check was" : "checks were"} not run` : ""}.`
     : `Checks: all ${ran ?? checksTotal} passed.`;
-  const record = { task: n, run, round, subtype, ...(turns === undefined ? {} : { turns, cost }), checks: failed };
+  const record = { task: n, run, round, subtype, ...(isError ? { isError: true } : {}), ...(turns === undefined ? {} : { turns, cost }), checks: failed };
   return [
     `wip: task #${n} run ${run} saved unfinished (${roundNote}): ${ended}`,
     "",
@@ -221,7 +221,7 @@ export async function setupResume({ remote, forkFetch = null, baseBranch, n, res
  * unfinished runs, its saved tree, and the tree the previous save holds.
  * Nothing here touches a pull request branch: the only ref written is
  * `wip/task-<n>`. */
-export async function saveUnfinished({ remote, n, round, resumed, cwd, repo, run = promisify(execFile), subtype, turns, cost }) {
+export async function saveUnfinished({ remote, n, round, resumed, cwd, repo, run = promisify(execFile), subtype, isError, turns, cost }) {
   // A run that did not start from the round's saved branch must not overwrite
   // it: the branch is the ledger the next run resumes and counts from. This
   // run's own lookup found it and then lost it — its setup failed and
@@ -237,7 +237,7 @@ export async function saveUnfinished({ remote, n, round, resumed, cwd, repo, run
   const runNumber = before.length + 1;
   const { failed, ran } = await failingChecks({ repo, cwd, run });
   const message = saveMessage({
-    n, run: runNumber, round, subtype, turns, cost,
+    n, run: runNumber, round, subtype, isError, turns, cost,
     checks: failed, ran, checksTotal: repo.checks.length,
   });
   await run("git", ["add", "-A"], { cwd, timeout: GIT_TIMEOUT_MS });

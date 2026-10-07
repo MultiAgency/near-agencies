@@ -248,9 +248,17 @@ async function run() {
           if (block.type === "tool_use") console.log(`  tool ${block.name} ${JSON.stringify(block.input).slice(0, 160)}`);
         }
       } else if (message.type === "result") {
-        ended = { subtype: message.subtype, turns: message.num_turns, cost: message.total_cost_usd };
-        console.log(`worker: ${message.subtype} on #${n} after ${message.num_turns} turns, $${message.total_cost_usd.toFixed(2)}`);
-        if (message.subtype === "success") console.log(message.result);
+        // A model call that fails still ends the run with subtype "success"
+        // and is_error: true (an out-of-credit API error reads exactly so),
+        // and nothing was delivered — so the run counts as failed, both in
+        // this log and in what the settle below does with the clone.
+        ended = { subtype: message.subtype, isError: Boolean(message.is_error), turns: message.num_turns, cost: message.total_cost_usd };
+        console.log(ended.isError
+          ? `worker: failed (${message.subtype}) on #${n} after ${message.num_turns} turns, $${message.total_cost_usd.toFixed(2)}`
+          : `worker: ${message.subtype} on #${n} after ${message.num_turns} turns, $${message.total_cost_usd.toFixed(2)}`);
+        if (ended.isError) {
+          if (message.result) console.log(message.result);
+        } else if (message.subtype === "success") console.log(message.result);
       }
     }
   } catch (error) {
@@ -258,23 +266,26 @@ async function run() {
     console.log(`worker: the model run threw: ${oneLine(error)}`);
   } finally {
     // The clone goes either way; what a code run leaves behind depends on
-    // how it ended. Delivered: the saved branch has nothing left to hold.
-    // Anything else — out of turns, out of budget, thrown — the worker's own
-    // code saves to wip/task-n before the clone is removed, and hands the
-    // task back once its attempts are spent (#169) — unless the run could
-    // not start from the round's saved branch (its setup failed after the
-    // lookup found it): then nothing is saved, because pushing would
-    // overwrite the ledger the next run is to resume. A save that cannot
-    // run at all (the model never cloned, git failed) leaves the run as it
-    // was: the next one starts from the base branch.
+    // how it ended. Delivered: the saved branch has nothing left to hold —
+    // and only a result that is a success and no error means delivered,
+    // since the SDK reports a failed model call as a success carrying
+    // is_error, and that run delivered nothing. Anything else — out of
+    // turns, out of budget, thrown, or such a failed call — the worker's
+    // own code saves to wip/task-n before the clone is removed, and hands
+    // the task back once its attempts are spent (#169) — unless the run
+    // could not start from the round's saved branch (its setup failed
+    // after the lookup found it): then nothing is saved, because pushing
+    // would overwrite the ledger the next run is to resume. A save that
+    // cannot run at all (the model never cloned, git failed) leaves the
+    // run as it was: the next one starts from the base branch.
     try {
-      if (code && ended?.subtype === "success") {
+      if (code && ended?.subtype === "success" && !ended.isError) {
         await deleteSaved({ remote: deliveryRemote(access, repo, login), n, cwd });
       } else if (code && ended) {
         const saved = await saveUnfinished({
           remote: deliveryRemote(access, repo, login), n, round,
           resumed: Boolean(resume), cwd, repo,
-          subtype: ended.subtype, turns: ended.turns, cost: ended.cost,
+          subtype: ended.subtype, isError: ended.isError, turns: ended.turns, cost: ended.cost,
         });
         if (saved.skipped) {
           console.log(`worker: #${n} saved nothing: ${wipBranchOf(n)} still holds this round's saved work, this run did not start from it, and pushing would overwrite it — it waits there for the next run to resume`);
