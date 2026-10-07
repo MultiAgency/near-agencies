@@ -16,6 +16,14 @@ describe("the ai-review evals read the workflow itself", () => {
     assert.ok(splitArgs(config.claudeArgs).includes("--allowedTools"));
     assert.match(config.earlierRounds, /ledger\.json/);
     assert.match(config.verdict, /HEAD_SHA/);
+    assert.match(config.post, /gh pr comment "\$PR" -R "\$REPO" --body-file summary\.md/);
+  });
+
+  test("the review itself can't post a comment, read past its checkout, or keep credentials", () => {
+    const tools = splitArgs(config.claudeArgs)[splitArgs(config.claudeArgs).indexOf("--allowedTools") + 1].split(",");
+    assert.ok(!tools.some(t => t.startsWith("Bash(gh pr comment")), tools.join(","));
+    for (const name of ["Read", "Grep", "Glob"]) assert.ok(tools.includes(`${name}(./**)`) && !tools.includes(name), name);
+    assert.match(readFileSync(new URL("../.github/workflows/ai-review.yml", import.meta.url), "utf8"), /persist-credentials: false/);
   });
 
   test("the evals know every expression the prompt uses, and refuse an unknown one", () => {
@@ -51,11 +59,11 @@ describe("what an eval run is judged on", () => {
     assert.deepEqual(failed(good), []);
   });
 
-  test("a refused verdict write or summary post fails the contract; refused exploration is only a note", () => {
+  test("a refused verdict or summary write fails the contract; refused exploration is only a note", () => {
     const write = { ...good, result: { permission_denials: [{ tool_name: "Edit", tool_input: { file_path: "verdict.json" } }] } };
     assert.deepEqual(failed(write), ["the review ran and none of its own writes was refused"]);
     const post = { ...good, result: { permission_denials: [{ tool_name: "Bash", tool_input: { command: "gh pr comment 1 --body-file summary.md" } }] } };
-    assert.deepEqual(failed(post), ["the review ran and none of its own writes was refused"]);
+    assert.deepEqual(failed(post), []);
     const read = { ...good, result: { permission_denials: [{ tool_name: "Bash", tool_input: { command: "gh api repos/o/r/contents/x" } }] } };
     assert.deepEqual(failed(read), []);
     assert.ok(checks({}, read).some(c => c.note));
