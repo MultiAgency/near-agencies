@@ -100,6 +100,29 @@ const ENTRIES = [
     stderr: /pull request #1: .*500/,
   },
   {
+    // On an edit, a read that fails without throwing also takes the standing
+    // approval down (#168): the team's member list answers 500 through
+    // readTeam's retries and comes back null, so the hold is not the edit's
+    // doing — but the approval would stand over the body's attribution line,
+    // which the gate could not finish reading.
+    file: "scripts/staging-approval.mjs",
+    stubbed: true,
+    event: { action: "edited", pull_request: { number: 1 } },
+    set: { STUB_ATTRIBUTION: "1", STUB_TEAM_FAIL: "1" },
+    code: 0,
+    stdout: [/staging-approval hold on #1 at \w+: .*team internal could not be read/, /dismissed @multai-builder's approval 99 on #1/],
+  },
+  {
+    // The same failed team read on a run no edit started dismisses nothing:
+    // the approval stands until an edit or a push starts a run of its own.
+    file: "scripts/staging-approval.mjs",
+    stubbed: true,
+    set: { STUB_TEAM_FAIL: "1" },
+    code: 0,
+    stdout: /staging-approval hold on #1/,
+    notStdout: /dismissed/,
+  },
+  {
     file: "scripts/registry-backfill.mjs",
     drop: ["REGISTRY_URL", "REGISTRY_TOKEN"],
     code: 1,

@@ -142,14 +142,14 @@ async function decide(pr, { edited = false } = {}) {
   const fork = pr.head?.repo?.full_name?.toLowerCase() !== repo;
   const verdict = await verdictFor(number);
   const messages = await commitMessages(pr);
-  const { outcome, reason, edited: causedByEdit } = stagingApproval({
+  const { outcome, reason, edited: causedByEdit, readFailed } = stagingApproval({
     base: pr.base.ref,
     fork,
     author,
     internal,
     roster,
     paths,
-    rules: codeownersRules(codeowners ?? ""),
+    rules: codeowners === null ? null : codeownersRules(codeowners),
     test: testVerdict(test),
     verdict,
     sha,
@@ -160,13 +160,15 @@ async function decide(pr, { edited = false } = {}) {
   console.log(`  author @${author}, head ${pr.head?.repo?.full_name ?? "unknown"}, files ${paths.length}, teams: internal ${describe(internal)}, roster ${roster.status}, test ${testVerdict(test) ?? "missing"}, verdict ${verdict ? `from an ai-review run (${verdict.important} Important)` : "none"}`);
   if (outcome !== "approve") {
     // An approval stands until a push dismisses it (staging ruleset), and an
-    // edit is no push: when the edited pull request no longer earns the
-    // approval because of the edit itself — its base branch or a tool
-    // attribution line in its body — the approval comes down, so it never
-    // stands over a body this decision has read (#168). A hold from a read
-    // that failed, or a check that has not run, leaves the approval where it
-    // is: no run is scheduled to restore one a transient read took down.
-    if (edited && causedByEdit) await dismissApprovals(number, sha, reason);
+    // edit is no push: on an edit the approval comes down when the pull
+    // request no longer earns it because of the edit itself — its base
+    // branch or a tool attribution line in its body — and when a read this
+    // decision needed failed without throwing, as a read that throws already
+    // takes it down in the caller. No approval stands over a body the gate
+    // has not fully read (#168). A hold from a check that has not run yet —
+    // no test check, a verdict still to come — leaves the approval for the
+    // run that finishes that check to decide.
+    if (edited && (causedByEdit || readFailed)) await dismissApprovals(number, sha, reason);
     return;
   }
   // The reads above take time, and a push in between moves the head the

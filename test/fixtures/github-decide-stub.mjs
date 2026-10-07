@@ -10,6 +10,9 @@
 // reaching the network.
 // STUB_ATTRIBUTION makes the pull request one the edit itself holds: a docs
 // file the reviewer owns, with a tool attribution line in its body (#168).
+// STUB_TEAM_FAIL makes the team's member list answer 500, so readTeam
+// exhausts its retry and returns null — a read that fails without throwing
+// (#168: on an edit, that hold takes the approval down too).
 const attributed = Boolean(process.env.STUB_ATTRIBUTION);
 const PULL_REQUEST = {
   number: 1,
@@ -46,6 +49,9 @@ globalThis.fetch = (url, init) => {
   // STUB_COMMITS_FAIL: the commit list answers 500, so decide() throws after
   // the approval is standing (#168: an edit's failed read still dismisses it).
   if (process.env.STUB_COMMITS_FAIL && /\/pulls\/1\/commits/.test(href)) return new Response("boom", { status: 500 });
+  // STUB_TEAM_FAIL: the team's member list answers 500 both times readTeam
+  // asks, so it returns null instead of throwing (#168).
+  if (process.env.STUB_TEAM_FAIL && /\/orgs\/[^/]+\/teams\/internal\/members/.test(href)) return new Response("boom", { status: 500 });
   // The coordinator's roster read (ROSTER_URL points at this loopback host so
   // it lands here): not a member, which the verdict judges by roster.json.
   if (host.startsWith("127.0.0.1")) return reply({ stage: "none" });

@@ -496,24 +496,45 @@ describe("an edited pull request body (#168)", () => {
     assert.equal(stagingApproval(passing({ body: "## Plan\n\nFix the thing, with no footer." })).outcome, "approve");
   });
 
-  test("only a hold the edit itself caused is marked for dismissal, never a read that failed", () => {
+  test("only a hold the edit itself caused is marked edited; a read that failed is marked readFailed; a check that has not run is neither", () => {
     const attributed = stagingApproval(passing({ body: "Fix.\n\nCo-Authored-By: Claude <noreply@anthropic.com>" }));
     assert.equal(attributed.edited, true);
+    assert.notEqual(attributed.readFailed, true);
     assert.equal(stagingApproval(passing({ base: "main" })).edited, true, "a base branch edited away from staging");
+    // A read that failed without throwing holds, and is marked the way a
+    // read that throws already dismisses through the caller: on an edit, no
+    // approval stands over a body the gate has not fully read (#168).
     for (const over of [
       { internal: null },
       { roster: { status: "unreadable" }, internal: [] },
+      { rules: null },
+      { body: null },
+      { messages: null },
+    ]) {
+      const held = stagingApproval(passing(over));
+      assert.equal(held.outcome, "hold", JSON.stringify(over));
+      assert.equal(held.readFailed, true, `${JSON.stringify(over)} is a read that failed`);
+      assert.notEqual(held.edited, true, `${JSON.stringify(over)} is not the edit's doing`);
+    }
+    // A check that has not run yet, or one that ran and answered for itself,
+    // carries neither marker: the approval stands until its own run decides.
+    for (const over of [
       { test: null },
       { test: "pending" },
+      { test: "failure" },
       { verdict: null },
+      { verdict: verdict("0000000000000000000000000000000000000000") },
+      { verdict: { sha: SHA, important: 2 } },
       { paths: [] },
-      { body: null },
+      { rules: [] },
     ]) {
       const held = stagingApproval(passing(over));
       assert.equal(held.outcome, "hold", JSON.stringify(over));
       assert.notEqual(held.edited, true, `${JSON.stringify(over)} is not the edit's doing`);
+      assert.notEqual(held.readFailed, true, `${JSON.stringify(over)} is not a read that failed`);
     }
     assert.notEqual(stagingApproval(passing()).edited, true);
+    assert.notEqual(stagingApproval(passing()).readFailed, true);
   });
 
   test("a pull request read again before its approval is the one judged only if head, base and body all stand", () => {
