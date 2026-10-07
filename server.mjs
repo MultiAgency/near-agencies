@@ -14,10 +14,8 @@
 //   POST /api/join/request        check a signed join request; returns the issue to open
 //   POST /api/handoff             a task's handoff, pinned and checked, for its claimant to post
 //
-// With FACILITATOR_URL set, the x402-paid routes are mounted too
-// (lib/x402-intake.mjs): POST /engagements and GET /brief. With COORDINATOR=1
-// this instance also runs the seat coordinator (lib/coordinator.mjs); run it in
-// exactly one place.
+// With COORDINATOR=1 this instance also runs the seat coordinator
+// (lib/coordinator.mjs); run it in exactly one place.
 import express from "express";
 import { rateLimit } from "express-rate-limit";
 
@@ -53,16 +51,6 @@ if (process.env.TRUST_PROXY) app.set("trust proxy", Number(process.env.TRUST_PRO
 app.use(express.json({ limit: "16kb", strict: true }));
 app.use(express.static(new URL("./public", import.meta.url).pathname));
 
-if (process.env.FACILITATOR_URL) {
-  const { mountX402 } = await import("./lib/x402-intake.mjs");
-  await mountX402(app, {
-    facilitatorUrl: process.env.FACILITATOR_URL,
-    apiKeyFile: required("FACILITATOR_API_KEY_FILE"),
-    briefPayTo: required("PAY_TO"),
-    briefPrice: process.env.AMOUNT ?? "1000",
-    deposit,
-  });
-}
 mountEngagements(app, { deposit, depositMin, depositMax });
 mountOnboarding(app);
 // Merge the shared member registry into the roster (a no-op without
@@ -111,7 +99,6 @@ app.get("/api/config", (request, response) => {
     explorer: network.explorer,
     trezu: network.trezu && `${network.trezu}/${network.treasury}`,
     board: repoUrl,
-    x402: Boolean(process.env.FACILITATOR_URL),
     roster: { kinds: KINDS, skills: SKILLS },
     // The repositories a job may name (agents/claude-worker/repos.mjs), for
     // the hire form's choice: the ones workers deliver to. With none named,
@@ -182,8 +169,3 @@ function handle(load) {
   };
 }
 
-function required(name) {
-  const value = process.env[name];
-  if (!value) throw new Error(`${name} is required`);
-  return value;
-}

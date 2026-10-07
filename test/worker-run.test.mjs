@@ -222,6 +222,7 @@ async function harness() {
     SCENARIO_OUT: out,
     PATH: `${bin}:${process.env.PATH}`,
   };
+  delete env.MAX_TURNS;
 
   const spawn = async (scenario, extraEnv = {}) => {
     const k = spawn.count++;
