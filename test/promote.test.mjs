@@ -35,7 +35,7 @@ const seatIssue = (number, labels, dependsOn = [], assignees = []) => ({
 // list has been served: an owner closing a seat mid-cycle, the race pinned here.
 // `threads` holds each seat's comments; the bot's replies join its thread, so a
 // later cycle sees them as it would on GitHub.
-const board = ({ open = [], closes = [], issues = {}, closedByLabel = {}, threads = {} }) => {
+const board = ({ open = [], closes = [], issues = {}, closedByLabel = {}, threads = {}, events = {} }) => {
   const state = { calls: [], comments: [], labelPosts: [], patches: [], reactions: {}, assigns: [], unassigns: [] };
   let nextId = 1;
   const serve = async (url, options = {}) => {
@@ -102,7 +102,7 @@ const board = ({ open = [], closes = [], issues = {}, closedByLabel = {}, thread
     // No issue ever changes hands here, so its event list is empty: gate
     // labels set at creation and closes the coordinator itself made.
     const issueEvents = u.pathname.match(`${REPO}/issues/(\\d+)/events$`);
-    if (issueEvents && method === "GET") return json([]);
+    if (issueEvents && method === "GET") return json(events[Number(issueEvents[1])] ?? []);
     const posted = u.pathname.match(`${REPO}/issues/(\\d+)/labels$`);
     if (posted && method === "POST") {
       const labels = JSON.parse(options.body).labels;
@@ -350,6 +350,16 @@ describe("a claim on a task whose dependencies are not done", () => {
     assert.deepEqual(replies(fake, 63), ["@multi-agency can't claim this task: its dependencies #10 aren't done yet."]);
   });
 
+  // The real shapes (#130), captured 2026-10-07: kanban-sandbox#52, the closed
+  // task, and its events — closed by multi-agency at 15:46:09Z.
+  test("a real closed task, closed by the bot, counts as done as a dependency", async () => {
+    const fixture = name => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
+    const issues = { 52: fixture("board-issue-52-closed.json"), 65: dependent(65, [52]) };
+    const fake = await runCycle(board({ open: [issues[65]], issues, events: { 52: fixture("board-issue-52-events.json") }, threads: { 65: [claim(65, 9205, "multi-agency")] } }));
+    assert.deepEqual(fake.assigns, [{ number: 65, login: "multi-agency" }]);
+    assert.deepEqual(fake.patches, [], "nothing on the real task is rewritten");
+  });
+
   test("a dependency the bot closed counts as done", async () => {
     const issues = { 10: { ...seatIssue(10, ["in-progress"]), state: "closed", closed_at: "2026-09-30T20:00:00Z", closed_by: { login: "multi-agency" } }, 64: dependent(64, [10]) };
     const fake = await runCycle(board({ open: [issues[64]], issues, threads: { 64: [claim(64, 9204, "multi-agency")] } }));
@@ -392,6 +402,13 @@ describe("releasing a stale claim", () => {
     const fake = await runCycle(board({ open: [seat], issues: { 70: seat }, threads: { 70: thread } }));
     assert.ok(released(fake, 70), "the claim is released from its own time");
     assert.ok(fake.comments.some(c => c.number === 70 && /No handoff after 24 hours/.test(c.body)));
+  });
+
+  test("a claim whose time cannot be read is held, never released at once", async () => {
+    const thread = [said(66, 9306, "stranger", "Claimed by @stranger. look-alike", ago(72))];
+    const seat = { ...taken(66, thread), updated_at: "not a date" };
+    const fake = await runCycle(board({ open: [seat], issues: { 66: seat }, threads: { 66: thread } }));
+    assert.equal(released(fake, 66), false);
   });
 
   test("a claim made an hour ago is not released, whatever the issue's clock says", async () => {
