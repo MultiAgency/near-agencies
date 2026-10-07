@@ -47,7 +47,10 @@ Fill in the template's **Plan** and **Verification**.
   and on every push (`.github/workflows/ai-review.yml`).
 - **From a fork** (everyone else): an owner approves the first workflow run
   of a first-time contributor, and starts the AI review by commenting
-  `/review`.
+  `/review`. Bring your fork's `staging` up to date first (GitHub's **Sync
+  fork** button). Otherwise a push that carries upstream changes to
+  `.github/workflows/` is refused unless your token has the workflow
+  permission; a synced fork, or a push over SSH, needs no such permission.
 
 ## Review and merge
 

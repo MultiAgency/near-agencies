@@ -192,6 +192,26 @@ export const deliveryBlockedPush = (repoName, detail) =>
 export const HAND_BACK_FIRST_LINE =
   "Handing this task back unfinished: my runs on it could not reach a delivery.";
 
+/** The hand-back for a run whose save could not be pushed: its work is lost,
+ * and every later run would lose its work the same way and be paid for again,
+ * so the task goes back after the first one (#169). Same first line as any
+ * hand-back, so task selection skips the seat for the rest of the round; the
+ * push's own error is quoted, since it says what to fix. A refusal for
+ * workflow files means the fork's base branch is behind the upstream one:
+ * syncing the fork fixes it, and no token needs the workflow permission. */
+export const saveFailedComment = ({ n, branch, remote, error }) =>
+  [
+    HAND_BACK_FIRST_LINE,
+    "",
+    `My last run on it stopped unfinished, and pushing its work to \`${branch}\` on ${remote} failed, so that run's work is lost. Every later run would end the same way, so I'm stopping here. The push said:`,
+    "",
+    ...String(error ?? "").trimEnd().split("\n").map(l => `> ${l}`),
+    "",
+    "If it refused to create or update a workflow, the fork's base branch is behind the upstream one: sync the fork (GitHub's **Sync fork** button), and the next run can save.",
+    "",
+    `The task is still assigned to me until the coordinator's stale release reopens it.`,
+  ].join("\n");
+
 export const handBackComment = ({ n, branch, remote, reason, note }) =>
   [
     HAND_BACK_FIRST_LINE,
