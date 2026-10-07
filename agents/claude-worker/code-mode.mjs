@@ -175,6 +175,34 @@ export const deliveryBlockedPush = (repoName, detail) =>
     DELIVERY_BLOCKED_RECOVERY,
   ].join("\n");
 
+/** What a run posts on a seat it hands back instead of leaving to the next
+ * cron run: its attempts are spent — the last two runs saved no new work, or
+ * five unfinished runs on one round (#169). The fixed first line is how a
+ * later run recognises the hand-back and leaves the seat alone for the rest
+ * of the round (next-task.mjs reads it through refusalPosted, the same
+ * once-per-round match the refusals use). The comment must never look like a
+ * handoff to the coordinator: a ```handoff block by the assignee closes the
+ * seat and holds its claim (lib/coordinator.mjs, closeIfHandedOff and
+ * releaseIfStale), and #166 makes a passing handoff the only thing that
+ * holds one — a hand-back that read as a handoff would hold the very claim
+ * it is giving up. So: prose only, no fenced block, no `**Handoff:**`. The
+ * worker does not unassign itself either: a seat in progress with no
+ * assignee reads as mid-release and refuses new claims until the
+ * coordinator's stale sweep reopens it. */
+export const HAND_BACK_FIRST_LINE =
+  "Handing this task back unfinished: my runs on it could not reach a delivery.";
+
+export const handBackComment = ({ n, branch, remote, reason, note }) =>
+  [
+    HAND_BACK_FIRST_LINE,
+    "",
+    `${reason} The work so far is not thrown away: my unfinished runs saved it to the branch \`${branch}\` on ${remote}, and the last run's note there reads:`,
+    "",
+    ...String(note ?? "").trimEnd().split("\n").map(l => `> ${l}`),
+    "",
+    `The task is still assigned to me until the coordinator's stale release reopens it; the branch waits there until a run of #${n} delivers and deletes it.`,
+  ].join("\n");
+
 /** Whether the agent's own delivery-blocker comment — by its fixed first
  * line — is the seat's latest word: posted since the latest round the board
  * credits, with no later comment by anyone else. While it stands, a later
@@ -226,7 +254,7 @@ const autoMerges = (access, reviewed) => access === "branch" && !reviewed;
  * and `reviewed` says a review task waits on this one. Branch mode turns on
  * auto-merge only when nothing reviews the task: a reviewer's request for
  * another round must find the pull request still open. */
-export function ship(access, repo, n, login, revision, reviewed) {
+export function ship(access, repo, n, login, revision, reviewed, resumed = false) {
   const fork = access === "fork";
   const branch = `task-${n}`;
   const name = repo.name.split("/")[1];
@@ -239,18 +267,30 @@ export function ship(access, repo, n, login, revision, reviewed) {
     : checks[0];
   return [
     `This is a code task: the work is a pull request against ${repo.base} of ${repo.name} (§ 3 of the rules). git authenticates through gh as you, so no token belongs in any URL, and your commits are already authored as you.`,
-    fork
-      ? `\`gh repo fork ${repo.name} --clone=false\` if you have no fork yet (it only reports an existing one), then, in this directory, \`git clone ${clone} .\` — origin is your fork, you push there — and \`git fetch ${upstream} ${repo.base}\`: a fork goes stale once created, and one from before ${repo.base} became the default branch does not even have it.`
-      : `In this directory: \`git clone --branch ${repo.base} ${clone} .\`. You push to ${repo.name}.`,
-    revision
-      ? `\`git checkout ${branch}\`: the pull request exists; push your fixes to that same branch and never open a second pull request. ${pulls} shows it.`
-      : fork
-        ? `\`git checkout -b ${branch} FETCH_HEAD\`: the fetch left ${repo.base}'s tip in FETCH_HEAD, and the task branch starts there.`
-        : `\`git checkout -b ${branch}\`: it starts at ${repo.base}, which the clone checked out.`,
+    ...(resumed
+      ? [
+          // A resumed run finds the clone ready-made: the worker's own code
+          // started it at the branch the previous unfinished run saved
+          // (resume.mjs), and the prompt carries that run's log and note.
+          `The repository is already cloned in this directory, and branch \`${branch}\` is checked out where a previous run of this task stopped: do not clone, fork or fetch, and do not start the work over — continue from what is here.`,
+        ]
+      : [
+          fork
+            ? `\`gh repo fork ${repo.name} --clone=false\` if you have no fork yet (it only reports an existing one), then, in this directory, \`git clone ${clone} .\` — origin is your fork, you push there — and \`git fetch ${upstream} ${repo.base}\`: a fork goes stale once created, and one from before ${repo.base} became the default branch does not even have it.`
+            : `In this directory: \`git clone --branch ${repo.base} ${clone} .\`. You push to ${repo.name}.`,
+          revision
+            ? `\`git checkout ${branch}\`: the pull request exists; push your fixes to that same branch and never open a second pull request. ${pulls} shows it.`
+            : fork
+              ? `\`git checkout -b ${branch} FETCH_HEAD\`: the fetch left ${repo.base}'s tip in FETCH_HEAD, and the task branch starts there.`
+              : `\`git checkout -b ${branch}\`: it starts at ${repo.base}, which the clone checked out.`,
+        ]),
     `Make the change there: keep it focused, add tests, and make ${pass} pass.`,
+    // Checkpoints (#169): a run that stops unfinished leaves its steps behind
+    // for the next run, which starts from the branch those commits sit on.
+    `Work in steps, and \`git commit\` locally after each one that leaves ${pass} passing: \`git add\` only that step's files — never the \`.board/\` comment drafts — and write the message so it says what the step did and what it has left — a run that stops unfinished leaves its finished steps somewhere the next run can take them up.`,
     `\`git add\` only the files you changed, \`git commit\`, and \`git push -u origin ${branch}\`${fork ? " — origin is your fork" : ""}. Every commit carries part of the change: never an empty or probe commit, and no tool attribution in a commit message or the pull request body (AGENTS.md). If ${pulls} shows a pull request already, push to its branch instead of opening another.`,
     ...(revision ? [] : [
-      `Open the pull request: read \`.github/pull_request_template.md\` from this clone, and if it has one, fill in its headings, keeping the task link, before writing the body to a file. With no template, write its body to a file first so it links task #${n} and says what changed and how you verified it. Then \`gh pr create --repo ${repo.name} --head ${fork ? `${login}:` : ""}${branch} --base ${repo.base} --title "Task #${n}: <what changed>" --body-file <file>\`.`,
+      `Open the pull request: read \`.github/pull_request_template.md\` from this clone, and if it has one, fill in its headings, keeping the task link, before writing the body to a file in \`.board/\`. With no template, write its body to \`.board/\` first so it links task #${n} and says what changed and how you verified it. Then \`gh pr create --repo ${repo.name} --head ${fork ? `${login}:` : ""}${branch} --base ${repo.base} --title "Task #${n}: <what changed>" --body-file .board/<file>\`.`,
       ...(autoMerges(access, reviewed) ? [
         `Then \`gh pr merge ${branch} --repo ${repo.name} --auto --squash\`: it returns at once, and GitHub merges the pull request by itself once the required checks pass and a code owner or the approval gate approves it. You need not wait for it.`,
       ] : []),

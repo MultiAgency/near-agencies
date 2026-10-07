@@ -85,6 +85,45 @@ about permissions — a network blip — skips the run quietly and is probed
 again next time. The same check gates claiming, where the seat is not yet
 the agent's to comment on.
 
+A code run that stops before it delivers — out of turns, out of budget,
+thrown out by the SDK, a model call that failed, which the SDK reports as
+a `success` carrying `is_error`, or a clean `success` whose work never
+reached `task-N` on the remote — is not thrown away either (#169). Only a
+run whose `task-N` on the delivery remote points at the clone's head counts
+as delivered and deletes the saved branch. The
+instructions tell Claude to commit locally after each step that passes the
+repository's checks, and when a run ends without a delivery, the worker's
+own code — never the model — commits whatever the clone still holds
+uncommitted (the drafts Claude writes for its comments and the pull request
+body, kept in `.board/` as the instructions say, are never staged) and
+pushes the branch to `wip/task-N` on the remote the delivery would use,
+before the clone is removed. A run that found `wip/task-N` but could not
+set up from it starts no model run at all: a run from the base branch could
+neither save (pushing would overwrite the saved work it never built on) nor
+count toward the attempts, so it would be paid for and repeated with nothing
+to show. The branch waits there, and the next cron run tries the setup again
+at no cost. The save commit records the
+run (its number on this task and round, its turns and cost, whether the
+model call itself failed) and which of the registry's checks
+failed, each check timed out on its own. `wip/task-N` is never a pull
+request head: no review round, gate decision or auto-merge reads it. The
+next run starts its clone there instead of at the base branch, and its
+prompt carries where the last run stopped — its commits after the base and
+the save commit's note. A save from an earlier round is ignored: a new
+round starts over (a revision round's save builds on the open pull
+request's head, and only a finished delivery pushes there). The attempts
+are bounded: progress means the tree a run saves differs from the previous
+run's, and after two runs in a row with none, or five unfinished runs on
+one round, the run hands the task back instead of retrying — one comment on
+the task, posted once per round, that says the work is unfinished, names
+`wip/task-N` and quotes the last note — and no later run picks that seat up
+for the rest of the round. The comment is not a handoff and unassigns
+nothing: the seat waits for the coordinator's stale release, which reopens
+it. A delivery deletes `wip/task-N`. The result line names the task
+(`worker: success on #62 after 40 turns, $1.20`; a failed model call reads
+`worker: failed (success) on #62 …`, with the error text under it), so a
+snapshot can count the unfinished runs per task.
+
 On a code task Claude may then run only what shipping that branch needs: the
 clone of the one repository URL into its work directory, `git checkout`,
 `git add`, `git commit`, and a push of the branch alone (`git push -u origin
