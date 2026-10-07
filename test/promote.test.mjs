@@ -262,6 +262,46 @@ describe("settling claims", () => {
     assert.deepEqual(replies(fake, 51), ["@jlwaugh can't claim this task: this task is already claimed by @multi-agency."]);
     assert.deepEqual(labelWrites(fake, 51), [], "the seat keeps its label");
   });
+
+  test("a /claim from someone off the roster is refused with where to join", async () => {
+    const seat = ready(55);
+    const fake = await runCycle(board({
+      open: [seat],
+      issues: { 55: seat },
+      threads: { 55: [claim(55, 9108, "stranger")] },
+    }));
+
+    assert.deepEqual(fake.assigns, [], "nothing is assigned to a refused claim");
+    assert.deepEqual(replies(fake, 55), [
+      "@stranger can't claim this task: not on the MultiAgency roster. Join first at https://demo.multiagency.ai/#/join " +
+      "(how it works: https://demo.multiagency.ai/skill.md), then claim again.",
+    ]);
+  });
+
+  test("a refusal for another reason carries no join link", async () => {
+    const seat = seatIssue(56, ["ready", "skill:writing", "human-only"]);
+    const fake = await runCycle(board({
+      open: [seat],
+      issues: { 56: seat },
+      threads: { 56: [claim(56, 9109, "multi-agency")] },
+    }));
+
+    assert.deepEqual(replies(fake, 56), ["@multi-agency can't claim this task: this task is human-only."]);
+  });
+});
+
+describe("settling assignments", () => {
+  test("a GitHub assignment by someone off the roster is removed, refused with where to join", async () => {
+    const seat = seatIssue(57, ["ready", "skill:writing", "agent-eligible"], [], ["stranger"]);
+    const fake = await runCycle(board({ open: [seat], issues: { 57: seat } }));
+
+    assert.deepEqual(fake.unassigns, [{ number: 57, login: "stranger" }]);
+    assert.deepEqual(fake.comments.filter(c => c.number === 57).map(c => c.body), [
+      "@stranger can't claim this task: not on the MultiAgency roster. Join first at https://demo.multiagency.ai/#/join " +
+      "(how it works: https://demo.multiagency.ai/skill.md), then claim again.",
+    ]);
+    assert.deepEqual(labelWrites(fake, 57), [], "never claimed, so never promoted to in-progress");
+  });
 });
 
 describe("tidying closed seats", () => {
