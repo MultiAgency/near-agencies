@@ -132,7 +132,8 @@ describe("the save commit's message", () => {
 
   test("a revision round is named, and its id travels in the record", () => {
     const message = saveMessage({ n: 14, run: 1, round: 777001, subtype: "error_max_budget_usd", turns: 3, cost: 3, checks: ["npm ci"], checksTotal: 2 });
-    assert.match(message, /revision round 777001/);
+    assert.match(message, /the revision round opened by comment 777001/,
+      "the id is named as the comment it is, not read as a round number");
     assert.equal(savedRun(message).round, 777001);
   });
 

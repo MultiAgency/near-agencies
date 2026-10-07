@@ -494,7 +494,7 @@ describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
       assert.equal(prompt.includes("multiagency-run: "), false, "and its note does not reach this prompt");
       assert.match((await h.gitCalls()).filter(wipPush).at(-1), /^git push --force origin HEAD:refs\/heads\/wip\/task-58$/);
       const tip = await h.tipMessage(h.upstream, "wip/task-58");
-      assert.match(tip, /^wip: task #58 run 1 saved unfinished \(revision round 9001\)/,
+      assert.match(tip, /^wip: task #58 run 1 saved unfinished \(the revision round opened by comment 9001\)/,
         "the ledger starts over: this round's first unfinished run");
     } finally {
       await h.cleanup();

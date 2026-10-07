@@ -61,7 +61,10 @@ export function saveMessage({ n, run, round, subtype, isError, turns, cost, chec
   const ended = subtype === "thrown" || turns === undefined
     ? "the model run ended without a result"
     : `${isError ? `failed (${subtype})` : subtype} after ${turns} turns at $${Number(cost ?? 0).toFixed(2)}`;
-  const roundNote = round ? `revision round ${round}` : "the first round";
+  // `round` is the id of the ```changes comment that opened the round, not
+  // a number to count by: the prose names it as what it is, and the record
+  // line carries it for the parser.
+  const roundNote = round ? `the revision round opened by comment ${round}` : "the first round";
   const failed = checks ?? [];
   const untried = checksTotal - (ran ?? checksTotal);
   const checksNote = failed.length
