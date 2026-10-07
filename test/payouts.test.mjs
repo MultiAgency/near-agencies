@@ -790,6 +790,60 @@ describe("filing proposals and closing a job", async () => {
     assert.equal(entry.pages, AUDIT_PAGE_CAP);
   });
 
+  // A read that reaches the treasury's tip in one hop lands past it (a full
+  // page is wider than the handful of ids actually left): what the audit
+  // remembers as covered must stop at the tip itself, not at that overshoot,
+  // or a duplicate filed in the gap before the next sweep is skipped as
+  // already scanned.
+  test("a duplicate filed past an exhausted read's own tip is still read on the next sweep", async () => {
+    serve(dupBoard([onChain(41)], { lastId: 50 }));
+    const clean = await duplicatePayoutProblem(await loadEngagement(28));
+    assert.equal(clean, null, "nothing is wrong yet");
+
+    // Id 80 sits inside the stretch a full-page hop from floor 16 would have
+    // jumped straight over (16 + 100 = 116, well past the tip of 50 the first
+    // read saw) — filed only once the treasury has grown past it.
+    serve(dupBoard([onChain(41), onChain(80)], { lastId: 120 }));
+    const problem = await duplicatePayoutProblem(await loadEngagement(28));
+    assert.match(problem, /#30 has 2 payout proposals \(41 and 80\)/, "the duplicate filed in the gap is still found");
+  });
+
+  // A duplicate can be filed for a task before that task's own payout is
+  // ever recorded. The scan must remember it the first time its page is
+  // read, keyed to the task itself rather than to whether it had a payout
+  // recorded yet — or the page moves on and the duplicate is lost for good.
+  test("a duplicate filed before a task's own payout is recorded is still found once it is", async () => {
+    const m30 = shaped(30, "1000000");
+    const m31 = shaped(31, "1000000");
+    const filed30 = {
+      id: 950,
+      user: { login: "multi-agency" },
+      body: `**Payout proposed:** DAO proposal 41\n\n${fence("payout", { proposal_id: 41, treasury: "multiagency.sputnikv2.testnet", payee: m30.payee, amount: m30.amount, proposed_tx: "tx41" })}`,
+    };
+    const real41 = { id: 41, status: "InProgress", description: proposalDescription(28, m30), kind: { Transfer: { token_id: USDC, receiver_id: m30.payee, amount: m30.amount, msg: null } } };
+    const duplicateFor31 = { id: 45, status: "InProgress", description: proposalDescription(28, m31), kind: { Transfer: { token_id: USDC, receiver_id: m31.payee, amount: m31.amount, msg: null } } };
+    const issues = { 28: epic([terms(30, "1000000"), terms(31, "1000000")]), 30: closed(30), 31: closed(31) };
+
+    // Task 31 has not had its own payout proposed yet.
+    serve({ issues, threads: { 28: [], 30: [handoff(30), filed30], 31: [handoff(31)] }, proposals: [real41, duplicateFor31], lastId: 60 });
+    const before = await loadEngagement(28);
+    assert.equal(before.members.find(m => m.issue === 31).payout, null, "task 31's own payout is not recorded yet");
+    assert.equal(await duplicatePayoutProblem(before), null, "nothing is recorded for 31 yet, so nothing can be flagged for it");
+
+    // Task 31's own payout is now recorded, at a different id than the
+    // duplicate the scan already read while 31 had no payout at all.
+    const filed31 = {
+      id: 951,
+      user: { login: "multi-agency" },
+      body: `**Payout proposed:** DAO proposal 46\n\n${fence("payout", { proposal_id: 46, treasury: "multiagency.sputnikv2.testnet", payee: m31.payee, amount: m31.amount, proposed_tx: "tx46" })}`,
+    };
+    const real46 = { id: 46, status: "InProgress", description: proposalDescription(28, m31), kind: { Transfer: { token_id: USDC, receiver_id: m31.payee, amount: m31.amount, msg: null } } };
+    serve({ issues, threads: { 28: [], 30: [handoff(30), filed30], 31: [handoff(31), filed31] }, proposals: [real41, duplicateFor31, real46], lastId: 60 });
+    const after = await loadEngagement(28);
+    const problem = await duplicatePayoutProblem(after);
+    assert.match(problem, /#31 has 2 payout proposals \(45 and 46\)/, "the duplicate filed for 31 before its payout was recorded is still found");
+  });
+
   // A capped audit cannot vouch for a duplicate past where it stopped — a
   // payment already recorded must still hold, not complete, over the
   // incomplete read.
