@@ -23,6 +23,7 @@ describe("the ai-review evals read the workflow itself", () => {
       "github.repository": "o/r",
       "github.event.pull_request.number || github.event.issue.number": "1",
       "github.event.pull_request.head.sha": "abc",
+      "steps.pr.outputs.sha": "abc",
     };
     assert.doesNotMatch(interpolate(config.prompt, values), /\$\{\{/);
     assert.throws(() => interpolate("${{ secrets.X }}", values), /no value/);
