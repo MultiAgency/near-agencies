@@ -57,6 +57,16 @@ const ENTRIES = [
     stdout: [/staging-approval hold on #1/, /internal 1 member/],
   },
   {
+    // The same run started by an edited pull request (#168): the pull request
+    // holds (it changes no file), and the edit's hold takes down the
+    // reviewer's approval standing at its head.
+    file: "scripts/staging-approval.mjs",
+    stubbed: true,
+    event: { action: "edited", pull_request: { number: 1 } },
+    code: 0,
+    stdout: [/staging-approval hold on #1/, /dismissed @multai-builder's approval 99 on #1/],
+  },
+  {
     file: "scripts/registry-backfill.mjs",
     drop: ["REGISTRY_URL", "REGISTRY_TOKEN"],
     code: 1,
@@ -91,12 +101,12 @@ const stubbedEnv = eventPath => env([], {
 });
 
 for (const entry of ENTRIES) {
-  test(`${entry.file} exits ${entry.code} on its smoke input, with no load-time crash`, () => {
+  test(`${entry.file}${entry.event ? ` (${entry.event.action} event)` : ""} exits ${entry.code} on its smoke input, with no load-time crash`, () => {
     let eventDir = null;
     try {
       if (entry.stubbed) {
         eventDir = mkdtempSync(join(tmpdir(), "staging-approval-smoke-"));
-        writeFileSync(join(eventDir, "event.json"), JSON.stringify({
+        writeFileSync(join(eventDir, "event.json"), JSON.stringify(entry.event ?? {
           workflow_run: { name: "ci", head_sha: "0".repeat(40), pull_requests: [{ number: 1 }] },
         }));
       }

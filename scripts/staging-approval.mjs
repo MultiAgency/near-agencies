@@ -33,9 +33,11 @@ import { combineRoster, rosterFromApi, rosterRecord } from "../lib/operator-appr
 import {
   REVIEWER,
   codeownersRules,
+  editedPullNumber,
   newestVerdictArtifact,
   openCandidates,
   stagingApproval,
+  standingApprovals,
   testVerdict,
   verdictArtifactName,
   verdictArtifactNumbers,
@@ -58,18 +60,24 @@ const AI_REVIEW = "ai-review";
 
 try {
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH ?? "", "utf8"));
+  // An edited pull request starts a run of its own (#168): a body changed
+  // after the approval fires neither `ci` nor `ai-review`, so the edit is the
+  // trigger, and the one pull request it names is decided again.
+  const edited = editedPullNumber(event);
   const sha = event.workflow_run?.head_sha;
-  if (!sha) throw new Error("the event carries no workflow run with a head SHA");
+  if (!sha && edited === null) throw new Error("the event carries no workflow run with a head SHA, and is no pull request edit");
   // Candidates come from three places: the triggering run's own pull
   // requests, the pull requests its head commit belongs to, and the verdict
   // artifacts it uploaded (named for the pull request each reviewed). Each
   // pull request is judged on the head SHA it answers with now, never on
   // this run's.
-  const commitPulls = await github("GET", `/commits/${sha}/pulls?per_page=100`);
-  const artifactNumbers = event.workflow_run.name === AI_REVIEW
+  const commitPulls = edited === null ? await github("GET", `/commits/${sha}/pulls?per_page=100`) : [];
+  const artifactNumbers = edited === null && event.workflow_run.name === AI_REVIEW
     ? verdictArtifactNumbers((await github("GET", `/actions/runs/${event.workflow_run.id}/artifacts?per_page=100`)).artifacts)
     : [];
-  const numbers = openCandidates(event.workflow_run.pull_requests, commitPulls, artifactNumbers);
+  const numbers = edited === null
+    ? openCandidates(event.workflow_run.pull_requests, commitPulls, artifactNumbers)
+    : [edited];
   if (numbers.length === 0) {
     console.log(`staging-approval: no pull request is associated with ${sha}`);
     process.exit(0);
@@ -78,7 +86,7 @@ try {
   for (const number of numbers) {
     try {
       const pr = await github("GET", `/pulls/${number}`);
-      if (pr.state === "open") await decide(pr);
+      if (pr.state === "open") await decide(pr, { edited: edited !== null });
     } catch (error) {
       console.error(`staging-approval: pull request #${number}: ${error.message}`);
       failed = true;
@@ -95,7 +103,7 @@ try {
 // never sits inside the per-pull-request fan-out. The head SHA is this
 // pull request's own, as it answers right now — a verdict, a test check or
 // an approval pinned to any other SHA decides nothing here.
-async function decide(pr) {
+async function decide(pr, { edited = false } = {}) {
   const number = pr.number;
   const sha = pr.head.sha;
   const author = pr.user?.login;
@@ -138,7 +146,16 @@ async function decide(pr) {
   });
   console.log(`staging-approval ${outcome} on #${number} at ${sha}: ${reason}`);
   console.log(`  author @${author}, head ${pr.head?.repo?.full_name ?? "unknown"}, files ${paths.length}, teams: internal ${describe(internal)}, roster ${roster.status}, test ${testVerdict(test) ?? "missing"}, verdict ${verdict ? `from an ai-review run (${verdict.important} Important)` : "none"}`);
-  if (outcome !== "approve") return;
+  if (outcome !== "approve") {
+    // An approval stands until a push dismisses it (staging ruleset), and an
+    // edit is no push: when the edited pull request no longer earns the
+    // approval it holds at this head, the approval comes down, so it never
+    // stands over a body this decision has read (#168). Only an edit's own
+    // run does this; a hold from a transient read in another run keeps the
+    // approval the way it always has.
+    if (edited) await dismissApprovals(number, sha, reason);
+    return;
+  }
   // The reads above take time, and a push in between moves the head the
   // checks were judged on. The approval names one SHA: re-read the pull
   // request and hold when it moved — the push's own run decides the new
@@ -369,16 +386,34 @@ async function verdictFor(number) {
   }
 }
 
+// The ids of the reviewer's approvals standing at this exact SHA, every page.
+async function approvalsAt(number, sha) {
+  const found = [];
+  for (let page = 1; page <= REVIEW_PAGES; page++) {
+    const batch = await github("GET", `/pulls/${number}/reviews?per_page=100&page=${page}`);
+    found.push(...standingApprovals(batch, sha));
+    if (batch.length < 100) return found;
+  }
+  return found;
+}
+
 // Whether the reviewer's approval already stands at this exact SHA: the
 // workflow fires once per completed run, so the second of two firings for
 // one head sees the first's approval and leaves it.
 async function alreadyApproved(number, sha) {
-  for (let page = 1; page <= REVIEW_PAGES; page++) {
-    const batch = await github("GET", `/pulls/${number}/reviews?per_page=100&page=${page}`);
-    if (batch.some(review => review.user?.login?.toLowerCase() === REVIEWER && review.state === "APPROVED" && review.commit_id === sha)) return true;
-    if (batch.length < 100) return false;
+  return (await approvalsAt(number, sha)).length > 0;
+}
+
+// Takes down the reviewer's approvals at this head, saying why. A dismissal
+// GitHub refuses throws: the run fails red and the pull request keeps its
+// approval until the next decision tries again.
+async function dismissApprovals(number, sha, reason) {
+  for (const id of await approvalsAt(number, sha)) {
+    await github("PUT", `/pulls/${number}/reviews/${id}/dismissals`, {
+      message: `The pull request was edited and no longer earns the approval: ${reason}.`,
+    });
+    console.log(`staging-approval: dismissed @${REVIEWER}'s approval ${id} on #${number} at ${sha}`);
   }
-  return false;
 }
 
 // A function declaration, not a const: the decision runs (and logs) before

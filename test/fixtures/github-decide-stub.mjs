@@ -32,6 +32,10 @@ const routes = [
   [/\/contents\/\.github\/CODEOWNERS/, { content: base64("* @jlwaugh\n") }],
   [/\/contents\/roster\.json/, { content: base64('{"builders":[]}') }],
   [/\/actions\/artifacts/, { artifacts: [] }],
+  // The reviewer's approval standing at the head, for the edited-body entry
+  // (#168): the hold that follows an edit dismisses it.
+  [/\/pulls\/1\/reviews\?/, [{ id: 99, user: { login: "multai-builder" }, state: "APPROVED", commit_id: "0".repeat(40) }]],
+  [/\/pulls\/1\/reviews\/99\/dismissals/, { id: 99, state: "DISMISSED" }],
 ];
 
 globalThis.fetch = (url, init) => {

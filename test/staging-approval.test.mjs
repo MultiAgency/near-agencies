@@ -8,9 +8,11 @@ import {
   authorAllowed,
   codeownersMatches,
   codeownersRules,
+  editedPullNumber,
   newestVerdictArtifact,
   openCandidates,
   ownersForPath,
+  standingApprovals,
   stagingApproval,
   testVerdict,
   uncoveredPath,
@@ -466,5 +468,46 @@ describe("verdictFrom", () => {
     for (const text of ["", "not json", "{}", '{"sha":"","important":0}', `{"sha":"${SHA}"}`, `{"sha":"${SHA}","important":1.5}`, `{"sha":"${SHA}","important":"0"}`, "null"]) {
       assert.equal(verdictFrom(text), null, text);
     }
+  });
+});
+
+// #168: a body edited after the approval fires neither ci nor ai-review, so
+// the decision has to start from the edit itself, and an approval the new
+// body no longer earns has to come down.
+describe("an edited pull request body (#168)", () => {
+  test("an `edited` pull request event names its pull request, and nothing else does", () => {
+    assert.equal(editedPullNumber({ action: "edited", pull_request: { number: 155 } }), 155);
+    assert.equal(editedPullNumber({ action: "opened", pull_request: { number: 155 } }), null);
+    assert.equal(editedPullNumber({ action: "edited", pull_request: {} }), null);
+    assert.equal(editedPullNumber({ action: "edited" }), null);
+    assert.equal(editedPullNumber({ workflow_run: { head_sha: SHA, pull_requests: [{ number: 155 }] } }), null);
+    assert.equal(editedPullNumber(null), null);
+  });
+
+  test("the approval that passed holds once the body carries an attribution line, on the same head SHA", () => {
+    assert.equal(stagingApproval(passing()).outcome, "approve");
+    const edited = stagingApproval(passing({ body: "## Plan\n\nFix the thing.\n\nCo-Authored-By: Claude <noreply@anthropic.com>" }));
+    assert.equal(edited.outcome, "hold");
+    assert.match(edited.reason, /body/);
+  });
+
+  test("a body edited back to a clean one approves again on the same head SHA", () => {
+    assert.equal(stagingApproval(passing({ body: "## Plan\n\nFix the thing, with no footer." })).outcome, "approve");
+  });
+
+  test("the reviewer's approvals standing at this head are the ones to dismiss, and no others", () => {
+    const review = (id, login, state, commit_id) => ({ id, user: { login }, state, commit_id });
+    const reviews = [
+      review(1, REVIEWER, "APPROVED", SHA),
+      review(2, REVIEWER.toUpperCase(), "APPROVED", SHA),
+      review(3, REVIEWER, "APPROVED", "f".repeat(40)),
+      review(4, REVIEWER, "DISMISSED", SHA),
+      review(5, REVIEWER, "COMMENTED", SHA),
+      review(6, "jlwaugh", "APPROVED", SHA),
+      { id: 7, state: "APPROVED", commit_id: SHA },
+    ];
+    assert.deepEqual(standingApprovals(reviews, SHA), [1, 2]);
+    assert.deepEqual(standingApprovals([], SHA), []);
+    assert.deepEqual(standingApprovals(undefined, SHA), []);
   });
 });
