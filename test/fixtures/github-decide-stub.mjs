@@ -8,15 +8,21 @@
 // run. A hold decides nothing and posts nothing. Any read the stub does not
 // answer answers 404, so an unexpected read fails loudly rather than
 // reaching the network.
+// STUB_ATTRIBUTION makes the pull request one the edit itself holds: a docs
+// file the reviewer owns, with a tool attribution line in its body (#168).
+// STUB_TEAM_FAIL makes the team's member list answer 500, so readTeam
+// exhausts its retry and returns null — a read that fails without throwing
+// (#168: on an edit, that hold takes the approval down too).
+const attributed = Boolean(process.env.STUB_ATTRIBUTION);
 const PULL_REQUEST = {
   number: 1,
   state: "open",
   user: { login: "jlwaugh" },
   base: { ref: "staging" },
   head: { sha: "0".repeat(40), repo: { full_name: "MultiAgency/near-agencies" } },
-  changed_files: 0,
+  changed_files: attributed ? 1 : 0,
   commits: 0,
-  body: "",
+  body: attributed ? "Fix.\n\nCo-Authored-By: Claude <noreply@anthropic.com>" : "",
 };
 
 const base64 = value => Buffer.from(value, "utf8").toString("base64");
@@ -24,18 +30,28 @@ const reply = body => new Response(JSON.stringify(body), { status: 200, headers:
 
 const routes = [
   [/\/commits\/[0-9a-f]{40}\/pulls/, []],
-  [/\/pulls\/1\/files/, []],
+  [/\/pulls\/1\/files/, attributed ? [{ filename: "docs/setup.md" }] : []],
   [/\/pulls\/1\/commits/, []],
   [/\/pulls\/1$/, PULL_REQUEST],
   [/\/orgs\/[^/]+\/teams\/internal\/members/, [{ login: "jlwaugh" }]],
   [/\/commits\/[0-9a-f]{40}\/check-runs/, { check_runs: [{ name: "test", id: 1, status: "completed", conclusion: "success" }], total_count: 1 }],
-  [/\/contents\/\.github\/CODEOWNERS/, { content: base64("* @jlwaugh\n") }],
+  [/\/contents\/\.github\/CODEOWNERS/, { content: base64(attributed ? "* @multai-builder\n" : "* @jlwaugh\n") }],
   [/\/contents\/roster\.json/, { content: base64('{"builders":[]}') }],
   [/\/actions\/artifacts/, { artifacts: [] }],
+  // The reviewer's approval standing at the head, for the edited-body entry
+  // (#168): the hold that follows an edit dismisses it.
+  [/\/pulls\/1\/reviews\?/, [{ id: 99, user: { login: "multai-builder" }, state: "APPROVED", commit_id: "0".repeat(40) }]],
+  [/\/pulls\/1\/reviews\/99\/dismissals/, { id: 99, state: "DISMISSED" }],
 ];
 
 globalThis.fetch = (url, init) => {
   const { host, href } = new URL(url);
+  // STUB_COMMITS_FAIL: the commit list answers 500, so decide() throws after
+  // the approval is standing (#168: an edit's failed read still dismisses it).
+  if (process.env.STUB_COMMITS_FAIL && /\/pulls\/1\/commits/.test(href)) return new Response("boom", { status: 500 });
+  // STUB_TEAM_FAIL: the team's member list answers 500 both times readTeam
+  // asks, so it returns null instead of throwing (#168).
+  if (process.env.STUB_TEAM_FAIL && /\/orgs\/[^/]+\/teams\/internal\/members/.test(href)) return new Response("boom", { status: 500 });
   // The coordinator's roster read (ROSTER_URL points at this loopback host so
   // it lands here): not a member, which the verdict judges by roster.json.
   if (host.startsWith("127.0.0.1")) return reply({ stage: "none" });

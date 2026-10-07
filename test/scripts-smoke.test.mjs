@@ -57,6 +57,72 @@ const ENTRIES = [
     stdout: [/staging-approval hold on #1/, /internal 1 member/],
   },
   {
+    // The same run started by an edited pull request (#168), whose body now
+    // carries a tool attribution line: the edit's own hold takes down the
+    // reviewer's approval standing at its head.
+    file: "scripts/staging-approval.mjs",
+    stubbed: true,
+    event: { action: "edited", pull_request: { number: 1 } },
+    set: { STUB_ATTRIBUTION: "1" },
+    code: 0,
+    stdout: [/staging-approval hold on #1 at \w+: .*tool attribution/, /dismissed @multai-builder's approval 99 on #1/],
+  },
+  {
+    // An edit whose hold is not the edit's doing (the pull request changes no
+    // file) leaves the approval alone.
+    file: "scripts/staging-approval.mjs",
+    stubbed: true,
+    event: { action: "edited", pull_request: { number: 1 } },
+    code: 0,
+    stdout: /staging-approval hold on #1/,
+    notStdout: /dismissed/,
+  },
+  {
+    // A read in decide() that throws on an edit (here the commit list) still
+    // takes the standing approval down: an approval never stands over a body
+    // the gate has not re-read. The run fails red (exit 1) as any broken read does.
+    file: "scripts/staging-approval.mjs",
+    stubbed: true,
+    event: { action: "edited", pull_request: { number: 1 } },
+    set: { STUB_ATTRIBUTION: "1", STUB_COMMITS_FAIL: "1" },
+    code: 1,
+    stdout: /dismissed @multai-builder's approval 99 on #1/,
+    stderr: /pull request #1: .*500/,
+  },
+  {
+    // The same failed read on a run that no edit started leaves the approval:
+    // a transient read there schedules a new run, as it always has.
+    file: "scripts/staging-approval.mjs",
+    stubbed: true,
+    set: { STUB_ATTRIBUTION: "1", STUB_COMMITS_FAIL: "1" },
+    code: 1,
+    notStdout: /dismissed/,
+    stderr: /pull request #1: .*500/,
+  },
+  {
+    // On an edit, a read that fails without throwing also takes the standing
+    // approval down (#168): the team's member list answers 500 through
+    // readTeam's retries and comes back null, so the hold is not the edit's
+    // doing — but the approval would stand over the body's attribution line,
+    // which the gate could not finish reading.
+    file: "scripts/staging-approval.mjs",
+    stubbed: true,
+    event: { action: "edited", pull_request: { number: 1 } },
+    set: { STUB_ATTRIBUTION: "1", STUB_TEAM_FAIL: "1" },
+    code: 0,
+    stdout: [/staging-approval hold on #1 at \w+: .*team internal could not be read/, /dismissed @multai-builder's approval 99 on #1/],
+  },
+  {
+    // The same failed team read on a run no edit started dismisses nothing:
+    // the approval stands until an edit or a push starts a run of its own.
+    file: "scripts/staging-approval.mjs",
+    stubbed: true,
+    set: { STUB_TEAM_FAIL: "1" },
+    code: 0,
+    stdout: /staging-approval hold on #1/,
+    notStdout: /dismissed/,
+  },
+  {
     file: "scripts/registry-backfill.mjs",
     drop: ["REGISTRY_URL", "REGISTRY_TOKEN"],
     code: 1,
@@ -82,7 +148,8 @@ const env = (drop, set) => {
 // before the script does, the token names nothing real (every GitHub read
 // lands on the stub), and the event carries one open pull request so
 // openCandidates picks it up without a network read.
-const stubbedEnv = eventPath => env([], {
+const stubbedEnv = (eventPath, set = {}) => env([], {
+  ...set,
   NODE_OPTIONS: `--import ${pathToFileURL(join(ROOT, "test/fixtures/github-decide-stub.mjs")).href}`,
   GITHUB_TOKEN: "test-token",
   SANDBOX_REPO: "MultiAgency/near-agencies",
@@ -91,23 +158,24 @@ const stubbedEnv = eventPath => env([], {
 });
 
 for (const entry of ENTRIES) {
-  test(`${entry.file} exits ${entry.code} on its smoke input, with no load-time crash`, () => {
+  test(`${entry.file}${entry.event ? ` (${entry.event.action} event${entry.set ? ", with a stubbed condition" : ""})` : entry.set ? " (with a stubbed condition)" : ""} exits ${entry.code} on its smoke input, with no load-time crash`, () => {
     let eventDir = null;
     try {
       if (entry.stubbed) {
         eventDir = mkdtempSync(join(tmpdir(), "staging-approval-smoke-"));
-        writeFileSync(join(eventDir, "event.json"), JSON.stringify({
+        writeFileSync(join(eventDir, "event.json"), JSON.stringify(entry.event ?? {
           workflow_run: { name: "ci", head_sha: "0".repeat(40), pull_requests: [{ number: 1 }] },
         }));
       }
       const run = spawnSync(process.execPath, [join(ROOT, entry.file), ...(entry.args ?? [])], {
-        env: entry.stubbed ? stubbedEnv(join(eventDir, "event.json")) : env(entry.drop),
+        env: entry.stubbed ? stubbedEnv(join(eventDir, "event.json"), entry.set) : env(entry.drop),
         encoding: "utf8",
         timeout: TIMEOUT_MS,
       });
       assert.equal(run.status, entry.code, `${entry.file}: stderr was:\n${run.stderr}`);
       for (const pattern of [].concat(entry.stderr ?? [])) assert.match(run.stderr, pattern);
       for (const pattern of [].concat(entry.stdout ?? [])) assert.match(run.stdout, pattern);
+      for (const pattern of [].concat(entry.notStdout ?? [])) assert.doesNotMatch(run.stdout, pattern);
       assert.doesNotMatch(String(run.stderr), CRASH);
     } finally {
       if (eventDir) rmSync(eventDir, { recursive: true, force: true });

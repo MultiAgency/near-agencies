@@ -8,9 +8,12 @@ import {
   authorAllowed,
   codeownersMatches,
   codeownersRules,
+  editedPullNumber,
+  movedWhileJudged,
   newestVerdictArtifact,
   openCandidates,
   ownersForPath,
+  standingApprovals,
   stagingApproval,
   testVerdict,
   uncoveredPath,
@@ -466,5 +469,97 @@ describe("verdictFrom", () => {
     for (const text of ["", "not json", "{}", '{"sha":"","important":0}', `{"sha":"${SHA}"}`, `{"sha":"${SHA}","important":1.5}`, `{"sha":"${SHA}","important":"0"}`, "null"]) {
       assert.equal(verdictFrom(text), null, text);
     }
+  });
+});
+
+// #168: a body edited after the approval fires neither ci nor ai-review, so
+// the decision has to start from the edit itself, and an approval the new
+// body no longer earns has to come down.
+describe("an edited pull request body (#168)", () => {
+  test("an `edited` pull request event names its pull request, and nothing else does", () => {
+    assert.equal(editedPullNumber({ action: "edited", pull_request: { number: 155 } }), 155);
+    assert.equal(editedPullNumber({ action: "opened", pull_request: { number: 155 } }), null);
+    assert.equal(editedPullNumber({ action: "edited", pull_request: {} }), null);
+    assert.equal(editedPullNumber({ action: "edited" }), null);
+    assert.equal(editedPullNumber({ workflow_run: { head_sha: SHA, pull_requests: [{ number: 155 }] } }), null);
+    assert.equal(editedPullNumber(null), null);
+  });
+
+  test("the approval that passed holds once the body carries an attribution line, on the same head SHA", () => {
+    assert.equal(stagingApproval(passing()).outcome, "approve");
+    const edited = stagingApproval(passing({ body: "## Plan\n\nFix the thing.\n\nCo-Authored-By: Claude <noreply@anthropic.com>" }));
+    assert.equal(edited.outcome, "hold");
+    assert.match(edited.reason, /body/);
+  });
+
+  test("a body edited back to a clean one approves again on the same head SHA", () => {
+    assert.equal(stagingApproval(passing({ body: "## Plan\n\nFix the thing, with no footer." })).outcome, "approve");
+  });
+
+  test("only a hold the edit itself caused is marked edited; a read that failed is marked readFailed; a check that has not run is neither", () => {
+    const attributed = stagingApproval(passing({ body: "Fix.\n\nCo-Authored-By: Claude <noreply@anthropic.com>" }));
+    assert.equal(attributed.edited, true);
+    assert.notEqual(attributed.readFailed, true);
+    assert.equal(stagingApproval(passing({ base: "main" })).edited, true, "a base branch edited away from staging");
+    // A read that failed without throwing holds, and is marked the way a
+    // read that throws already dismisses through the caller: on an edit, no
+    // approval stands over a body the gate has not fully read (#168).
+    for (const over of [
+      { internal: null },
+      { roster: { status: "unreadable" }, internal: [] },
+      { rules: null },
+      { body: null },
+      { messages: null },
+    ]) {
+      const held = stagingApproval(passing(over));
+      assert.equal(held.outcome, "hold", JSON.stringify(over));
+      assert.equal(held.readFailed, true, `${JSON.stringify(over)} is a read that failed`);
+      assert.notEqual(held.edited, true, `${JSON.stringify(over)} is not the edit's doing`);
+    }
+    // A check that has not run yet, or one that ran and answered for itself,
+    // carries neither marker: the approval stands until its own run decides.
+    for (const over of [
+      { test: null },
+      { test: "pending" },
+      { test: "failure" },
+      { verdict: null },
+      { verdict: verdict("0000000000000000000000000000000000000000") },
+      { verdict: { sha: SHA, important: 2 } },
+      { paths: [] },
+      { rules: [] },
+    ]) {
+      const held = stagingApproval(passing(over));
+      assert.equal(held.outcome, "hold", JSON.stringify(over));
+      assert.notEqual(held.edited, true, `${JSON.stringify(over)} is not the edit's doing`);
+      assert.notEqual(held.readFailed, true, `${JSON.stringify(over)} is not a read that failed`);
+    }
+    assert.notEqual(stagingApproval(passing()).edited, true);
+    assert.notEqual(stagingApproval(passing()).readFailed, true);
+  });
+
+  test("a pull request read again before its approval is the one judged only if head, base and body all stand", () => {
+    const judged = { head: { sha: SHA }, base: { ref: "staging" }, body: "## Plan\n\nFix the thing." };
+    assert.equal(movedWhileJudged(judged, { ...judged }), null);
+    assert.match(movedWhileJudged(judged, { ...judged, head: { sha: "f".repeat(40) } }), /head moved to f{40}/);
+    assert.match(movedWhileJudged(judged, { ...judged, base: { ref: "main" } }), /base moved to main/);
+    assert.match(movedWhileJudged(judged, { ...judged, body: `${judged.body}\n\nCo-Authored-By: Claude <noreply@anthropic.com>` }), /body changed/);
+    assert.equal(movedWhileJudged({ ...judged, body: null }, { ...judged, body: "" }), null, "an empty body and a missing one are the same body");
+    assert.match(movedWhileJudged(judged, null), /could not be read again/, "a pull request that cannot be read again is not the one judged");
+  });
+
+  test("the reviewer's approvals standing at this head are the ones to dismiss, and no others", () => {
+    const review = (id, login, state, commit_id) => ({ id, user: { login }, state, commit_id });
+    const reviews = [
+      review(1, REVIEWER, "APPROVED", SHA),
+      review(2, REVIEWER.toUpperCase(), "APPROVED", SHA),
+      review(3, REVIEWER, "APPROVED", "f".repeat(40)),
+      review(4, REVIEWER, "DISMISSED", SHA),
+      review(5, REVIEWER, "COMMENTED", SHA),
+      review(6, "jlwaugh", "APPROVED", SHA),
+      { id: 7, state: "APPROVED", commit_id: SHA },
+    ];
+    assert.deepEqual(standingApprovals(reviews, SHA), [1, 2]);
+    assert.deepEqual(standingApprovals([], SHA), []);
+    assert.deepEqual(standingApprovals(undefined, SHA), []);
   });
 });
