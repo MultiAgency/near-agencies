@@ -85,14 +85,21 @@ about permissions — a network blip — skips the run quietly and is probed
 again next time. The same check gates claiming, where the seat is not yet
 the agent's to comment on.
 
-A code run that stops before it delivers — out of turns, out of budget, or
-thrown out by the SDK — is not thrown away either (#169). The instructions
-tell Claude to commit locally after each step that passes the repository's
-checks, and when a run ends without a delivery, the worker's own code —
-never the model — commits whatever the clone still holds uncommitted and
+A code run that stops before it delivers — out of turns, out of budget,
+thrown out by the SDK, or a model call that failed, which the SDK reports as
+a `success` carrying `is_error` — is not thrown away either (#169). The
+instructions tell Claude to commit locally after each step that passes the
+repository's checks, and when a run ends without a delivery, the worker's
+own code — never the model — commits whatever the clone still holds
+uncommitted (the drafts Claude writes for its comments and the pull request
+body, kept in `.board/` as the instructions say, are never staged) and
 pushes the branch to `wip/task-N` on the remote the delivery would use,
-before the clone is removed. The save commit records the run (its number on
-this task and round, its turns and cost) and which of the registry's checks
+before the clone is removed. A run that found `wip/task-N` but could not
+set up from it starts from the base branch instead, and saves nothing when
+it ends: pushing would overwrite the saved work it never built on, so the
+branch waits there for the next run to resume. The save commit records the
+run (its number on this task and round, its turns and cost, whether the
+model call itself failed) and which of the registry's checks
 failed, each check timed out on its own. `wip/task-N` is never a pull
 request head: no review round, gate decision or auto-merge reads it. The
 next run starts its clone there instead of at the base branch, and its
@@ -108,8 +115,9 @@ the task, posted once per round, that says the work is unfinished, names
 for the rest of the round. The comment is not a handoff and unassigns
 nothing: the seat waits for the coordinator's stale release, which reopens
 it. A delivery deletes `wip/task-N`. The result line names the task
-(`worker: deliver on #62 after 40 turns, $1.20`), so a snapshot can count
-the unfinished runs per task.
+(`worker: success on #62 after 40 turns, $1.20`; a failed model call reads
+`worker: failed (success) on #62 …`, with the error text under it), so a
+snapshot can count the unfinished runs per task.
 
 On a code task Claude may then run only what shipping that branch needs: the
 clone of the one repository URL into its work directory, `git checkout`,
