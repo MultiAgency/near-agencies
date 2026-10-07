@@ -260,6 +260,25 @@ export async function saveUnfinished({ remote, n, round, resumed, cwd, repo, run
   return { run: runNumber, tree, previousTree: before[0]?.tree ?? null, message };
 }
 
+/** Whether this run's work reached the delivery remote: its `task-<n>`
+ * branch there points at the clone's HEAD. A result of `success` alone says
+ * only that the model stopped without an error — it may have stopped short of
+ * pushing, after saying it cannot do the work — so the saved branch is
+ * deleted only on this evidence. A read that fails counts as not delivered:
+ * the work is then saved rather than lost. */
+export async function deliveredHead({ remote, n, cwd, run = promisify(execFile) }) {
+  try {
+    const [{ stdout: listed }, { stdout: head }] = await Promise.all([
+      run("git", ["ls-remote", remote, `refs/heads/task-${n}`], { cwd, timeout: GIT_TIMEOUT_MS }),
+      run("git", ["rev-parse", "HEAD"], { cwd, timeout: GIT_TIMEOUT_MS }),
+    ]);
+    const tip = listed.trim().split("\t")[0];
+    return Boolean(tip) && tip === head.trim();
+  } catch {
+    return false;
+  }
+}
+
 /** Delete the saved branch after a delivery: nothing is waiting to resume,
  * and the next task on this number starts clean. A delivery that never
  * saved — most of them — finds no branch on the remote and pushes nothing:

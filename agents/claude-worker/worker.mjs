@@ -19,7 +19,7 @@ import { z } from "zod";
 import { accessFor, allowedTools, codeAccess, deliversCodeSeat, handBackComment, ship, termsOf, SDK_SETTINGS } from "./code-mode.mjs";
 import { nextTask as selectTask } from "./next-task.mjs";
 import { gitEnv, probeDelivery } from "./preflight.mjs";
-import { deleteSaved, deliveryRemote, handBackReason, resumableWork, saveUnfinished, setupResume, wipBranchOf } from "./resume.mjs";
+import { deleteSaved, deliveredHead, deliveryRemote, handBackReason, resumableWork, saveUnfinished, setupResume, wipBranchOf } from "./resume.mjs";
 import { codeRepo } from "./repos.mjs";
 
 const env = name => {
@@ -194,11 +194,14 @@ async function run() {
   const n = task.seat.number;
   const access = code ? accessFor(repo, codeMode) : null;
   const round = task.round?.id ?? 0;
-  let cwd = await mkdtemp(join(tmpdir(), `seat-${n}-`));
+  const cwd = await mkdtemp(join(tmpdir(), `seat-${n}-`));
   // A code run continues what an unfinished one saved (#169): the branch
   // wip/task-n holds the work of every run that stopped, and a save from
   // this very round means this clone starts there instead of at the base.
-  // A setup that fails falls back to the fresh start, in a clean directory.
+  // A setup that fails starts no model run at all: a run from the base
+  // branch could neither save (that would overwrite the round's saved work)
+  // nor count toward the attempts, so it would be paid for and repeated with
+  // nothing to show. The next cron run tries the setup again, at no cost.
   let resume = null;
   if (code) {
     try {
@@ -216,10 +219,9 @@ async function run() {
         console.log(`worker: #${n} continues run ${found.record.run} of this round (${wipBranchOf(n)})`);
       }
     } catch (error) {
-      console.log(`worker: starting from the base branch: the saved work could not be set up (${oneLine(error)})`);
+      console.log(`worker: #${n} not run: the saved work on ${wipBranchOf(n)} could not be set up (${oneLine(error)}); the next run tries again`);
       await rm(cwd, { recursive: true, force: true });
-      cwd = await mkdtemp(join(tmpdir(), `seat-${n}-`));
-      resume = null;
+      return;
     }
   }
   // What the model run ended with: the result message's fields, or the
@@ -279,13 +281,18 @@ async function run() {
     // cannot run at all (the model never cloned, git failed) leaves the
     // run as it was: the next one starts from the base branch.
     try {
-      if (code && ended?.subtype === "success" && !ended.isError) {
+      const clean = code && ended?.subtype === "success" && !ended.isError;
+      const delivered = clean && await deliveredHead({ remote: deliveryRemote(access, repo, login), n, cwd });
+      if (delivered) {
         await deleteSaved({ remote: deliveryRemote(access, repo, login), n, cwd });
       } else if (code && ended) {
+        // A clean success whose work never reached task-n on the remote — the
+        // model stopped short of pushing — is unfinished like any other.
+        if (clean) console.log(`worker: #${n} ended in success, but task-${n} on the remote does not hold this run's work: saving it as unfinished`);
         const saved = await saveUnfinished({
           remote: deliveryRemote(access, repo, login), n, round,
           resumed: Boolean(resume), cwd, repo,
-          subtype: ended.subtype, isError: ended.isError, turns: ended.turns, cost: ended.cost,
+          subtype: clean ? "success, undelivered" : ended.subtype, isError: ended.isError, turns: ended.turns, cost: ended.cost,
         });
         if (saved.skipped) {
           console.log(`worker: #${n} saved nothing: ${wipBranchOf(n)} still holds this round's saved work, this run did not start from it, and pushing would overwrite it — it waits there for the next run to resume`);

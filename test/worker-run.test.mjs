@@ -369,6 +369,18 @@ export async function* query({ options, prompt }) {
 }
 `;
 
+// The model stops cleanly without pushing — for example after saying it
+// cannot do the work. The SDK reports success; nothing was delivered.
+const SCENARIO_GIVES_UP = `
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+export async function* query({ options, prompt }) {
+  await writeFile(join(process.env.SCENARIO_OUT, "prompt.txt"), prompt);
+  await writeFile(join(options.cwd, "PARTIAL.md"), "started, then stopped\\n");
+  yield { type: "result", subtype: "success", num_turns: 7, total_cost_usd: 0.5, result: "I cannot finish this task." };
+}
+`;
+
 // The SDK itself throws mid-run — the crash the worker used to die of.
 const SCENARIO_THROWS = `
 import { execFile } from "node:child_process";
@@ -501,21 +513,39 @@ describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
     }
   });
 
-  test("a saved branch whose setup failed is not pushed over: the fallback run saves nothing", async () => {
+  test("a saved branch whose setup failed starts no model run, so nothing is paid for or pushed over", async () => {
     const h = await harness();
     try {
       await h.spawn(SCENARIO_STOPS);
       const pushesBefore = (await h.gitCalls()).filter(wipPush).length;
       const { stdout } = await h.spawn(SCENARIO_FALLBACK, { FAIL_RESUME_CHECKOUT: "1" });
-      assert.match(stdout, /worker: starting from the base branch: the saved work could not be set up/,
-        "the failed setup fell back, as before");
-      assert.match(stdout, /worker: #58 saved nothing: wip\/task-58 still holds this round's saved work/,
-        "and the run says why it saved nothing");
+      assert.match(stdout, /worker: #58 not run: the saved work on wip\/task-58 could not be set up/,
+        "the failed setup is said, and the run stops there");
+      assert.equal(/worker: error_max_turns on #58 after 9 turns/.test(stdout), false,
+        "no model run: a run from the base branch could neither save nor count");
       assert.equal((await h.gitCalls()).filter(wipPush).length, pushesBefore,
         "no push touched the branch: not to force it over, not to update it");
       assert.match(await h.tipMessage(h.upstream, "wip/task-58"), /^wip: task #58 run 1 saved unfinished/,
         "the first run's save is still the ledger the next run resumes");
-      assert.deepEqual(h.board.state.posts, [], "no hand-back either: the attempts did not move");
+      assert.deepEqual(h.board.state.posts, [], "nothing posted: the next cron run tries the setup again");
+      const { prompt: retried } = await h.spawn(SCENARIO_RESUMES);
+      assert.match(retried, /already cloned in this directory/, "once the setup works, the next run resumes the saved work");
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  test("a clean success that never pushed its work is unfinished: the work is saved, not deleted", async () => {
+    const h = await harness();
+    try {
+      await h.spawn(SCENARIO_STOPS);
+      const { stdout } = await h.spawn(SCENARIO_GIVES_UP);
+      assert.match(stdout, /worker: success on #58 after 7 turns/, "the SDK said success");
+      assert.match(stdout, /worker: #58 ended in success, but task-58 on the remote does not hold this run's work: saving it as unfinished/);
+      assert.deepEqual(await h.refs(h.upstream), ["refs/heads/staging", "refs/heads/wip/task-58"],
+        "the saved branch is kept: no delivery reached the remote");
+      assert.match(await h.tipMessage(h.upstream, "wip/task-58"), /^wip: task #58 run 2 saved unfinished \(the first round\): success, undelivered after 7 turns/,
+        "the run is recorded as unfinished and counts toward the attempts");
     } finally {
       await h.cleanup();
     }

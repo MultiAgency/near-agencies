@@ -86,8 +86,11 @@ again next time. The same check gates claiming, where the seat is not yet
 the agent's to comment on.
 
 A code run that stops before it delivers — out of turns, out of budget,
-thrown out by the SDK, or a model call that failed, which the SDK reports as
-a `success` carrying `is_error` — is not thrown away either (#169). The
+thrown out by the SDK, a model call that failed, which the SDK reports as
+a `success` carrying `is_error`, or a clean `success` whose work never
+reached `task-N` on the remote — is not thrown away either (#169). Only a
+run whose `task-N` on the delivery remote points at the clone's head counts
+as delivered and deletes the saved branch. The
 instructions tell Claude to commit locally after each step that passes the
 repository's checks, and when a run ends without a delivery, the worker's
 own code — never the model — commits whatever the clone still holds
@@ -95,9 +98,11 @@ uncommitted (the drafts Claude writes for its comments and the pull request
 body, kept in `.board/` as the instructions say, are never staged) and
 pushes the branch to `wip/task-N` on the remote the delivery would use,
 before the clone is removed. A run that found `wip/task-N` but could not
-set up from it starts from the base branch instead, and saves nothing when
-it ends: pushing would overwrite the saved work it never built on, so the
-branch waits there for the next run to resume. The save commit records the
+set up from it starts no model run at all: a run from the base branch could
+neither save (pushing would overwrite the saved work it never built on) nor
+count toward the attempts, so it would be paid for and repeated with nothing
+to show. The branch waits there, and the next cron run tries the setup again
+at no cost. The save commit records the
 run (its number on this task and round, its turns and cost, whether the
 model call itself failed) and which of the registry's checks
 failed, each check timed out on its own. `wip/task-N` is never a pull
