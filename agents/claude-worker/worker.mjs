@@ -9,7 +9,7 @@
 // Finding that work is a few GitHub reads; Claude runs only when there is some.
 // Run it on a schedule (see README); --dry-run only names the task.
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -176,7 +176,7 @@ function instructions(task, resume = null) {
     doing,
     ...(resume ? ["", stoppedAt(resume)] : []),
     "",
-    `Use \`gh\` for GitHub; it is authenticated as you. The board is ${board}: pass \`--repo ${board}\`. Write each comment to a file in \`.board/\` (create it if it is missing), never loose in this directory, and post it with \`gh issue comment ${n} --repo ${board} --body-file .board/<file>\`, which prints the new comment's URL.`,
+    `Use \`gh\` for GitHub; it is authenticated as you. The board is ${board}: pass \`--repo ${board}\`. Write each comment to a file in \`.board/\` with your Write tool, which creates the folder when it is missing, never loose in this directory, and post it with \`gh issue comment ${n} --repo ${board} --body-file .board/<file>\`, which prints the new comment's URL. Make files and folders only with your Write and Edit tools: Bash runs only the commands these instructions name.`,
     "Work on this one task only. If you cannot do the work, comment on the task saying why, and stop.",
   ].join("\n");
 }
@@ -241,6 +241,14 @@ async function run() {
       return;
     }
   }
+  // The drafts folder the instructions name, made here wherever the model
+  // won't clone into the run's folder (a claim, a non-code delivery, or a
+  // resumed delivery whose clone setupResume made): asked to create it
+  // itself, the model reached for `mkdir`, which the Bash allowlist refuses,
+  // and two of three claim runs on kanban-sandbox#74 ended there. A fresh
+  // code delivery's folder stays empty for its `git clone … .`, and its model
+  // writes the drafts with the Write tool once the clone is in place.
+  if (!code || resume) await mkdir(join(cwd, ".board"), { recursive: true });
   // What the model run ended with: the result message's fields, or the
   // marker of a run the SDK threw out — which used to crash this process
   // with the clone's work still in it.

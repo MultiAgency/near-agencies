@@ -463,6 +463,17 @@ export async function* query({ options, prompt }) {
 }
 `;
 
+// Records what the run's folder holds when the model starts, then stops short.
+const SCENARIO_FOLDER = `
+import { readdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+export async function* query({ options, prompt }) {
+  await writeFile(join(process.env.SCENARIO_OUT, "prompt.txt"), prompt);
+  await writeFile(join(process.env.SCENARIO_OUT, "folder.json"), JSON.stringify(await readdir(options.cwd)));
+  throw new Error("stopped by the test");
+}
+`;
+
 const SCENARIO_THROWS = `
 import { execFile } from "node:child_process";
 import { writeFile } from "node:fs/promises";
@@ -748,6 +759,35 @@ describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
           error => /MAX_TURNS must be a positive whole number of turns/.test(String(error.stderr)), bad);
       }
       assert.deepEqual(h.board.state.posts, [], "nothing posted");
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  test("a claim run finds .board/ made for it, and a fresh delivery starts in an empty folder for its clone", async () => {
+    // The prompt told every run to create .board/ itself, and the model
+    // reached for `mkdir -p .board && gh issue view …`, which the Bash
+    // allowlist refuses: on 2026-10-07 two of agency-builder's three claim
+    // runs on kanban-sandbox#74 ended there, posting nothing.
+    const h = await harness();
+    try {
+      const folder = async () => JSON.parse(await readFile(join(h.dir, "scenario-out", "folder.json"), "utf8"));
+      const seat = h.board.state.seats[0];
+      // A claim run clones nothing: the worker makes the drafts folder.
+      h.board.state.seats = [{ ...seat, assignees: [], labels: [{ name: "ready" }, { name: "agent-eligible" }, { name: "skill:code" }] }];
+      const claimed = await h.spawn(SCENARIO_FOLDER);
+      assert.match(claimed.stdout, /worker: claim #/);
+      assert.deepEqual(await folder(), [".board"]);
+      // A fresh code delivery clones into its folder (`git clone … .`), which
+      // must be empty: the model writes its drafts once the clone is there.
+      h.board.state.seats = [seat];
+      const delivered = await h.spawn(SCENARIO_FOLDER);
+      assert.match(delivered.stdout, /worker: deliver #/);
+      assert.deepEqual(await folder(), []);
+      for (const { prompt } of [claimed, delivered]) {
+        assert.doesNotMatch(prompt, /create it if it is missing/, "nothing asks the model to make a folder with Bash");
+        assert.match(prompt, /Write tool/);
+      }
     } finally {
       await h.cleanup();
     }
