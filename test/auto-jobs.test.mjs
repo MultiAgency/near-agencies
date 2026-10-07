@@ -635,6 +635,21 @@ describe("closing an auto task on the merge", () => {
     assert.equal(boardIssues[900].state_reason, "completed");
   });
 
+  // GitHub reads a closing keyword as a whole word: "prefix #600" closes
+  // nothing there, and must deliver nothing here.
+  test("a word that merely ends in a closing keyword is no closing reference", async () => {
+    for (const body of ["Adds a prefix #600 to every id.", "The unresolved #600 case is still open.", "It discloses #600 to no one."]) {
+      build({ pr: pull(9, { state: "closed", merged: true, body }) });
+      await settle();
+      assert.equal(boardIssues[900].state_reason, "not_planned", JSON.stringify(body));
+    }
+    for (const body of ["Resolves MultiAgency/near-agencies#600", "closed #600", "Fix: #600", "Related work.\n\nFixes #600"]) {
+      build({ pr: pull(9, { state: "closed", merged: true, body }) });
+      await settle();
+      assert.equal(boardIssues[900].state_reason, "completed", JSON.stringify(body));
+    }
+  });
+
   test("a pull request whose closing reference was written after the merge closes nothing", async () => {
     // The body reads as it stands now, so a reference added after the merge
     // passes that check; the issue the merge never closed is what holds.
