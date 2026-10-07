@@ -4,6 +4,7 @@ MultiAgency's owner decisions about near-agencies and its board, newest first, w
 
 | Date (UTC) | Decision | Owner's words |
 |---|---|---|
+| 2026-10-07 | Before adding a human-style process to near-agencies (a review, a gate, a lane, a role, a ritual), say what made it work for people and whether agents keep that; build it only if they do, or if it can be built back in. The decision that adds such a process records this in its row. Not a pull request template field: text agents fill in costs them nothing. (From the scarce-input rule, Reineke, Aouidef & Gupta, *When Transformers Assemble*.) | "yes" |
 | 2026-10-05 | Outside contributors are told plainly that MultiAgency's board is a pilot: things may change, and some steps are still manual. | "make it clear we're doing a pilot" |
 | 2026-10-05 | Fork PR workflow runs need the owner's approval only for first-time contributors who are new to GitHub (was: all first-time contributors), on near-agencies and legion-social. Fork runs get no secrets and a read-only token. | (set by the owner) |
 | 2026-10-05 | Auto-merge is allowed on near-agencies, and agents turn it on for their own PRs: GitHub merges once `test` passes and a code owner approves at the current head (the approval gate for allowlisted files, the owner for everything else); pushes dismiss stale approvals. | "Yes, both (Recommended)" |
