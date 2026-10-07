@@ -260,20 +260,33 @@ export async function saveUnfinished({ remote, n, round, resumed, cwd, repo, run
   return { run: runNumber, tree, previousTree: before[0]?.tree ?? null, message };
 }
 
-/** Whether this run's work reached the delivery remote: its `task-<n>`
- * branch there points at the clone's HEAD. A result of `success` alone says
- * only that the model stopped without an error — it may have stopped short of
- * pushing, after saying it cannot do the work — so the saved branch is
- * deleted only on this evidence. A read that fails counts as not delivered:
- * the work is then saved rather than lost. */
-export async function deliveredHead({ remote, n, cwd, run = promisify(execFile) }) {
+/** The tip of `task-<n>` on the delivery remote: its commit id, `null` when
+ * the branch does not exist, `undefined` when the remote cannot be read. */
+export async function taskTip({ remote, n, run = promisify(execFile) }) {
   try {
-    const [{ stdout: listed }, { stdout: head }] = await Promise.all([
-      run("git", ["ls-remote", remote, `refs/heads/task-${n}`], { cwd, timeout: GIT_TIMEOUT_MS }),
+    const { stdout } = await run("git", ["ls-remote", remote, `refs/heads/task-${n}`], { timeout: GIT_TIMEOUT_MS });
+    return stdout.trim().split("\t")[0] || null;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether this run delivered: it moved `task-<n>` on the delivery remote
+ * (`before` is the tip read before the model run) to the clone's HEAD. A
+ * result of `success` alone says only that the model stopped without an
+ * error — it may have stopped short of pushing, after saying it cannot do the
+ * work — and in a revision round the clone starts at the pull request's head,
+ * so a HEAD equal to `task-<n>` proves nothing unless this run moved it. A
+ * read that fails, before or after, counts as not delivered: the work is then
+ * saved rather than lost. */
+export async function deliveredHead({ remote, n, cwd, before, run = promisify(execFile) }) {
+  if (before === undefined) return false;
+  try {
+    const [after, { stdout: head }] = await Promise.all([
+      taskTip({ remote, n, run }),
       run("git", ["rev-parse", "HEAD"], { cwd, timeout: GIT_TIMEOUT_MS }),
     ]);
-    const tip = listed.trim().split("\t")[0];
-    return Boolean(tip) && tip === head.trim();
+    return Boolean(after) && after !== before && after === head.trim();
   } catch {
     return false;
   }

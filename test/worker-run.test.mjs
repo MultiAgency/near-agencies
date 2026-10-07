@@ -381,6 +381,23 @@ export async function* query({ options, prompt }) {
 }
 `;
 
+// A run that starts at task-58's head on the remote (a revision round
+// starts at the pull request's head), changes files, and stops cleanly
+// without committing or pushing.
+const SCENARIO_ON_HEAD_NO_PUSH = `
+import { execFile } from "node:child_process";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { promisify } from "node:util";
+const run = promisify(execFile);
+export async function* query({ options, prompt }) {
+  await writeFile(join(process.env.SCENARIO_OUT, "prompt.txt"), prompt);
+  await run("git", ["clone", "--branch", "task-58", process.env.FAKE_UPSTREAM, "."], { cwd: options.cwd, env: process.env });
+  await writeFile(join(options.cwd, "REVISION.md"), "a revision never committed\\n");
+  yield { type: "result", subtype: "success", num_turns: 12, total_cost_usd: 0.9, result: "done, I think" };
+}
+`;
+
 // The SDK itself throws mid-run — the crash the worker used to die of.
 const SCENARIO_THROWS = `
 import { execFile } from "node:child_process";
@@ -541,11 +558,30 @@ describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
       await h.spawn(SCENARIO_STOPS);
       const { stdout } = await h.spawn(SCENARIO_GIVES_UP);
       assert.match(stdout, /worker: success on #58 after 7 turns/, "the SDK said success");
-      assert.match(stdout, /worker: #58 ended in success, but task-58 on the remote does not hold this run's work: saving it as unfinished/);
+      assert.match(stdout, /worker: #58 ended in success, but this run did not move task-58 on the remote to its work: saving it as unfinished/);
       assert.deepEqual(await h.refs(h.upstream), ["refs/heads/staging", "refs/heads/wip/task-58"],
         "the saved branch is kept: no delivery reached the remote");
       assert.match(await h.tipMessage(h.upstream, "wip/task-58"), /^wip: task #58 run 2 saved unfinished \(the first round\): success, undelivered after 7 turns/,
         "the run is recorded as unfinished and counts toward the attempts");
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  test("a run that starts at the pull request's head and pushes nothing is not a delivery, however clean its end", async () => {
+    const h = await harness();
+    try {
+      await h.spawn(SCENARIO_STOPS);
+      await h.spawn(SCENARIO_DELIVERS);
+      const tip = (await h.refs(h.upstream)).includes("refs/heads/task-58");
+      assert.ok(tip, "a delivery left task-58 on the remote: the pull request's head");
+      const { stdout } = await h.spawn(SCENARIO_ON_HEAD_NO_PUSH);
+      assert.match(stdout, /worker: #58 ended in success, but this run did not move task-58 on the remote to its work: saving it as unfinished/,
+        "its HEAD equals task-58, yet it moved nothing");
+      assert.deepEqual(await h.refs(h.upstream), ["refs/heads/staging", "refs/heads/task-58", "refs/heads/wip/task-58"],
+        "its uncommitted work is saved, and the delivered head is untouched");
+      assert.match(await h.tipMessage(h.upstream, "wip/task-58"), /^wip: task #58 run 2 saved unfinished \(the first round\): success, undelivered after 12 turns/,
+        "and the run counts toward the attempts, after the one saved earlier this round");
     } finally {
       await h.cleanup();
     }

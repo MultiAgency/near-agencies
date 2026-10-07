@@ -19,7 +19,7 @@ import { z } from "zod";
 import { accessFor, allowedTools, codeAccess, deliversCodeSeat, handBackComment, ship, termsOf, SDK_SETTINGS } from "./code-mode.mjs";
 import { nextTask as selectTask } from "./next-task.mjs";
 import { gitEnv, probeDelivery } from "./preflight.mjs";
-import { deleteSaved, deliveredHead, deliveryRemote, handBackReason, resumableWork, saveUnfinished, setupResume, wipBranchOf } from "./resume.mjs";
+import { deleteSaved, deliveredHead, deliveryRemote, handBackReason, resumableWork, saveUnfinished, setupResume, taskTip, wipBranchOf } from "./resume.mjs";
 import { codeRepo } from "./repos.mjs";
 
 const env = name => {
@@ -219,6 +219,9 @@ async function run() {
         console.log(`worker: #${n} continues run ${found.record.run} of this round (${wipBranchOf(n)})`);
       }
     } catch (error) {
+      // Nothing is posted: a setup that keeps failing costs no model runs,
+      // and with no passing handoff the coordinator's stale release (#166)
+      // reopens the task after CLAIM_TTL_HOURS, which is the escalation.
       console.log(`worker: #${n} not run: the saved work on ${wipBranchOf(n)} could not be set up (${oneLine(error)}); the next run tries again`);
       await rm(cwd, { recursive: true, force: true });
       return;
@@ -228,6 +231,10 @@ async function run() {
   // marker of a run the SDK threw out — which used to crash this process
   // with the clone's work still in it.
   let ended = null;
+  // Where task-n stood before the model run: a delivery is a run that moved
+  // it (deliveredHead), which a revision round's clone, starting at the pull
+  // request's head, cannot fake by stopping without a push.
+  const tipBefore = code ? await taskTip({ remote: deliveryRemote(access, repo, login), n }) : undefined;
   try {
     for await (const message of query({
       prompt: instructions(task, resume),
@@ -268,27 +275,25 @@ async function run() {
     console.log(`worker: the model run threw: ${oneLine(error)}`);
   } finally {
     // The clone goes either way; what a code run leaves behind depends on
-    // how it ended. Delivered: the saved branch has nothing left to hold —
-    // and only a result that is a success and no error means delivered,
-    // since the SDK reports a failed model call as a success carrying
-    // is_error, and that run delivered nothing. Anything else — out of
-    // turns, out of budget, thrown, or such a failed call — the worker's
-    // own code saves to wip/task-n before the clone is removed, and hands
-    // the task back once its attempts are spent (#169) — unless the run
-    // could not start from the round's saved branch (its setup failed
-    // after the lookup found it): then nothing is saved, because pushing
-    // would overwrite the ledger the next run is to resume. A save that
-    // cannot run at all (the model never cloned, git failed) leaves the
-    // run as it was: the next one starts from the base branch.
+    // how it ended. Delivered — a clean success that moved task-n on the
+    // remote to this clone's HEAD — leaves the saved branch nothing to hold,
+    // and it is deleted. Anything else — out of turns, out of budget, thrown,
+    // a failed model call (the SDK reports one as a success carrying
+    // is_error), or a clean success that pushed nothing — the worker's own
+    // code saves to wip/task-n before the clone is removed, and hands the
+    // task back once its attempts are spent (#169). A save that finds the
+    // round's saved work on the remote without having started from it saves
+    // nothing, rather than overwrite it. A save that cannot run at all (the
+    // model never cloned, git failed) leaves the run as it was.
     try {
       const clean = code && ended?.subtype === "success" && !ended.isError;
-      const delivered = clean && await deliveredHead({ remote: deliveryRemote(access, repo, login), n, cwd });
+      const delivered = clean && await deliveredHead({ remote: deliveryRemote(access, repo, login), n, cwd, before: tipBefore });
       if (delivered) {
         await deleteSaved({ remote: deliveryRemote(access, repo, login), n, cwd });
       } else if (code && ended) {
         // A clean success whose work never reached task-n on the remote — the
         // model stopped short of pushing — is unfinished like any other.
-        if (clean) console.log(`worker: #${n} ended in success, but task-${n} on the remote does not hold this run's work: saving it as unfinished`);
+        if (clean) console.log(`worker: #${n} ended in success, but this run did not move task-${n} on the remote to its work: saving it as unfinished`);
         const saved = await saveUnfinished({
           remote: deliveryRemote(access, repo, login), n, round,
           resumed: Boolean(resume), cwd, repo,
