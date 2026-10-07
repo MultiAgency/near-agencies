@@ -28,12 +28,12 @@ const near = (f, path, from, to) => f.path === path && Number(f.line) >= from &&
 export function checks(expect = {}, run) {
   const out = [];
   const add = (name, contract, ok, detail = "") => out.push({ name, contract, ok: Boolean(ok), detail });
-  // The review's own outputs (a file it writes, the summary it posts) must
+  // The review's own outputs (the verdict and summary files it writes) must
   // never be refused: that is how #128's verdict went missing. Refused
   // exploration (reading the head's files, which the workflow withholds) is
   // reported, not failed.
   const denials = run.result?.permission_denials ?? [];
-  const own = d => ["Write", "Edit"].includes(d.tool_name) || /^\s*gh pr comment\b/.test(d.tool_input?.command ?? "");
+  const own = d => ["Write", "Edit"].includes(d.tool_name);
   const describe = list => list.map(d => `${d.tool_name} ${JSON.stringify(d.tool_input).slice(0, 80)}`).join("; ");
   add("the review ran and none of its own writes was refused", true, run.result && !denials.some(own), describe(denials.filter(own)));
   if (denials.some(d => !own(d))) out.push({ name: `refused, not counted: ${describe(denials.filter(d => !own(d)))}`, note: true, ok: true });

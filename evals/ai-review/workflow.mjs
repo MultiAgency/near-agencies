@@ -32,13 +32,17 @@ function stepScript(lines, name) {
 }
 
 /** The prompt, the claude_args, and the scripts of the steps around the
- * review: "Earlier rounds" (its memory) and "Verdict" (what the gate reads). */
+ * review: "The pull request" (the change it reads), "Earlier rounds" (its
+ * memory), "Post the summary" (the comment the next round reads) and
+ * "Verdict" (what the gate reads). */
 export function reviewConfig(text) {
   const lines = text.split("\n");
   return {
     prompt: literalBlock(lines, "prompt"),
     claudeArgs: literalBlock(lines, "claude_args"),
+    pull: stepScript(lines, "The pull request"),
     earlierRounds: stepScript(lines, "Earlier rounds"),
+    post: stepScript(lines, "Post the summary"),
     verdict: stepScript(lines, "Verdict"),
   };
 }

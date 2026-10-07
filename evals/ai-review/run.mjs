@@ -60,6 +60,7 @@ for (const name of cases) {
       ...process.env, PATH: `${bin}:${process.env.PATH}`, EVAL_CASE: dir, EVAL_OUT: out,
       REPO, PR: String(spec.pr), HEAD_SHA: spec.head, GH_TOKEN: "eval",
     };
+    execFileSync("bash", ["-e", "-c", config.pull], { cwd: ws, env, stdio: "ignore" });
     execFileSync("bash", ["-e", "-c", config.earlierRounds], { cwd: ws, env, stdio: "ignore" });
 
     const prompt = interpolate(config.prompt, {
@@ -81,6 +82,8 @@ for (const name of cases) {
       }
     };
     const read = (file, parse) => attempt(() => parse(readFileSync(file, "utf8")));
+    // The workflow's own posting step, through the gh stub that records it.
+    spawnSync("bash", ["-c", config.post], { cwd: ws, env, stdio: "ignore" });
     // The workflow's Verdict step: the event's SHA and a count that parses,
     // or no file at all.
     spawnSync("bash", ["-c", config.verdict], { cwd: ws, env, stdio: "ignore" });
