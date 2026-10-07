@@ -81,13 +81,26 @@ jobs:
       # review, never a skipped one. A same-repo pull request's own workflow
       # can also post as github-actions[bot], so the list steers the review
       # but must not be what lets the gate approve (#117).
-      - name: Earlier rounds
-        if: env.HAS_KEY == 'true' && github.event.pull_request
+      # A `/review` comment carries no pull_request, so its head comes from
+      # the API: without it the ledger says "sha": "" and the next round
+      # starts over (#116), and the coordinator never opens a round (#159).
+      - name: Pull request head
+        id: pr
+        if: env.HAS_KEY == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+          EVENT_SHA: ${{ github.event.pull_request.head.sha }}
+        run: echo "sha=${EVENT_SHA:-$(gh api "repos/$REPO/pulls/$PR" --jq .head.sha)}" >> "$GITHUB_OUTPUT"
+
+      - name: Earlier rounds
+        if: env.HAS_KEY == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+          HEAD_SHA: ${{ steps.pr.outputs.sha }}
         run: |
           mkdir -p review
           gh api --paginate --slurp "repos/$REPO/issues/$PR/comments" > review/comments.json
@@ -124,7 +137,7 @@ jobs:
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
-            HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+            HEAD_SHA: ${{ steps.pr.outputs.sha }}
 
             Review this pull request. Read REVIEW.md and AGENTS.md in the working
             directory first: they are the base branch's versions and define the
