@@ -78,6 +78,19 @@ case ",$FAIL_RESUME_CHECKOUT," in *,1,*)
     case "$a" in refs/remotes/*) exit 42 ;; esac
   done ;;
 esac
+case ",$FAIL_WIP_PUSH," in *,1,*)
+  if [ "\${args[0]}" = push ]; then
+    for a in "\${args[@]}"; do
+      case "$a" in *refs/heads/wip/*)
+        printf '=== git %s\\n' "\${args[*]}" >> "$SHIM_LOG"
+        echo "To https://github.com/agency-builder/near-agencies.git" >&2
+        echo " ! [remote rejected] HEAD -> wip/task-58 (refusing to allow a Personal Access Token to create or update workflow \\\`.github/workflows/ci.yml\\\` without \\\`workflow\\\` scope)" >&2
+        echo "error: failed to push some refs to 'https://github.com/agency-builder/near-agencies.git'" >&2
+        exit 1 ;;
+      esac
+    done
+  fi ;;
+esac
 printf '=== git %s\\n' "\${args[*]}" >> "$SHIM_LOG"
 exec "$GIT_REAL" "\${args[@]}"
 `;
@@ -637,6 +650,26 @@ describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
       assert.match(tip, /failed \(success\) after 4 turns at \$0\.31/, "so does the note the next run reads");
       assert.match(tip, /"subtype":"success","isError":true/);
       assert.deepEqual(h.board.state.posts, []);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  test("a save the remote refuses hands the task back once, quoting git, and later runs leave the seat alone", async () => {
+    const h = await harness();
+    try {
+      const { stdout } = await h.spawn(SCENARIO_STOPS, { FAIL_WIP_PUSH: "1" });
+      assert.match(stdout, /worker: #58 handed back: its work could not be saved \(error: failed to push some refs/);
+      assert.equal(h.board.state.posts.length, 1, "one hand-back, on the first refused save");
+      const [handBack] = h.board.state.posts;
+      assert.match(handBack.body, new RegExp(`^${HAND_BACK_FIRST_LINE}`), "the hand-back's first line, so selection skips the seat");
+      assert.match(handBack.body, /pushing its work to `wip\/task-58`/);
+      assert.match(handBack.body, /> .*refusing to allow a Personal Access Token to create or update workflow/, "git's own words are quoted");
+      assert.match(handBack.body, /Sync fork/, "and it says what fixes a stale fork");
+      assert.equal(handBack.body.includes("```"), false, "no fenced block: a hand-back must never read as a handoff");
+      const { stdout: later } = await h.spawn(SCENARIO_STOPS, { FAIL_WIP_PUSH: "1" });
+      assert.equal(/worker: (failed \()?error_max_turns/.test(later), false, "the next run starts no model run on the seat");
+      assert.equal(h.board.state.posts.length, 1, "and posts nothing more");
     } finally {
       await h.cleanup();
     }

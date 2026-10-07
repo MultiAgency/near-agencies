@@ -112,8 +112,10 @@ prompt carries where the last run stopped — its commits after the base and
 the save commit's note. A save from an earlier round is ignored: a new
 round starts over (a revision round's save builds on the open pull
 request's head, and only a finished delivery pushes there). The attempts
-are bounded: progress means the tree a run saves differs from the previous
-run's, and after two runs in a row with none, or five unfinished runs on
+are bounded: a save whose push the remote refuses (in fork mode, a fork whose
+base branch is behind on `.github/workflows/`) hands the task back at once,
+quoting git, since every later save would be refused too. Otherwise,
+progress means the tree a run saves differs from the previous run's, and after two runs in a row with none, or five unfinished runs on
 one round, the run hands the task back instead of retrying — one comment on
 the task, posted once per round, that says the work is unfinished, names
 `wip/task-N` and quotes the last note — and no later run picks that seat up

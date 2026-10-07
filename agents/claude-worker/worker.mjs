@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 
-import { accessFor, allowedTools, codeAccess, deliversCodeSeat, handBackComment, ship, termsOf, SDK_SETTINGS } from "./code-mode.mjs";
+import { accessFor, allowedTools, codeAccess, deliversCodeSeat, handBackComment, saveFailedComment, ship, termsOf, SDK_SETTINGS } from "./code-mode.mjs";
 import { nextTask as selectTask } from "./next-task.mjs";
 import { gitEnv, probeDelivery } from "./preflight.mjs";
 import { deleteSaved, deliveredHead, deliveryRemote, handBackReason, resumableWork, saveUnfinished, setupResume, taskTip, wipBranchOf } from "./resume.mjs";
@@ -174,6 +174,9 @@ function instructions(task, resume = null) {
 // The one line of an error worth a worker log: git and the SDK both write
 // multi-line errors, and the second line onward is rarely more than detail.
 const oneLine = error => String(error?.stack ?? error).split("\n")[0].slice(0, 200);
+// What git itself said, for a hand-back: the last lines of its stderr, which
+// the first line of the error (the command) leaves out.
+const gitError = error => String(error?.stderr || error?.message || error).trim().split("\n").slice(-4).join("\n").slice(0, 600);
 
 async function run() {
   const task = await nextTask();
@@ -287,8 +290,10 @@ async function run() {
     // code saves to wip/task-n before the clone is removed, and hands the
     // task back once its attempts are spent (#169). A save that finds the
     // round's saved work on the remote without having started from it saves
-    // nothing, rather than overwrite it. A save that cannot run at all (the
-    // model never cloned, git failed) leaves the run as it was.
+    // nothing, rather than overwrite it. A save whose push the remote refuses
+    // hands the task back at once, since every later save would be refused
+    // too. A save that cannot run at all (the model never cloned) leaves the
+    // run as it was.
     try {
       const clean = code && ended?.subtype === "success" && !ended.isError;
       const delivered = clean && await deliveredHead({ remote: deliveryRemote(access, repo, login), n, cwd, before: tipBefore });
@@ -298,11 +303,30 @@ async function run() {
         // A clean success whose work never reached task-n on the remote — the
         // model stopped short of pushing — is unfinished like any other.
         if (clean) console.log(`worker: #${n} ended in success, but this run did not move task-${n} on the remote to its work: saving it as unfinished`);
-        const saved = await saveUnfinished({
-          remote: deliveryRemote(access, repo, login), n, round,
-          resumed: Boolean(resume), cwd, repo,
-          subtype: clean ? "success, undelivered" : ended.subtype, isError: ended.isError, turns: ended.turns, cost: ended.cost,
-        });
+        let saved;
+        try {
+          saved = await saveUnfinished({
+            remote: deliveryRemote(access, repo, login), n, round,
+            resumed: Boolean(resume), cwd, repo,
+            subtype: clean ? "success, undelivered" : ended.subtype, isError: ended.isError, turns: ended.turns, cost: ended.cost,
+          });
+        } catch (error) {
+          // A push the remote refuses (a token without access, or a fork
+          // whose base branch is behind on workflow files) would refuse every
+          // later save too: each run's work lost, the attempts never counted,
+          // the task paid for again every cron run. So the first refused push
+          // hands the task back, quoting git. Any other failure (the model
+          // never cloned, say) still leaves the run as it was.
+          if (!/^Command failed: git push\b/.test(String(error?.message))) throw error;
+          await comment(n, saveFailedComment({
+            n,
+            branch: wipBranchOf(n),
+            remote: access === "fork" ? `${login}/${repo.name.split("/")[1]}` : repo.name,
+            error: gitError(error),
+          }));
+          console.log(`worker: #${n} handed back: its work could not be saved (${gitError(error).split("\n").at(-1)})`);
+          return;
+        }
         if (saved.skipped) {
           console.log(`worker: #${n} saved nothing: ${wipBranchOf(n)} still holds this round's saved work, this run did not start from it, and pushing would overwrite it — it waits there for the next run to resume`);
         } else {
