@@ -224,7 +224,7 @@ export async function setupResume({ remote, forkFetch = null, baseBranch, n, res
  * unfinished runs, its saved tree, and the tree the previous save holds.
  * Nothing here touches a pull request branch: the only ref written is
  * `wip/task-<n>`. */
-export async function saveUnfinished({ remote, n, round, resumed, cwd, repo, run = promisify(execFile), subtype, isError, turns, cost }) {
+export async function saveUnfinished({ remote, n, round, resumed, resumedFrom, cwd, repo, run = promisify(execFile), subtype, isError, turns, cost }) {
   // A run that did not start from the round's saved branch must not overwrite
   // it: the branch is the ledger the next run resumes and counts from. This
   // run's own lookup found it and then lost it — its setup failed and
@@ -255,7 +255,16 @@ export async function saveUnfinished({ remote, n, round, resumed, cwd, repo, run
   await run("git", ["commit", "--allow-empty", "--message", message], { cwd, timeout: GIT_TIMEOUT_MS });
   const { stdout } = await run("git", ["rev-parse", "HEAD^{tree}"], { cwd, timeout: GIT_TIMEOUT_MS });
   const tree = stdout.trim();
-  const args = ["push", ...(resumed ? [] : ["--force"]), "origin", `HEAD:refs/heads/${wipBranchOf(n)}`];
+  // A run that started from the saved branch may have rewritten its own
+  // history (a rebase onto a newer base, an amended commit), so a plain push
+  // can be refused as not a fast-forward: that is this run's own work, and it
+  // replaces the save it started from, but only while the remote branch still
+  // stands where this run found it (the lease), so nothing anyone else saved
+  // is overwritten.
+  const mode = !resumed ? ["--force"]
+    : resumedFrom ? [`--force-with-lease=refs/heads/${wipBranchOf(n)}:${resumedFrom}`]
+    : [];
+  const args = ["push", ...mode, "origin", `HEAD:refs/heads/${wipBranchOf(n)}`];
   await run("git", args, { cwd, timeout: GIT_TIMEOUT_MS });
   return { run: runNumber, tree, previousTree: before[0]?.tree ?? null, message };
 }

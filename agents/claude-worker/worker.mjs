@@ -222,6 +222,7 @@ async function run() {
       if (found) {
         resume = {
           round,
+          tip: found.tip,
           ...await setupResume({
             remote: deliveryRemote(access, repo, login), forkFetch: access === "fork"
               ? [`https://github.com/${repo.name}.git`, repo.base]
@@ -317,7 +318,7 @@ async function run() {
         try {
           saved = await saveUnfinished({
             remote: deliveryRemote(access, repo, login), n, round,
-            resumed: Boolean(resume), cwd, repo,
+            resumed: Boolean(resume), resumedFrom: resume?.tip, cwd, repo,
             subtype: clean ? "success, undelivered" : ended.subtype, isError: ended.isError, turns: ended.turns, cost: ended.cost,
           });
         } catch (error) {
