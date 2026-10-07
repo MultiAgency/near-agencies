@@ -439,4 +439,17 @@ describe("deleting the saved branch after a delivery", () => {
       await w.cleanup();
     }
   });
+
+  test("a delivery that never saved deletes nothing and pushes nothing", async () => {
+    const w = await workspace();
+    try {
+      const run = git();
+      await deleteSaved({ remote: w.remote, n: 14, cwd: w.work, run });
+      assert.equal(run.calls.some(c => c.args[0] === "push"), false,
+        "no branch, no delete: a first delivery is not an error to log");
+      assert.deepEqual(await w.branchNames(), ["refs/heads/staging"]);
+    } finally {
+      await w.cleanup();
+    }
+  });
 });

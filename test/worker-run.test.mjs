@@ -1,6 +1,8 @@
 // Whole cron runs of worker.mjs, spawned for real (#169): the Claude SDK is
 // a stub the test writes into a copy of the worker folder, the board is a
-// local HTTP server speaking just the routes the worker reads and writes,
+// local HTTP server speaking just the routes the worker reads and writes —
+// its seat is a real issue captured from GitHub (test/fixtures/github/,
+// task-issue-58.json) so selection reads GitHub's own response shape —
 // and git is the real one — reached through PATH shims that rewrite the
 // github.com URLs the delivery uses onto bare repositories on this disk and
 // answer the registry's checks without running them. So a run that saves,
@@ -14,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, test } from "node:test";
+import { readFileSync } from "node:fs";
 
 import { HAND_BACK_FIRST_LINE } from "../agents/claude-worker/code-mode.mjs";
 
@@ -21,6 +24,11 @@ const execFile = promisify(execFileCb);
 
 const workerDir = join(new URL("..", import.meta.url).pathname, "agents", "claude-worker");
 const realGit = (await execFile("which", ["git"])).stdout.trim();
+// The seat every run works on: an issue captured from the board itself
+// (test/fixtures/github/README.md) — claimed, in progress, skill:code, its
+// terms naming near-agencies — so the routes task selection reads return
+// GitHub's own shapes, not hand-written ones.
+const capturedSeat = JSON.parse(readFileSync(new URL("./fixtures/github/task-issue-58.json", import.meta.url), "utf8"));
 
 // The stub SDK: query() hands each run to a scenario module of the test's
 // choosing (STUB_SCENARIO), which plays the model — cloning, editing files,
@@ -60,7 +68,7 @@ for a in "$@"; do
   case "$a" in
     https://github.com/MultiAgency/near-agencies|https://github.com/MultiAgency/near-agencies.git)
       a="$FAKE_UPSTREAM" ;;
-    https://github.com/near-builder/near-agencies|https://github.com/near-builder/near-agencies.git)
+    https://github.com/agency-builder/near-agencies|https://github.com/agency-builder/near-agencies.git)
       a="$FAKE_FORK" ;;
   esac
   args+=("$a")
@@ -105,7 +113,7 @@ async function boardStub() {
           const id = 1000 + state.posts.length;
           const comment = {
             id,
-            user: { login: "near-builder" },
+            user: { login: "agency-builder" },
             body: JSON.parse(body).body,
             html_url: `https://github.com/MultiAgency/kanban-sandbox/issues/${number}#issuecomment-${id}`,
             created_at: new Date().toISOString(),
@@ -158,7 +166,7 @@ async function harness() {
     await execFile("git", ["init", "--bare", "--initial-branch=staging", bare], { env: { ...process.env, ...cleanGit } });
   }
   const seed = join(dir, "seed");
-  const seedEnv = { ...process.env, ...cleanGit, GIT_AUTHOR_NAME: "near-builder", GIT_AUTHOR_EMAIL: "near-builder@users.noreply.github.com", GIT_COMMITTER_NAME: "near-builder", GIT_COMMITTER_EMAIL: "near-builder@users.noreply.github.com" };
+  const seedEnv = { ...process.env, ...cleanGit, GIT_AUTHOR_NAME: "agency-builder", GIT_AUTHOR_EMAIL: "agency-builder@users.noreply.github.com", GIT_COMMITTER_NAME: "agency-builder", GIT_COMMITTER_EMAIL: "agency-builder@users.noreply.github.com" };
   await execFile("git", ["clone", upstream, seed], { env: seedEnv });
   await writeFile(join(seed, "README.md"), "# scratch\n");
   await execFile("git", ["add", "-A"], { cwd: seed, env: seedEnv });
@@ -166,28 +174,21 @@ async function harness() {
   await execFile("git", ["push", "origin", "staging"], { cwd: seed, env: seedEnv });
 
   const board = await boardStub();
-  board.state.seats.push({
-    number: 14,
-    created_at: "2026-10-01T00:00:00Z",
-    title: "Task #14: do the thing",
-    body: 'Part of job #5.\n\n```terms\n{"engagement": 5}\n```',
-    labels: ["in-progress", "skill:code", "agent-eligible"].map(name => ({ name })),
-    assignees: [{ login: "near-builder" }],
-  });
-  board.state.threads[14] = [];
+  board.state.seats.push(capturedSeat);
+  board.state.threads[capturedSeat.number] = [];
 
   const identity = {
     ...cleanGit,
-    GIT_AUTHOR_NAME: "near-builder",
-    GIT_AUTHOR_EMAIL: "near-builder@users.noreply.github.com",
-    GIT_COMMITTER_NAME: "near-builder",
-    GIT_COMMITTER_EMAIL: "near-builder@users.noreply.github.com",
+    GIT_AUTHOR_NAME: "agency-builder",
+    GIT_AUTHOR_EMAIL: "agency-builder@users.noreply.github.com",
+    GIT_COMMITTER_NAME: "agency-builder",
+    GIT_COMMITTER_EMAIL: "agency-builder@users.noreply.github.com",
   };
   const env = {
     ...process.env,
     ...identity,
-    AGENT_LOGIN: "near-builder",
-    NEAR_ACCOUNT: "near-builder.testnet",
+    AGENT_LOGIN: "agency-builder",
+    NEAR_ACCOUNT: "agency-builder.testnet",
     AGENT_SKILLS: "code",
     CODE_ACCESS: "branch",
     GH_TOKEN: "stub-token",
@@ -253,7 +254,7 @@ const run = promisify(execFile);
 export async function* query({ options, prompt }) {
   await writeFile(join(process.env.SCENARIO_OUT, "prompt.txt"), prompt);
   await run("git", ["clone", "--branch", "staging", process.env.FAKE_UPSTREAM, "."], { cwd: options.cwd, env: process.env });
-  await run("git", ["checkout", "-b", "task-14"], { cwd: options.cwd, env: process.env });
+  await run("git", ["checkout", "-b", "task-58"], { cwd: options.cwd, env: process.env });
   await writeFile(join(options.cwd, "WORK.md"), "step one\\n");
   await run("git", ["add", "-A"], { cwd: options.cwd, env: process.env });
   await run("git", ["commit", "-m", "step: wrote the change, left the tests unrun"], { cwd: options.cwd, env: process.env });
@@ -302,7 +303,7 @@ const run = promisify(execFile);
 export async function* query({ options, prompt }) {
   await writeFile(join(process.env.SCENARIO_OUT, "prompt.txt"), prompt);
   await run("git", ["clone", "--branch", "staging", process.env.FAKE_UPSTREAM, "."], { cwd: options.cwd, env: process.env });
-  await run("git", ["checkout", "-b", "task-14"], { cwd: options.cwd, env: process.env });
+  await run("git", ["checkout", "-b", "task-58"], { cwd: options.cwd, env: process.env });
   await writeFile(join(options.cwd, "REWORK.md"), "the new round's work\\n");
   yield { type: "result", subtype: "error_max_turns", num_turns: 12, total_cost_usd: 0.5, result: "" };
 }
@@ -321,7 +322,7 @@ export async function* query({ options, prompt }) {
   await writeFile(join(options.cwd, "FINAL.md"), "finished\\n");
   await run("git", ["add", "-A"], { cwd: options.cwd, env: process.env });
   await run("git", ["commit", "-m", "finish the change"], { cwd: options.cwd, env: process.env });
-  await run("git", ["push", "-u", "origin", "task-14"], { cwd: options.cwd, env: process.env });
+  await run("git", ["push", "-u", "origin", "task-58"], { cwd: options.cwd, env: process.env });
   yield { type: "result", subtype: "success", num_turns: 44, total_cost_usd: 2.8, result: "delivered" };
 }
 `;
@@ -336,7 +337,7 @@ const run = promisify(execFile);
 export async function* query({ options, prompt }) {
   await writeFile(join(process.env.SCENARIO_OUT, "prompt.txt"), prompt);
   await run("git", ["clone", "--branch", "staging", process.env.FAKE_UPSTREAM, "."], { cwd: options.cwd, env: process.env });
-  await run("git", ["checkout", "-b", "task-14"], { cwd: options.cwd, env: process.env });
+  await run("git", ["checkout", "-b", "task-58"], { cwd: options.cwd, env: process.env });
   await writeFile(join(options.cwd, "WORK.md"), "thrown-away?\\n");
   yield { type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command: "npm ci" } }] } };
   throw new Error("Connection error");
@@ -346,7 +347,7 @@ export async function* query({ options, prompt }) {
 // The shim logs every call; the saves and the cleanup are the pushes that
 // name the branch, which is how the tests tell them from the preflight's
 // dry-run probe.
-const wipPush = l => l.startsWith("git push") && l.includes("wip/task-14");
+const wipPush = l => l.startsWith("git push") && l.includes("wip/task-58");
 
 describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
   test("a run that stops at the turn limit leaves a work-in-progress push, the run recorded, and no pull request", async () => {
@@ -354,15 +355,15 @@ describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
     try {
       const { prompt } = await h.spawn(SCENARIO_STOPS, { CHECKS_FAIL: "npm ci" });
       assert.match(prompt, /git clone --branch staging/, "a fresh run is told to set the clone up itself");
-      assert.deepEqual(await h.refs(h.upstream), ["refs/heads/staging", "refs/heads/wip/task-14"],
+      assert.deepEqual(await h.refs(h.upstream), ["refs/heads/staging", "refs/heads/wip/task-58"],
         "only the wip branch exists besides staging: no pull request head");
-      const tip = await h.tipMessage(h.upstream, "wip/task-14");
-      assert.match(tip, /^wip: task #14 run 1 saved unfinished/);
+      const tip = await h.tipMessage(h.upstream, "wip/task-58");
+      assert.match(tip, /^wip: task #58 run 1 saved unfinished/);
       assert.match(tip, /error_max_turns after 61 turns at \$2\.41/);
       assert.match(tip, /Checks: npm ci failed; 2 checks were not run\./,
         "the note records which registry check fails, and what the stop left untried");
       assert.deepEqual(h.board.state.posts, [], "a run with attempts left posts nothing");
-      assert.match((await h.gitCalls()).at(-1), /^git push --force origin HEAD:refs\/heads\/wip\/task-14$/);
+      assert.match((await h.gitCalls()).at(-1), /^git push --force origin HEAD:refs\/heads\/wip\/task-58$/);
     } finally {
       await h.cleanup();
     }
@@ -378,14 +379,14 @@ describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
         "the resumed run is not told to set the clone up");
       assert.equal(prompt.includes("git clone"), false, "and is not given a clone command at all");
       assert.match(prompt, /A previous run of this task stopped unfinished/);
-      assert.match(prompt, /wip: task #14 run 1 saved unfinished/, "the note the last run left is quoted");
+      assert.match(prompt, /wip: task #58 run 1 saved unfinished/, "the note the last run left is quoted");
       assert.match(prompt, /multiagency-run: /, "with the run's record in it");
       const pushes = (await h.gitCalls()).filter(wipPush);
       assert.equal(pushes.length, pushesBefore + 1, "the resumed save pushed once more");
-      assert.match(pushes.at(-1), /^git push origin HEAD:refs\/heads\/wip\/task-14$/,
+      assert.match(pushes.at(-1), /^git push origin HEAD:refs\/heads\/wip\/task-58$/,
         "no force: the remote tip is this chain's own ancestor");
-      const tip = await h.tipMessage(h.upstream, "wip/task-14");
-      assert.match(tip, /^wip: task #14 run 2 saved unfinished/);
+      const tip = await h.tipMessage(h.upstream, "wip/task-58");
+      assert.match(tip, /^wip: task #58 run 2 saved unfinished/);
       assert.deepEqual(h.board.state.posts, [], "progress keeps the attempts unspent");
     } finally {
       await h.cleanup();
@@ -403,8 +404,8 @@ describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
       const [handBack] = h.board.state.posts.slice(-1);
       assert.match(handBack.body, new RegExp(`^${HAND_BACK_FIRST_LINE}`));
       assert.match(handBack.body, /no new work/);
-      assert.match(handBack.body, /wip\/task-14/, "names the branch the work waits on");
-      assert.match(handBack.body, /wip: task #14 run 3 saved unfinished/, "quotes the last note");
+      assert.match(handBack.body, /wip\/task-58/, "names the branch the work waits on");
+      assert.match(handBack.body, /wip: task #58 run 3 saved unfinished/, "quotes the last note");
       assert.equal(handBack.body.includes("```handoff"), false,
         "a hand-back must never read as a handoff to the coordinator");
       const posts = h.board.state.posts.length;
@@ -414,7 +415,7 @@ describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
       assert.equal(h.board.state.posts.length, posts, "the hand-back is not posted twice");
       assert.equal((await h.gitCalls()).filter(wipPush).length, pushes,
         "and no run touched the branch again");
-      assert.match(await h.tipMessage(h.upstream, "wip/task-14"), /^wip: task #14 run 3 saved unfinished/,
+      assert.match(await h.tipMessage(h.upstream, "wip/task-58"), /^wip: task #58 run 3 saved unfinished/,
         "no further run saved over it");
     } finally {
       await h.cleanup();
@@ -425,11 +426,11 @@ describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
     const h = await harness();
     try {
       await h.spawn(SCENARIO_STOPS);
-      h.board.state.threads[14].push({
+      h.board.state.threads[58].push({
         id: 9001,
         user: { login: "multi-agency" },
         body: "Once more:\n```changes\naddress the review\n```",
-        html_url: "https://github.com/MultiAgency/kanban-sandbox/issues/14#issuecomment-9001",
+        html_url: "https://github.com/MultiAgency/kanban-sandbox/issues/58#issuecomment-9001",
         created_at: new Date().toISOString(),
       });
       const { prompt } = await h.spawn(SCENARIO_NEW_ROUND);
@@ -438,9 +439,9 @@ describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
       assert.equal(prompt.includes("already cloned in this directory"), false,
         "the old round's save is not resumed");
       assert.equal(prompt.includes("multiagency-run: "), false, "and its note does not reach this prompt");
-      assert.match((await h.gitCalls()).filter(wipPush).at(-1), /^git push --force origin HEAD:refs\/heads\/wip\/task-14$/);
-      const tip = await h.tipMessage(h.upstream, "wip/task-14");
-      assert.match(tip, /^wip: task #14 run 1 saved unfinished \(revision round 9001\)/,
+      assert.match((await h.gitCalls()).filter(wipPush).at(-1), /^git push --force origin HEAD:refs\/heads\/wip\/task-58$/);
+      const tip = await h.tipMessage(h.upstream, "wip/task-58");
+      assert.match(tip, /^wip: task #58 run 1 saved unfinished \(revision round 9001\)/,
         "the ledger starts over: this round's first unfinished run");
     } finally {
       await h.cleanup();
@@ -453,10 +454,10 @@ describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
       await h.spawn(SCENARIO_STOPS);
       const { prompt } = await h.spawn(SCENARIO_DELIVERS);
       assert.match(prompt, /already cloned in this directory/, "the delivery resumed the saved work");
-      assert.deepEqual(await h.refs(h.upstream), ["refs/heads/staging", "refs/heads/task-14"],
+      assert.deepEqual(await h.refs(h.upstream), ["refs/heads/staging", "refs/heads/task-58"],
         "the branch is deleted; only the delivered pull request head is left");
       const calls = await h.gitCalls();
-      assert.match(calls.filter(wipPush).at(-1), /^git push origin --delete wip\/task-14$/);
+      assert.match(calls.filter(wipPush).at(-1), /^git push origin --delete wip\/task-58$/);
       assert.deepEqual(h.board.state.posts, []);
     } finally {
       await h.cleanup();
@@ -468,9 +469,9 @@ describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
     try {
       const { prompt } = await h.spawn(SCENARIO_THROWS, { CHECKS_FAIL: "npm ci" });
       assert.notEqual(prompt, null, "the worker caught the throw and exited cleanly");
-      assert.deepEqual(await h.refs(h.upstream), ["refs/heads/staging", "refs/heads/wip/task-14"]);
-      const tip = await h.tipMessage(h.upstream, "wip/task-14");
-      assert.match(tip, /^wip: task #14 run 1 saved unfinished/);
+      assert.deepEqual(await h.refs(h.upstream), ["refs/heads/staging", "refs/heads/wip/task-58"]);
+      const tip = await h.tipMessage(h.upstream, "wip/task-58");
+      assert.match(tip, /^wip: task #58 run 1 saved unfinished/);
       assert.match(tip, /"subtype":"thrown"/);
       assert.match(tip, /Checks: npm ci failed/);
     } finally {

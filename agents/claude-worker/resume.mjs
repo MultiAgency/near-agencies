@@ -233,7 +233,13 @@ export async function saveUnfinished({ remote, n, round, resumed, cwd, repo, run
 }
 
 /** Delete the saved branch after a delivery: nothing is waiting to resume,
- * and the next task on this number starts clean. */
+ * and the next task on this number starts clean. A delivery that never
+ * saved — most of them — finds no branch on the remote and pushes nothing:
+ * the delete is for the run that took saved work up and finished it. A
+ * remote that cannot be read at all still throws: the branch, if any, is
+ * left for the next delivery to find. */
 export async function deleteSaved({ remote, n, cwd, run = promisify(execFile) }) {
+  const { stdout } = await run("git", ["ls-remote", remote, `refs/heads/${wipBranchOf(n)}`], { cwd, timeout: GIT_TIMEOUT_MS });
+  if (!stdout.trim()) return;
   await run("git", ["push", "origin", "--delete", wipBranchOf(n)], { cwd, timeout: GIT_TIMEOUT_MS });
 }
