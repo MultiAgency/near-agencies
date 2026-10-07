@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, describe, test } from "node:test";
 
 import { USDC } from "../lib/near.mjs";
-import { AUDIT_PAGE_CAP, closeIfPaid, duplicatePayoutProblem, filedProposal, payoutAuditCapped, pendingPayouts, payoutProblem, proposalDescription, proposePayouts } from "../lib/payouts.mjs";
+import { AUDIT_PAGE_CAP, closeIfPaid, duplicatePayoutProblem, filedProposal, payoutAuditCapped, pendingPayouts, payoutProblem, proposalDescription, proposePayouts, recordApprovals, resetPayoutAudit } from "../lib/payouts.mjs";
 import { digest, fence } from "../lib/github.mjs";
 
 process.env.GITHUB_TOKEN ??= "test-token";
@@ -294,8 +294,9 @@ describe("reading a payout proposal", async () => {
 // one job: GitHub through api.github.com, the chain through the RPC host.
 describe("filing proposals and closing a job", async () => {
   const { coordinatorHealth, settlePayouts } = await import("../lib/coordinator.mjs");
+  const { loadEngagement } = await import("../lib/engagement-state.mjs");
   const realFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = realFetch; });
+  afterEach(() => { globalThis.fetch = realFetch; resetPayoutAudit(); });
 
   const rpcValue = value => new Response(JSON.stringify({
     jsonrpc: "2.0",
@@ -308,10 +309,12 @@ describe("filing proposals and closing a job", async () => {
   // commentAt reads a deliverable), pull requests from `pulls`, open `jobs`
   // for the sweep's listing, and the treasury's reads from `proposals` —
   // windowed as the chain reads them: `get_proposals` carries `from_index`
-  // and `limit` in its contract args, and returns ids from `from_index` up —
-  // one proposal from `proposal`, and the indexed vote transactions in `txs`.
-  // `lastId` is the treasury's proposal counter, which may sit far above the
-  // proposals a job's audit must still see.
+  // and `limit` in its contract args, and returns ids from `from_index` up;
+  // `get_proposal` carries the single `id` it reads fresh, found in
+  // `proposals` by that id, or `proposal` where a test names none there. The
+  // indexed vote transactions come from `txs`. `lastId` is the treasury's
+  // proposal counter, which may sit far above the proposals a job's audit
+  // must still see.
   const serve = ({ issues = {}, threads = {}, proposals = [], jobs = [], proposal = null, txs = [], pulls = {}, lastId = null } = {}) => {
     const reads = [];
     const writes = [];
@@ -328,7 +331,7 @@ describe("filing proposals and closing a job", async () => {
           const from = args.from_index ?? 0;
           return rpcValue(proposals.filter(p => p.id >= from && p.id < from + args.limit));
         }
-        if (body.params?.method_name === "get_proposal") return rpcValue(proposal);
+        if (body.params?.method_name === "get_proposal") return rpcValue(proposals.find(p => p.id === args.id) ?? proposal);
         if (u.pathname === "/v0/account") return json({ account_txs: txs.map(t => ({ transaction_hash: t.transaction.hash })) });
         if (u.pathname === "/v0/transactions") return json({ transactions: txs });
         throw new Error(`unexpected rpc: ${body.method} ${body.params?.method_name ?? body.params?.request_type}`);
@@ -652,7 +655,7 @@ describe("filing proposals and closing a job", async () => {
       },
       receipts: [{ receipt: { block_height: 500 } }],
     };
-    const { writes } = serve(dupBoard([onChain(41), onChain(42)], { proposalStatus: "Approved", txs: [vote] }));
+    const { writes } = serve(dupBoard([onChain(41, "Approved"), onChain(42)], { proposalStatus: "Approved", txs: [vote] }));
     await settlePayouts("multi-agency", { now: 4_000_000 });
     const paid = writes.filter(w => w.path.endsWith("/issues/30/comments") && w.body.body.startsWith("**Paid:**"));
     assert.equal(paid.length, 1, "recorded once, from the proposal the task's payout names");
@@ -756,6 +759,10 @@ describe("filing proposals and closing a job", async () => {
     assert.equal(paidOn(run.writes).length, 0, "the proposals leaving the newest-100 window must not turn a double payment into a recording");
     assert.equal(doublesOn(run.writes).length, 1, "the double payment is still reported on the task");
     assert.equal(closesJob(run.writes), false);
+    // A restart keeps nothing of the audit's progress in memory: simulated
+    // here by forgetting it explicitly, rather than by the small board
+    // happening to need only one call's worth of pages either way.
+    resetPayoutAudit();
     const restarted = serve(restartedBoard);
     await settlePayouts("multi-agency", { now: 8_121_000 });
     assert.equal(paidOn(restarted.writes).length, 0, "still nothing records once nothing is memoized");
@@ -781,6 +788,112 @@ describe("filing proposals and closing a job", async () => {
     const [entry] = coordinatorHealth().payout_audit_capped;
     assert.equal(entry.job, 28);
     assert.equal(entry.pages, AUDIT_PAGE_CAP);
+  });
+
+  // A read that reaches the treasury's tip in one hop lands past it (a full
+  // page is wider than the handful of ids actually left): what the audit
+  // remembers as covered must stop at the tip itself, not at that overshoot,
+  // or a duplicate filed in the gap before the next sweep is skipped as
+  // already scanned.
+  test("a duplicate filed past an exhausted read's own tip is still read on the next sweep", async () => {
+    serve(dupBoard([onChain(41)], { lastId: 50 }));
+    const clean = await duplicatePayoutProblem(await loadEngagement(28));
+    assert.equal(clean, null, "nothing is wrong yet");
+
+    // Id 80 sits inside the stretch a full-page hop from floor 16 would have
+    // jumped straight over (16 + 100 = 116, well past the tip of 50 the first
+    // read saw) — filed only once the treasury has grown past it.
+    serve(dupBoard([onChain(41), onChain(80)], { lastId: 120 }));
+    const problem = await duplicatePayoutProblem(await loadEngagement(28));
+    assert.match(problem, /#30 has 2 payout proposals \(41 and 80\)/, "the duplicate filed in the gap is still found");
+  });
+
+  // A duplicate can be filed for a task before that task's own payout is
+  // ever recorded. The scan must remember it the first time its page is
+  // read, keyed to the task itself rather than to whether it had a payout
+  // recorded yet — or the page moves on and the duplicate is lost for good.
+  test("a duplicate filed before a task's own payout is recorded is still found once it is", async () => {
+    const m30 = shaped(30, "1000000");
+    const m31 = shaped(31, "1000000");
+    const filed30 = {
+      id: 950,
+      user: { login: "multi-agency" },
+      body: `**Payout proposed:** DAO proposal 41\n\n${fence("payout", { proposal_id: 41, treasury: "multiagency.sputnikv2.testnet", payee: m30.payee, amount: m30.amount, proposed_tx: "tx41" })}`,
+    };
+    const real41 = { id: 41, status: "InProgress", description: proposalDescription(28, m30), kind: { Transfer: { token_id: USDC, receiver_id: m30.payee, amount: m30.amount, msg: null } } };
+    const duplicateFor31 = { id: 45, status: "InProgress", description: proposalDescription(28, m31), kind: { Transfer: { token_id: USDC, receiver_id: m31.payee, amount: m31.amount, msg: null } } };
+    const issues = { 28: epic([terms(30, "1000000"), terms(31, "1000000")]), 30: closed(30), 31: closed(31) };
+
+    // Task 31 has not had its own payout proposed yet.
+    serve({ issues, threads: { 28: [], 30: [handoff(30), filed30], 31: [handoff(31)] }, proposals: [real41, duplicateFor31], lastId: 60 });
+    const before = await loadEngagement(28);
+    assert.equal(before.members.find(m => m.issue === 31).payout, null, "task 31's own payout is not recorded yet");
+    assert.equal(await duplicatePayoutProblem(before), null, "nothing is recorded for 31 yet, so nothing can be flagged for it");
+
+    // Task 31's own payout is now recorded, at a different id than the
+    // duplicate the scan already read while 31 had no payout at all.
+    const filed31 = {
+      id: 951,
+      user: { login: "multi-agency" },
+      body: `**Payout proposed:** DAO proposal 46\n\n${fence("payout", { proposal_id: 46, treasury: "multiagency.sputnikv2.testnet", payee: m31.payee, amount: m31.amount, proposed_tx: "tx46" })}`,
+    };
+    const real46 = { id: 46, status: "InProgress", description: proposalDescription(28, m31), kind: { Transfer: { token_id: USDC, receiver_id: m31.payee, amount: m31.amount, msg: null } } };
+    serve({ issues, threads: { 28: [], 30: [handoff(30), filed30], 31: [handoff(31), filed31] }, proposals: [real41, duplicateFor31, real46], lastId: 60 });
+    const after = await loadEngagement(28);
+    const problem = await duplicatePayoutProblem(after);
+    assert.match(problem, /#31 has 2 payout proposals \(45 and 46\)/, "the duplicate filed for 31 before its payout was recorded is still found");
+  });
+
+  // A capped audit cannot vouch for a duplicate past where it stopped — a
+  // payment already recorded must still hold, not complete, over the
+  // incomplete read.
+  test("a capped audit holds duplicatePayoutProblem, pendingPayouts and closeIfPaid", async () => {
+    const run = serve(dupBoard([onChain(41, "Approved"), onChain(3000)], {
+      proposalStatus: "Approved",
+      txs: [vote(41, "votetx")],
+      records: [{ id: 782, user: { login: "multi-agency" }, body: paidRecord(41, "votetx") }],
+      lastId: 5000,
+    }));
+    const job = await loadEngagement(28);
+    const problem = await duplicatePayoutProblem(job);
+    assert.match(problem, /payout audit stopped at its page cap \(1000 proposals/);
+    const { problem: pendingProblem } = await pendingPayouts(job, ["approver.testnet"]);
+    assert.match(pendingProblem, /payout audit stopped at its page cap/);
+    const held = await closeIfPaid(28, () => {});
+    assert.match(held, /payout audit stopped at its page cap/);
+    assert.equal(run.writes.some(w => w.path.endsWith("/issues/28") && w.body.state === "closed"), false,
+      "the job does not close over an incomplete audit");
+  });
+
+  test("recordApprovals records nothing for a job whose audit is capped", async () => {
+    const run = serve(dupBoard([onChain(41, "Approved"), onChain(3000)], {
+      proposalStatus: "Approved",
+      txs: [vote(41, "votetx")],
+      lastId: 5000,
+    }));
+    const job = await loadEngagement(28);
+    await recordApprovals(job, () => {});
+    assert.equal(paidOn(run.writes).length, 0, "a capped audit must not record a payment it cannot fully vouch for");
+  });
+
+  // A fixed floor beside a treasury that only grows must not hold a job
+  // forever: each sweep picks up the audit where the last one stopped, so a
+  // job whose range outgrows one sweep's page budget still finishes, over
+  // however many sweeps it takes, and its payout records once it does.
+  test("a page cap that outgrows one sweep still lifts, and the payout records", async () => {
+    const run = serve(dupBoard([onChain(41, "Approved")], {
+      proposalStatus: "Approved",
+      txs: [vote(41, "votetx")],
+      lastId: 1050,
+    }));
+    await recordApprovals(await loadEngagement(28), () => {});
+    assert.equal(paidOn(run.writes).length, 0, "the first sweep's read falls short of the treasury's tip");
+    assert.equal(payoutAuditCapped().length, 1, "the cap shows on /api/health while the audit is incomplete");
+    await recordApprovals(await loadEngagement(28), () => {});
+    assert.equal(paidOn(run.writes).length, 1, "a second sweep's read reaches the tip, and the payment records");
+    assert.equal(payoutAuditCapped().length, 0, "the cap is gone once the audit catches up");
+    await closeIfPaid(28, () => {});
+    assert.equal(closesJob(run.writes), true, "the job closes once its only payout is recorded");
   });
 
   // The recorded proposal can die beside live extras — expired while an
