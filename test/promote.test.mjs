@@ -67,6 +67,7 @@ const board = ({ open = [], closes = [], issues = {}, closedByLabel = {}, thread
     }
     const commentRead = u.pathname.match(`${REPO}/issues/comments/(\\d+)$`);
     if (commentRead && method === "GET" && commentRead[1] === "404404") return json({ message: "Not Found" }, 404);
+    if (commentRead && method === "GET" && commentRead[1] === "403403") return json({ message: "API rate limit exceeded for user." }, 403);
     const assignees = u.pathname.match(`${REPO}/issues/(\\d+)/assignees$`);
     if (assignees) {
       const login = JSON.parse(options.body).assignees[0];
@@ -464,6 +465,16 @@ describe("releasing a stale claim", () => {
     // The decision alone: the stub answers the deliverable read with a 500.
     globalThis.fetch = board({ open: [seat], issues: { 79: seat }, threads: { 79: thread } }).fetch;
     const decision = await releaseDecision({ ...seat, number: 79, updatedAt: seat.updated_at, assignees: ["jlwaugh"], dependsOn: [] });
+    assert.equal(decision.release, false);
+    assert.match(decision.why, /a handoff that passes the checks holds it/);
+  });
+
+  test("a deliverable read GitHub rate-limits with a 403 holds the claim, unlike a 403 that is a refusal", async () => {
+    const url = "https://github.com/MultiAgency/kanban-sandbox/issues/80#issuecomment-403403";
+    const thread = [claimedRecord(80, 9480, ago(72)), pinned(80, 9580, url, ago(71))];
+    const seat = taken(80, thread, { auto: true });
+    globalThis.fetch = board({ open: [seat], issues: { 80: seat }, threads: { 80: thread } }).fetch;
+    const decision = await releaseDecision({ ...seat, number: 80, updatedAt: seat.updated_at, assignees: ["jlwaugh"], dependsOn: [] });
     assert.equal(decision.release, false);
     assert.match(decision.why, /a handoff that passes the checks holds it/);
   });
