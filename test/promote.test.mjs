@@ -346,6 +346,80 @@ describe("a claim on a task whose dependencies are not done", () => {
   });
 });
 
+// #166: the release clock ran from the issue's updated_at, which any comment
+// moves, and any handoff, even a refused one, stopped it for good.
+describe("releasing a stale claim", () => {
+  const ago = hours => new Date(Date.now() - hours * 3600_000).toISOString();
+  const said = (number, id, login, body, at) => ({
+    id, user: { login }, body, created_at: at, updated_at: at,
+    html_url: `https://github.com/MultiAgency/kanban-sandbox/issues/${number}#issuecomment-${id}`,
+  });
+  const claimedRecord = (number, id, at, login = "jlwaugh") => said(number, id, "multi-agency", `Claimed by @${login}. When it is delivered, https://demo.multiagency.ai/#/status/${login} prepares your handoff.`, at);
+  const handoff = (number, id, account, at) => said(number, id, "jlwaugh", "**Handoff:** done\n\n" + fence("handoff", { payout: { account_id: account } }), at);
+  const round = (number, id, at) => said(number, id, "multi-agency", "**Changes requested** by @reviewer.\n\n" + fence("changes", { review: 99, requested_by: "reviewer", request: "u" }), at);
+  // A task claimed by @jlwaugh whose issue was last touched by the latest comment.
+  const taken = (number, thread, { auto = false } = {}) => {
+    const seat = seatIssue(number, ["in-progress", "skill:writing", "agent-eligible"], [], ["jlwaugh"]);
+    seat.updated_at = thread.at(-1)?.created_at ?? ago(72);
+    if (auto) seat.body = seat.body.replace(terms, fence("terms", { engagement: 5, amount: "0", asset: "usdc", source: "MultiAgency/near-agencies#600" }));
+    return seat;
+  };
+  const released = (fake, number) => fake.unassigns.some(u => u.number === number);
+
+  test("a comment an hour ago does not restart a claim made three days ago", async () => {
+    const thread = [claimedRecord(70, 9301, ago(72)), said(70, 9302, "jlwaugh", "Still working on it.", ago(1))];
+    const seat = taken(70, thread);
+    const fake = await runCycle(board({ open: [seat], issues: { 70: seat }, threads: { 70: thread } }));
+    assert.ok(released(fake, 70), "the claim is released from its own time");
+    assert.ok(fake.comments.some(c => c.number === 70 && /No handoff after 24 hours/.test(c.body)));
+  });
+
+  test("a claim made an hour ago is not released, whatever the issue's clock says", async () => {
+    const thread = [claimedRecord(71, 9303, ago(1))];
+    const seat = { ...taken(71, thread), updated_at: ago(72) };
+    const fake = await runCycle(board({ open: [seat], issues: { 71: seat }, threads: { 71: thread } }));
+    assert.equal(released(fake, 71), false);
+  });
+
+  test("a handoff the checks refuse holds nothing: the claim is released after 24 hours", async () => {
+    const thread = [claimedRecord(72, 9304, ago(72)), handoff(72, 9305, "wrong.testnet", ago(71))];
+    const seat = taken(72, thread);
+    const fake = await runCycle(board({ open: [seat], issues: { 72: seat }, threads: { 72: thread } }));
+    assert.ok(fake.comments.some(c => c.number === 72 && /can't close the task: its payout account is not/.test(c.body)), "the refusal is still said");
+    assert.ok(released(fake, 72));
+  });
+
+  test("a handoff that passes holds the claim, however old", async () => {
+    const thread = [claimedRecord(73, 9306, ago(72)), handoff(73, 9307, "reviewer.agency.testnet", ago(71))];
+    const seat = taken(73, thread, { auto: true });
+    const fake = await runCycle(board({ open: [seat], issues: { 73: seat }, threads: { 73: thread } }));
+    assert.equal(released(fake, 73), false, "an auto job's task waits on its pull request");
+  });
+
+  test("a revision round restarts the clock, and the earlier handoff no longer holds", async () => {
+    const early = [claimedRecord(74, 9308, ago(72)), handoff(74, 9309, "reviewer.agency.testnet", ago(71)), round(74, 9310, ago(1))];
+    const fresh = taken(74, early, { auto: true });
+    const fake = await runCycle(board({ open: [fresh], issues: { 74: fresh }, threads: { 74: early } }));
+    assert.equal(released(fake, 74), false, "an hour into the round");
+
+    const later = [claimedRecord(75, 9311, ago(72)), handoff(75, 9312, "reviewer.agency.testnet", ago(71)), round(75, 9313, ago(30))];
+    const stale = taken(75, later, { auto: true });
+    const second = await runCycle(board({ open: [stale], issues: { 75: stale }, threads: { 75: later } }));
+    assert.ok(released(second, 75), "thirty hours into a round nobody answered");
+  });
+
+  test("a handoff, a claim record or a round from a stranger counts for nothing", async () => {
+    const thread = [
+      claimedRecord(76, 9314, ago(72)),
+      said(76, 9315, "stranger", "Claimed by @stranger. fake record", ago(1)),
+      said(76, 9316, "stranger", "```changes\n{\"review\":1}\n```", ago(1)),
+    ];
+    const seat = taken(76, thread);
+    const fake = await runCycle(board({ open: [seat], issues: { 76: seat }, threads: { 76: thread } }));
+    assert.ok(released(fake, 76));
+  });
+});
+
 describe("tidying closed seats", () => {
   test("a closed seat keeps none of ready, blocked or in-progress", async () => {
     const issues = {
