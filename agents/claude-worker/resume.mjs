@@ -240,7 +240,15 @@ export async function saveUnfinished({ remote, n, round, resumed, cwd, repo, run
     n, run: runNumber, round, subtype, isError, turns, cost,
     checks: failed, ran, checksTotal: repo.checks.length,
   });
-  await run("git", ["add", "-A"], { cwd, timeout: GIT_TIMEOUT_MS });
+  // The comment and pull-request-body drafts go to `.board/` in the clone —
+  // the instructions say so — and the save never stages them, whatever the
+  // name a stray draft at the root answers to: a save is a checkpoint of the
+  // work, and a resumed delivery would push the drafts (and any check
+  // leftovers git does not already ignore) into the pull request. The
+  // excluded names are the ones the drafts answered to before the
+  // `.board/` instruction existed.
+  const drafts = [".board", "deliverable.md", "handoff.md", "pr-body.md"];
+  await run("git", ["add", "-A", "--", ".", ...drafts.map(d => `:!${d}`)], { cwd, timeout: GIT_TIMEOUT_MS });
   await run("git", ["commit", "--allow-empty", "--message", message], { cwd, timeout: GIT_TIMEOUT_MS });
   const { stdout } = await run("git", ["rev-parse", "HEAD^{tree}"], { cwd, timeout: GIT_TIMEOUT_MS });
   const tree = stdout.trim();

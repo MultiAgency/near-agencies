@@ -257,13 +257,13 @@ describe("the shipping instructions", () => {
     }
   });
 
-  test("the pull request instruction names the template and keeps the no-template wording", () => {
+  test("the pull request instruction names the template, the drafts directory, and keeps the no-template wording", () => {
     for (const [repo, access] of shipping) {
       const text = ship(access, repo, 14, "near-builder", false).join("\n");
       assert.match(text, /`\.github\/pull_request_template\.md`/, "names the template to check for");
       assert.match(text, /fill in its headings, keeping the task link/);
-      assert.match(text, /With no template, write its body to a file first so it links task #14 and says what changed and how you verified it\./,
-        "the no-template wording is unchanged");
+      assert.match(text, /With no template, write its body to `\.board\/` first so it links task #14 and says what changed and how you verified it\./,
+        "the no-template wording is unchanged, and the body lands in the drafts directory the save keeps out of the commit");
     }
   });
 

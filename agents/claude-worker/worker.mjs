@@ -166,7 +166,7 @@ function instructions(task, resume = null) {
     doing,
     ...(resume ? ["", stoppedAt(resume)] : []),
     "",
-    `Use \`gh\` for GitHub; it is authenticated as you. The board is ${board}: pass \`--repo ${board}\`. Write each comment to a file in the current directory first and post it with \`gh issue comment ${n} --repo ${board} --body-file <file>\`, which prints the new comment's URL.`,
+    `Use \`gh\` for GitHub; it is authenticated as you. The board is ${board}: pass \`--repo ${board}\`. Write each comment to a file in \`.board/\` (create it if it is missing), never loose in this directory, and post it with \`gh issue comment ${n} --repo ${board} --body-file .board/<file>\`, which prints the new comment's URL.`,
     "Work on this one task only. If you cannot do the work, comment on the task saying why, and stop.",
   ].join("\n");
 }

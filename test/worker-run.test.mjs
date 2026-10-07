@@ -264,6 +264,7 @@ export async function* query({ options, prompt }) {
   await run("git", ["add", "-A"], { cwd: options.cwd, env: process.env });
   await run("git", ["commit", "-m", "step: wrote the change, left the tests unrun"], { cwd: options.cwd, env: process.env });
   await writeFile(join(options.cwd, "UNCOMMITTED.md"), "half a step\\n");
+  await writeFile(join(options.cwd, "deliverable.md"), "the comment draft the old habit left loose\\n");
   yield { type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command: "npm test" } }] } };
   yield { type: "result", subtype: "error_max_turns", num_turns: 61, total_cost_usd: 2.41, result: "" };
 }
@@ -405,6 +406,17 @@ describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
         "the note records which registry check fails, and what the stop left untried");
       assert.deepEqual(h.board.state.posts, [], "a run with attempts left posts nothing");
       assert.match((await h.gitCalls()).at(-1), /^git push --force origin HEAD:refs\/heads\/wip\/task-58$/);
+      assert.match(prompt, /Write each comment to a file in `\.board\/`/,
+        "the drafts go where the save will not stage them");
+      const savedTip = await mkdtemp(join(tmpdir(), "saved-tip-"));
+      try {
+        await execFile("git", ["clone", "--quiet", "--branch", "wip/task-58", h.upstream, savedTip]);
+        await readFile(join(savedTip, "UNCOMMITTED.md"), "utf8"); // the uncommitted work is in the save
+        await assert.rejects(() => readFile(join(savedTip, "deliverable.md"), "utf8"),
+          "the loose comment draft stayed out of the commit a resumed delivery would push");
+      } finally {
+        await rm(savedTip, { recursive: true, force: true });
+      }
     } finally {
       await h.cleanup();
     }

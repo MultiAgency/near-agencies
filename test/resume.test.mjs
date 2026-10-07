@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCb } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -223,6 +223,34 @@ describe("saving an unfinished run", () => {
       try {
         await execFile("git", ["clone", "--branch", "wip/task-14", w.remote, second], { env: identity });
         assert.equal(await readFile(join(second, "lib.js"), "utf8"), "// step one\n");
+      } finally {
+        await rm(second, { recursive: true, force: true });
+      }
+    } finally {
+      await w.cleanup();
+    }
+  });
+
+  test("the comment and pull-request-body drafts are not in the save; a nested file of the same name is", async () => {
+    const w = await workspace();
+    try {
+      await w.edit("lib.js", "// the work\n");
+      // Where the instructions put the drafts, and where they used to land.
+      await mkdir(join(w.work, ".board"), { recursive: true });
+      await w.edit(".board/deliverable.md", "the deliverable comment's draft\n");
+      await w.edit(".board/pr-body.md", "the pull request body's draft\n");
+      await w.edit("deliverable.md", "a root draft under the old habit\n");
+      await w.edit("handoff.md", "another\n");
+      await w.edit("pr-body.md", "another\n");
+      await save(w);
+      const second = await mkdtemp(join(tmpdir(), "resume-check-"));
+      try {
+        await execFile("git", ["clone", "--branch", "wip/task-14", w.remote, second], { env: identity });
+        assert.equal(await readFile(join(second, "lib.js"), "utf8"), "// the work\n", "the work itself is saved");
+        for (const draft of [".board/deliverable.md", ".board/pr-body.md", "deliverable.md", "handoff.md", "pr-body.md"]) {
+          await assert.rejects(() => readFile(join(second, draft), "utf8"),
+            `${draft} must not ride into the commit a resumed delivery would push`);
+        }
       } finally {
         await rm(second, { recursive: true, force: true });
       }
