@@ -65,11 +65,11 @@ const registryIssue = (number, { title = "Build the internal dashboard", body = 
 });
 
 const labeled = (actor, at, name = "ready-for-agent") => ({ event: "labeled", actor: { login: actor }, label: { name }, created_at: at });
-const crossReferenced = (prNumber, at) => ({
+const crossReferenced = (prNumber, at, repo = REG) => ({
   event: "cross-referenced",
   actor: { login: "someone" },
   created_at: at,
-  source: { issue: { number: prNumber, html_url: `https://github.com/${REG}/pull/${prNumber}`, pull_request: { number: prNumber } } },
+  source: { issue: { number: prNumber, html_url: `https://github.com/${repo}/pull/${prNumber}`, pull_request: { number: prNumber } } },
 });
 const pull = (number, { state = "open", merged = false, user = "jlwaugh", base = "staging", body = `Closes ${SOURCE}`, sha = String(number).padStart(40, "abcde") } = {}) => ({
   number,
@@ -352,7 +352,7 @@ describe("opening auto jobs", () => {
     regTimeline[`${REG}#610`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
     regTimeline[`${REG}#611`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z"), crossReferenced(9, "2026-10-05T00:02:00Z")];
     regTimeline[`${REG}#612`] = [];
-    pulls[9] = pull(9, { state: "open" });
+    pulls[9] = pull(9, { state: "open", body: "Closes #611" });
     serveBoard();
     await settle();
     assert.equal(created.length, 0);
@@ -368,13 +368,44 @@ describe("opening auto jobs", () => {
     regIssues[REG] = [registryIssue(613), registryIssue(614)];
     regTimeline[`${REG}#613`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z"), crossReferenced(10, "2026-10-05T00:02:00Z")];
     regTimeline[`${REG}#614`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z"), crossReferenced(11, "2026-10-05T00:02:00Z")];
-    pulls[10] = pull(10, { state: "closed", merged: true });
-    pulls[11] = pull(11, { state: "closed", merged: false });
+    pulls[10] = pull(10, { state: "closed", merged: true, body: "Closes #613" });
+    pulls[11] = pull(11, { state: "closed", merged: false, body: "Closes #614" });
     serveBoard();
     await settle();
     assert.equal(created.length, 2, "only the issue whose referencing pull request closed unmerged opens");
     const why = Object.fromEntries(autoJobsHealth().skipped.map(s => [s.issue, s.why]));
     assert.match(why[`${REG}#613`], /a merged pull request \(.*pull\/10\) already settles it/);
+  });
+
+  test("a pull request that only mentions the issue holds nothing back (#175)", async () => {
+    // Merged PR #197 listed two freshly posted issues in its plan; the
+    // mention cross-referenced both, and the sweep read it as having settled
+    // them, so neither could ever become a job.
+    reset();
+    roles.jlwaugh = "admin";
+    regIssues[REG] = [registryIssue(615), registryIssue(616)];
+    regTimeline[`${REG}#615`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z"), crossReferenced(12, "2026-10-05T00:02:00Z")];
+    regTimeline[`${REG}#616`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z"), crossReferenced(13, "2026-10-05T00:02:00Z")];
+    pulls[12] = pull(12, { state: "closed", merged: true, body: `Issues ${REG}#615 and #616 are posted.` });
+    pulls[13] = pull(13, { state: "open", body: "Relates to #616, and fixes #6160." });
+    serveBoard();
+    await settle();
+    assert.equal(created.length, 4, "both issues open their job: a mention closes nothing, and #6160 is not #616");
+  });
+
+  test("a bare number in another repository's pull request names that repository's issue", async () => {
+    reset();
+    roles.jlwaugh = "admin";
+    regIssues[REG] = [registryIssue(617), registryIssue(618)];
+    regTimeline[`${REG}#617`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z"), crossReferenced(14, "2026-10-05T00:02:00Z", "octo/other")];
+    regTimeline[`${REG}#618`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z"), crossReferenced(15, "2026-10-05T00:02:00Z", "octo/other")];
+    pulls[14] = { ...pull(14, { state: "open", body: "Closes #617" }), html_url: "https://github.com/octo/other/pull/14" };
+    pulls[15] = { ...pull(15, { state: "open", body: `Closes ${REG}#618` }), html_url: "https://github.com/octo/other/pull/15" };
+    serveBoard();
+    await settle();
+    assert.equal(created.length, 2, "only #617 opens: octo/other's #617 is not this repository's");
+    const why = Object.fromEntries(autoJobsHealth().skipped.map(s => [s.issue, s.why]));
+    assert.match(why[`${REG}#618`], /an open pull request \(https:\/\/github\.com\/octo\/other\/pull\/15\) already closes it/);
   });
 
   test("restarting the coordinator never opens a second job for the same issue", async () => {
@@ -863,6 +894,20 @@ describe("the race problem #119 recorded", () => {
     assert.match(onPull[0].body, /\*\*Superseded:\*\* @agency-builder, MultiAgency\/near-agencies#61, the issue this pull request targets, is closed/);
     assert.match(onPull[0].body, /MultiAgency\/kanban-sandbox#900/);
     assert.ok(!calls.includes(`PATCH /repos/${REG}/pulls/137`), "the coordinator closes no one's pull request");
+  });
+
+  test("a merged pull request that only mentions the issue neither settles it nor holds the supersede", async () => {
+    // The claimant's own merged pull request holds a supersede only when it
+    // closes the issue: one that merely mentions it can never complete the
+    // task (deliveredProblem wants the closing reference), so the job must
+    // not wait on it, and it is never cited as what settled the issue.
+    race();
+    pulls[138] = pull(138, { state: "closed", merged: true, user: "agency-builder", body: `Tidies up after ${SOURCE61}.` });
+    regTimeline[SOURCE61] = [...timeline61, crossReferenced(138, "2026-10-06T00:00:00Z")];
+    await settle();
+    assert.equal(boardIssues[900].state_reason, "not_planned", "the job does not wait on a pull request that closes nothing");
+    const said = boardThreads[`${BOARD}#900`].filter(c => c.user.login === BOT);
+    assert.match(said[0].body, /settled by pull request https:\/\/github\.com\/MultiAgency\/near-agencies\/pull\/136\./);
   });
 
   test("a restart never comments twice", async () => {
