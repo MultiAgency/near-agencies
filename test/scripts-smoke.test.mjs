@@ -17,7 +17,7 @@
 // The list is explicit on purpose: the last test fails when a new
 // scripts/*.mjs shows up without a smoke entry here. A script with no clean
 // early exit gets the smallest one — a usage message on missing input, as
-// connector.mjs and agent.mjs got — rather than a skip.
+// connector.mjs got — rather than a skip.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -128,14 +128,11 @@ const ENTRIES = [
     code: 1,
     stderr: /REGISTRY_URL is not set/,
   },
-  { file: "scripts/replay-check.mjs", code: 64, stderr: /usage:/ },
   { file: "scripts/review-rounds.mjs", args: ["--help"], code: 0, stdout: /usage:/ },
   { file: "roster.mjs", code: 64, stderr: /usage:/ },
   { file: "payout.mjs", code: 64, stderr: /usage:/ },
   { file: "assemble.mjs", code: 64, stderr: /usage:/ },
-  { file: "org.mjs", code: 64, stderr: /usage:/ },
   { file: "connector.mjs", args: ["--help"], code: 0, stdout: /usage:/ },
-  { file: "agent.mjs", args: ["--help"], code: 0, stdout: /usage:/ },
 ];
 
 const env = (drop, set) => {
