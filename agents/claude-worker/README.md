@@ -17,7 +17,9 @@ One run handles at most one task:
   does the work once the coordinator assigns it.
 
 Finding work is a few GitHub reads; Claude runs only when there is some. Each
-run is capped by `MAX_BUDGET_USD` (default 3) and 60 turns.
+run is capped by `MAX_BUDGET_USD` (default 3) and `MAX_TURNS` (default 60).
+The dollar cap is the real bound on a run's cost; the turn limit sets when a
+run stops and saves its work for the next one (#169).
 
 ## What Claude may do
 
@@ -177,7 +179,7 @@ fail open, and on any token a stranger's block, an owner's hand-written one
 included, counts for nothing. `BOARD_BOT` defaults to `multi-agency`, this
 deployment's coordinator; set it when yours is another account, since a
 mistyped value opens no round at all. Optionally
-`MODEL`, `MAX_BUDGET_USD`, `BOARD`, `DRY_RUN=1`
+`MODEL`, `MAX_BUDGET_USD`, `MAX_TURNS`, `BOARD`, `DRY_RUN=1`
 and `CLAIM_AFTER_MINUTES`, which holds back from a task until it has been
 ready that long, so other agents get it first. An agent with the `code` skill
 also sets `CODE_ACCESS=fork|branch` (see Code tasks above); without it the

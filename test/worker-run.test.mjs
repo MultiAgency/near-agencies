@@ -431,6 +431,17 @@ export async function* query({ options, prompt }) {
 }
 `;
 
+// Records the options the worker hands the model run, then stops short.
+const SCENARIO_OPTIONS = `
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+export async function* query({ options, prompt }) {
+  await writeFile(join(process.env.SCENARIO_OUT, "prompt.txt"), prompt);
+  await writeFile(join(process.env.SCENARIO_OUT, "options.json"), JSON.stringify({ maxTurns: options.maxTurns }));
+  throw new Error("stopped by the test");
+}
+`;
+
 const SCENARIO_THROWS = `
 import { execFile } from "node:child_process";
 import { writeFile } from "node:fs/promises";
@@ -670,6 +681,33 @@ describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
       const { stdout: later } = await h.spawn(SCENARIO_STOPS, { FAIL_WIP_PUSH: "1" });
       assert.equal(/worker: (failed \()?error_max_turns/.test(later), false, "the next run starts no model run on the seat");
       assert.equal(h.board.state.posts.length, 1, "and posts nothing more");
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  test("the turn limit comes from MAX_TURNS, 60 when unset", async () => {
+    const h = await harness();
+    try {
+      const turnsOf = async extra => {
+        await h.spawn(SCENARIO_OPTIONS, extra);
+        return JSON.parse(await readFile(join(h.dir, "scenario-out", "options.json"), "utf8")).maxTurns;
+      };
+      assert.equal(await turnsOf({}), 60, "unset: 60, as before");
+      assert.equal(await turnsOf({ MAX_TURNS: "150" }), 150);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  test("a MAX_TURNS that isn't a positive whole number stops the worker at startup, naming it", async () => {
+    const h = await harness();
+    try {
+      for (const bad of ["abc", "0", "-5", "2.5"]) {
+        await assert.rejects(h.spawn(SCENARIO_OPTIONS, { MAX_TURNS: bad }),
+          error => /MAX_TURNS must be a positive whole number of turns/.test(String(error.stderr)), bad);
+      }
+      assert.deepEqual(h.board.state.posts, [], "nothing posted");
     } finally {
       await h.cleanup();
     }

@@ -53,6 +53,16 @@ const api = process.env.GITHUB_API_URL ?? "https://api.github.com";
 const skillUrl = process.env.SKILL_URL ?? "https://demo.multiagency.ai/skill.md";
 const model = process.env.MODEL ?? "claude-sonnet-5";
 const maxBudgetUsd = Number(process.env.MAX_BUDGET_USD ?? "3");
+// The turn limit sets when a run stops and saves its work (#169); the dollar
+// cap above is the real bound on what one run costs. A value that isn't a
+// positive whole number stops the worker here, rather than run with a limit
+// nobody meant (#186).
+const maxTurns = (raw => {
+  if (raw === undefined || raw === "") return 60;
+  const turns = Number(raw);
+  if (!Number.isInteger(turns) || turns <= 0) throw new Error(`MAX_TURNS must be a positive whole number of turns, not "${raw}"`);
+  return turns;
+})(process.env.MAX_TURNS);
 // A house agent sets this so it claims a task only after others have had it
 // for a while: it is the fallback that finishes a job, not the first in line.
 const claimAfterMs = Number(process.env.CLAIM_AFTER_MINUTES ?? "0") * 60_000;
@@ -245,7 +255,7 @@ async function run() {
         cwd,
         model,
         maxBudgetUsd,
-        maxTurns: 60,
+        maxTurns,
         settingSources: [],
         settings: SDK_SETTINGS,
         systemPrompt: { type: "preset", preset: "claude_code", append: `\n\n# The MultiAgency rules (${skillUrl})\n\n${skill}` },
