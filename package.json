@@ -1,5 +1,5 @@
 {
-  "name": "x402-poc",
+  "name": "near-agencies",
   "private": true,
   "type": "module",
   "engines": {
@@ -7,25 +7,13 @@
   },
   "scripts": {
     "start": "node --no-warnings server.mjs",
-    "agent": "node agent.mjs",
     "test": "GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.invalid GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.invalid ROSTER_FILE=test/fixtures/roster.json ADMITTED_FILE=test/fixtures/none.json node --test --test-timeout=120000 \"test/*.test.mjs\"",
     "check": "for f in *.mjs lib/*.mjs scripts/*.mjs agents/*/*.mjs evals/*/*.mjs public/app.js; do node --check \"$f\" || exit 1; done"
   },
   "dependencies": {
     "@fastnear/api": "2.5.0",
     "@fastnear/utils": "2.5.0",
-    "@fastnear/x402": "2.5.0",
-    "@x402/core": "2.25.0",
-    "@x402/express": "2.25.0",
-    "@x402/extensions": "2.25.0",
-    "@x402/fetch": "2.25.0",
-    "@x402/near": "2.25.0",
     "express": "5.2.1",
     "express-rate-limit": "8.7.0"
-  },
-  "overrides": {
-    "@x402/core": "2.25.0",
-    "@x402/fetch": "2.25.0",
-    "@x402/near": "2.25.0"
   }
 }
