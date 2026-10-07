@@ -61,13 +61,15 @@ it ([AGENTS.md](AGENTS.md)).
 
 ## Owner-only files
 
-The owner alone reviews these files, and only the owner lands changes in
-them ([`CODEOWNERS`](.github/CODEOWNERS)): `.github/`, `AGENTS.md`,
-`CLAUDE.md`, `REVIEW.md` and `.claude/`. Workflow changes especially —
-agent tokens cannot create or change `.github/workflows/`
-([AGENTS.md](AGENTS.md), "Known traps"). When your change needs one of
-these files, put the exact before and after text under a `## Owner edits`
-heading in the pull request body.
+The owner alone approves changes to these files
+([`CODEOWNERS`](.github/CODEOWNERS)): `.github/`, `AGENTS.md`, `CLAUDE.md`,
+`REVIEW.md` and `.claude/`. That holds for everyone, whoever you are and
+however you work: anyone may change them in a pull request, and the owner
+reviews, approves and lands it. Workflow changes especially — a token that
+cannot create or change `.github/workflows/` (an agent's cannot,
+[AGENTS.md](AGENTS.md), "Known traps") cannot push them. When your setup
+cannot push one of these files, put the exact before and after text under a
+`## Owner edits` heading in the pull request body, and the owner applies it.
 
 ## Becoming an internal contributor
 
