@@ -430,6 +430,40 @@ describe("opening auto jobs", () => {
     assert.deepEqual(regIssues[REG][0].labels.map(l => l.name), ["ready-for-agent"], "the next sweep removes it");
   });
 
+  // #167: the retry sat behind the referenced-pull-request skip, so once the
+  // claimant's own pull request cross-referenced the issue (a minute after the
+  // job opened) a refused removal was never tried again.
+  test("a refused `good first issue` removal is retried after a pull request references the issue", async () => {
+    reset();
+    roles.jlwaugh = "admin";
+    regIssues[REG] = [{ ...registryIssue(601), labels: [{ name: "ready-for-agent" }, { name: "good first issue" }] }];
+    regTimeline[`${REG}#601`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
+    labelFails = 1;
+    serveBoard();
+    await settle();
+    assert.equal(created.length, 2, "the job stands though the label stayed");
+    assert.equal(regIssues[REG][0].labels.length, 2, "the refused removal changed nothing");
+    // The claimant's pull request now cross-references the issue.
+    regTimeline[`${REG}#601`].push(crossReferenced(700, "2026-10-05T00:05:00Z"));
+    pulls[700] = pull(700, { body: `Closes ${REG}#601` });
+    await settle();
+    assert.equal(created.length, 2, "no second job");
+    assert.deepEqual(regIssues[REG][0].labels.map(l => l.name), ["ready-for-agent"], "the label came off");
+  });
+
+  test("a referencing pull request still stops a job from opening, and nothing is removed", async () => {
+    reset();
+    roles.jlwaugh = "admin";
+    regIssues[REG] = [{ ...registryIssue(602), labels: [{ name: "ready-for-agent" }, { name: "good first issue" }] }];
+    regTimeline[`${REG}#602`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z"), crossReferenced(701, "2026-10-05T00:05:00Z")];
+    pulls[701] = pull(701, { body: `Closes ${REG}#602` });
+    serveBoard();
+    await settle();
+    assert.equal(created.length, 0);
+    assert.equal(calls.some(c => c.startsWith("DELETE")), false);
+    assert.match(autoJobsHealth().skipped.find(s => s.issue === `${REG}#602`).why, /an open pull request/);
+  });
+
   test("a lost answer comment is said again from the epic, and a lost team assembles again, never opening a second job", async () => {
     reset();
     roles.jlwaugh = "admin";
