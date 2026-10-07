@@ -34,6 +34,7 @@ import {
   REVIEWER,
   codeownersRules,
   editedPullNumber,
+  movedWhileJudged,
   newestVerdictArtifact,
   openCandidates,
   stagingApproval,
@@ -84,12 +85,23 @@ try {
   }
   let failed = false;
   for (const number of numbers) {
+    let pr = null;
     try {
-      const pr = await github("GET", `/pulls/${number}`);
+      pr = await github("GET", `/pulls/${number}`);
       if (pr.state === "open") await decide(pr, { edited: edited !== null });
     } catch (error) {
       console.error(`staging-approval: pull request #${number}: ${error.message}`);
       failed = true;
+      // A read that broke on an edit leaves a body this run did not finish
+      // reading: the approval comes down all the same, so none stands over
+      // text the gate has not read (#168). A run no edit started leaves it.
+      if (edited !== null && pr?.state === "open") {
+        try {
+          await dismissApprovals(number, pr.head.sha, `its decision could not be completed (${String(error.message).slice(0, 120)})`);
+        } catch (dismissal) {
+          console.error(`staging-approval: pull request #${number}: its approval could not be dismissed: ${dismissal.message}`);
+        }
+      }
     }
   }
   process.exit(failed ? 1 : 0);
@@ -158,12 +170,15 @@ async function decide(pr, { edited = false } = {}) {
     return;
   }
   // The reads above take time, and a push in between moves the head the
-  // checks were judged on. The approval names one SHA: re-read the pull
-  // request and hold when it moved — the push's own run decides the new
-  // head, and staging's ruleset dismisses whatever was posted for the old.
+  // checks were judged on, and an edit in between moves the body they read.
+  // The approval names one SHA and one reading of the body: re-read the pull
+  // request and hold when its head, base or body moved — the push's or the
+  // edit's own run decides it again, and staging's ruleset dismisses whatever
+  // was posted for the old head.
   const now = await github("GET", `/pulls/${number}`);
-  if (now.head?.sha !== sha) {
-    console.log(`staging-approval: #${number} moved to ${now.head?.sha} while it was judged, so the next run decides`);
+  const moved = movedWhileJudged(pr, now);
+  if (moved) {
+    console.log(`staging-approval: #${number} changed while it was judged (${moved}), so the next run decides`);
     return;
   }
   if (await alreadyApproved(number, sha)) {

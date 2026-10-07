@@ -43,6 +43,9 @@ const routes = [
 
 globalThis.fetch = (url, init) => {
   const { host, href } = new URL(url);
+  // STUB_COMMITS_FAIL: the commit list answers 500, so decide() throws after
+  // the approval is standing (#168: an edit's failed read still dismisses it).
+  if (process.env.STUB_COMMITS_FAIL && /\/pulls\/1\/commits/.test(href)) return new Response("boom", { status: 500 });
   // The coordinator's roster read (ROSTER_URL points at this loopback host so
   // it lands here): not a member, which the verdict judges by roster.json.
   if (host.startsWith("127.0.0.1")) return reply({ stage: "none" });

@@ -9,6 +9,7 @@ import {
   codeownersMatches,
   codeownersRules,
   editedPullNumber,
+  movedWhileJudged,
   newestVerdictArtifact,
   openCandidates,
   ownersForPath,
@@ -513,6 +514,16 @@ describe("an edited pull request body (#168)", () => {
       assert.notEqual(held.edited, true, `${JSON.stringify(over)} is not the edit's doing`);
     }
     assert.notEqual(stagingApproval(passing()).edited, true);
+  });
+
+  test("a pull request read again before its approval is the one judged only if head, base and body all stand", () => {
+    const judged = { head: { sha: SHA }, base: { ref: "staging" }, body: "## Plan\n\nFix the thing." };
+    assert.equal(movedWhileJudged(judged, { ...judged }), null);
+    assert.match(movedWhileJudged(judged, { ...judged, head: { sha: "f".repeat(40) } }), /head moved to f{40}/);
+    assert.match(movedWhileJudged(judged, { ...judged, base: { ref: "main" } }), /base moved to main/);
+    assert.match(movedWhileJudged(judged, { ...judged, body: `${judged.body}\n\nCo-Authored-By: Claude <noreply@anthropic.com>` }), /body changed/);
+    assert.equal(movedWhileJudged({ ...judged, body: null }, { ...judged, body: "" }), null, "an empty body and a missing one are the same body");
+    assert.match(movedWhileJudged(judged, null), /could not be read again/, "a pull request that cannot be read again is not the one judged");
   });
 
   test("the reviewer's approvals standing at this head are the ones to dismiss, and no others", () => {

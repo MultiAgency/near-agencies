@@ -78,6 +78,28 @@ const ENTRIES = [
     notStdout: /dismissed/,
   },
   {
+    // A read in decide() that throws on an edit (here the commit list) still
+    // takes the standing approval down: an approval never stands over a body
+    // the gate has not re-read. The run fails red (exit 1) as any broken read does.
+    file: "scripts/staging-approval.mjs",
+    stubbed: true,
+    event: { action: "edited", pull_request: { number: 1 } },
+    set: { STUB_ATTRIBUTION: "1", STUB_COMMITS_FAIL: "1" },
+    code: 1,
+    stdout: /dismissed @multai-builder's approval 99 on #1/,
+    stderr: /pull request #1: .*500/,
+  },
+  {
+    // The same failed read on a run that no edit started leaves the approval:
+    // a transient read there schedules a new run, as it always has.
+    file: "scripts/staging-approval.mjs",
+    stubbed: true,
+    set: { STUB_ATTRIBUTION: "1", STUB_COMMITS_FAIL: "1" },
+    code: 1,
+    notStdout: /dismissed/,
+    stderr: /pull request #1: .*500/,
+  },
+  {
     file: "scripts/registry-backfill.mjs",
     drop: ["REGISTRY_URL", "REGISTRY_TOKEN"],
     code: 1,
@@ -113,7 +135,7 @@ const stubbedEnv = (eventPath, set = {}) => env([], {
 });
 
 for (const entry of ENTRIES) {
-  test(`${entry.file}${entry.event ? ` (${entry.event.action} event${entry.set ? ", edit-caused hold" : ""})` : ""} exits ${entry.code} on its smoke input, with no load-time crash`, () => {
+  test(`${entry.file}${entry.event ? ` (${entry.event.action} event${entry.set ? ", with a stubbed condition" : ""})` : entry.set ? " (with a stubbed condition)" : ""} exits ${entry.code} on its smoke input, with no load-time crash`, () => {
     let eventDir = null;
     try {
       if (entry.stubbed) {
