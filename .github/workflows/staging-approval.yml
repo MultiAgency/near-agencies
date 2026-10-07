@@ -21,10 +21,14 @@ on:
   workflow_run:
     workflows: [ci, ai-review]
     types: [completed]
+  # An edited body fires neither ci nor ai-review (#168): the edit re-decides.
+  pull_request_target:
+    branches: [staging]
+    types: [edited]
 
 jobs:
   approve:
-    if: github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'pull_request_target' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     environment: reviewer
     permissions:
