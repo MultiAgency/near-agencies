@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 process.env.GITHUB_TOKEN = "test-token";
 const { cycle, coordinatorHealth, releaseDecision } = await import("../lib/coordinator.mjs");
 const { fence, fenced } = await import("../lib/github.mjs");
-const { seat, handoffProblem } = await import("../lib/seats.mjs");
+const { seat, handoffProblem, selfReviewProblem } = await import("../lib/seats.mjs");
 const { byGithub } = await import("../lib/roster.mjs");
 
 const realFetch = globalThis.fetch;
@@ -56,6 +56,9 @@ const board = ({ open = [], closes = [], issues = {}, closedByLabel = {}, thread
         if (found) found.state = patch.state ?? found.state;
         return json(found ?? {});
       }
+      // A key set to `null` (not just absent) stands for an issue deleted for
+      // good: GitHub answers 404, unlike a generic read failure (refuse()'s 500).
+      if (found === null) return json({ message: "Not Found" }, 404);
       return found ? json(found) : refuse();
     }
     const reactions = u.pathname.match(`${REPO}/issues/comments/(\\d+)/reactions$`);
@@ -177,6 +180,17 @@ describe("promoting a blocked seat", () => {
     const invite = fake.comments.find(c => c.number === 20);
     assert.match(invite.body, /Dependencies #10 are done/);
     assert.match(invite.body, /`\/claim`/);
+  });
+
+  // #181: promote() used to read every dependency with Promise.all and no
+  // catch, so one unreadable dependency threw out of the whole cycle.
+  test("a dependency read that fails leaves the seat blocked, instead of ending the cycle", async () => {
+    // 10 is absent from `issues`, so its read answers 500 (refuse()).
+    const issues = { 21: seatIssue(21, ["blocked", "skill:writing"], [10]) };
+    const fake = await runCycle(board({ open: [issues[21]], issues }));
+
+    assert.deepEqual(labelWrites(fake, 21), [], "not promoted: the dependency could not be read");
+    assert.deepEqual(fake.comments.filter(c => c.number === 21), []);
   });
 });
 
@@ -308,6 +322,22 @@ describe("settling assignments", () => {
     ]);
     assert.deepEqual(labelWrites(fake, 57), [], "never claimed, so never promoted to in-progress");
   });
+
+  // #181: assignmentClaims checks every assignee's eligibility in parallel
+  // (Promise.all); dependencyProblem used to be asked once per assignee, so
+  // two assignees raced closeVerified's reopen of the same stranger-closed
+  // dependency.
+  test("two assignees checked in parallel reopen a stranger-closed dependency only once", async () => {
+    const issues = {
+      10: { ...seatIssue(10, ["in-progress"]), state: "closed", closed_at: "2026-09-30T20:00:00Z", closed_by: { login: "stranger" } },
+      58: seatIssue(58, ["ready", "skill:writing", "agent-eligible"], [10], ["multi-agency", "jlwaugh"]),
+    };
+    const fake = await runCycle(board({ open: [issues[58]], issues }));
+
+    assert.deepEqual(fake.patches.filter(p => p.number === 10), [{ number: 10, state: "open" }], "reopened once, not once per assignee");
+    assert.equal(fake.comments.filter(c => c.number === 10).length, 1, "the reopen notice is posted once");
+    assert.deepEqual(fake.unassigns.map(u => u.login).sort(), ["jlwaugh", "multi-agency"], "both assignees are still refused");
+  });
 });
 
 // #166: `ready` is not a guarded label, so a task whose dependency is still
@@ -349,6 +379,35 @@ describe("a claim on a task whose dependencies are not done", () => {
     assert.deepEqual(fake.assigns, []);
     assert.ok(fake.patches.some(p => p.number === 10 && p.state === "open"), "the stranger's close is undone");
     assert.deepEqual(replies(fake, 63), ["@multi-agency can't claim this task: its dependencies #10 aren't done yet."]);
+  });
+
+  // #181: a dependency read that throws used to abort the whole coordinator
+  // cycle (lib/coordinator.mjs's cycle() catches it, but every seat after the
+  // one that failed, payouts and auto jobs included, was skipped for that
+  // pass). It now just refuses the claim at hand.
+  test("a dependency read that fails (GitHub 500) refuses the claim, and a later ready seat still settles the same cycle", async () => {
+    // 10 is absent from `issues`, so its read answers 500 (refuse()).
+    const issues = { 90: dependent(90, [10]), 91: seatIssue(91, ["ready", "skill:writing", "agent-eligible"]) };
+    const fake = await runCycle(board({
+      open: [issues[90], issues[91]],
+      issues,
+      threads: { 90: [claim(90, 9701, "multi-agency")], 91: [claim(91, 9702, "multi-agency")] },
+    }));
+
+    assert.deepEqual(replies(fake, 90), ["@multi-agency can't claim this task: dependency #10 could not be read."]);
+    assert.deepEqual(fake.assigns, [{ number: 91, login: "multi-agency" }], "a later ready seat still settles in the same cycle");
+  });
+
+  test("a deleted dependency (404) refuses the claim once, with a reason, and stops erroring on later cycles", async () => {
+    const issues = { 10: null, 92: dependent(92, [10]) };
+    const fake = await runCycle(board({ open: [issues[92]], issues, threads: { 92: [claim(92, 9703, "multi-agency")] } }));
+
+    assert.deepEqual(replies(fake, 92), ["@multi-agency can't claim this task: dependency #10 could not be read."]);
+    assert.deepEqual(fake.assigns, []);
+
+    // Later cycles neither crash nor repeat the refusal: the claim is answered.
+    await runCycle(fake);
+    assert.equal(replies(fake, 92).length, 1, "the already-refused claim is not answered twice");
   });
 
   // The real shapes (#130), captured 2026-10-07: kanban-sandbox#52, the closed
@@ -745,5 +804,16 @@ describe("refusing a claim on one's own delivered work", () => {
 
     assert.deepEqual(fake.assigns, [{ number: 51, login: "jlwaugh" }]);
     assert.deepEqual(fake.comments.filter(c => /can't claim this task/.test(c.body)), []);
+  });
+
+  // #181: selfReviewProblem's own dependency read (delivered() -> issue() and
+  // comments()) is asked directly, bypassing dependencyProblem, which would
+  // otherwise refuse the same unreadable dependency first.
+  test("selfReviewProblem refuses with a reason instead of throwing when its dependency cannot be read", async () => {
+    const review = seatIssue(50, ["ready", "skill:review", "agent-eligible"], [40]);
+    globalThis.fetch = board({ open: [review], issues: { 40: null, 50: review } }).fetch;
+
+    const problem = await selfReviewProblem(seat(review), "jlwaugh");
+    assert.equal(problem, "dependency #40 could not be read");
   });
 });
