@@ -161,7 +161,7 @@ describe("the shared member registry", () => {
     assert.equal(byGithub("jlwaugh").nearAccount, "payout.jlwaugh.testnet");
   });
 
-  test("registry payees are registered for USDC the way /admit does it, idempotently", async () => {
+  test("a registry read makes no storage_balance_of view, registered or not", async () => {
     process.env.REGISTRY_URL = REGISTRY_URL;
     const { refreshRegistry, registryHealth } = await roster();
     let stub = serve({ json: { data: [
@@ -169,20 +169,12 @@ describe("the shared member registry", () => {
       member({ githubLogin: "second", accounts: [{ network: "testnet", account: "payout.second.testnet" }] }),
     ] } });
     await refreshRegistry();
-    assert.deepEqual(stub.viewed, ["payout.reg-agent.testnet", "payout.second.testnet"],
-      "each registry payee is checked, and nobody the registry did not bring");
-    assert.equal(registryHealth().last_error, null, "registration never fails the read that queued it");
-    // A second read checks nobody again: the pass is idempotent.
-    await refreshRegistry();
-    assert.deepEqual(stub.viewed, ["payout.reg-agent.testnet", "payout.second.testnet"]);
-    // An account the RPC reports unregistered, with no registrar configured,
-    // is complained about and tried again on the next read — still without
-    // failing the read.
+    assert.deepEqual(stub.viewed, [], "a registry read touches no chain");
+    assert.equal(registryHealth().last_error, null);
+    // An unregistered member's read is no different: still no view.
     stub = serve({ json: { data: [member({ githubLogin: "third", accounts: [{ network: "testnet", account: "payout.third.testnet" }] })] } }, 200, { registered: false });
     await refreshRegistry();
-    assert.deepEqual(stub.viewed, ["payout.third.testnet"]);
-    await refreshRegistry();
-    assert.deepEqual(stub.viewed, ["payout.third.testnet", "payout.third.testnet"]);
+    assert.deepEqual(stub.viewed, []);
     assert.equal(registryHealth().last_error, null);
   });
 
