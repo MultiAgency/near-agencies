@@ -130,7 +130,7 @@ async function decide(pr, { edited = false } = {}) {
   const fork = pr.head?.repo?.full_name?.toLowerCase() !== repo;
   const verdict = await verdictFor(number);
   const messages = await commitMessages(pr);
-  const { outcome, reason } = stagingApproval({
+  const { outcome, reason, edited: causedByEdit } = stagingApproval({
     base: pr.base.ref,
     fork,
     author,
@@ -149,11 +149,12 @@ async function decide(pr, { edited = false } = {}) {
   if (outcome !== "approve") {
     // An approval stands until a push dismisses it (staging ruleset), and an
     // edit is no push: when the edited pull request no longer earns the
-    // approval it holds at this head, the approval comes down, so it never
-    // stands over a body this decision has read (#168). Only an edit's own
-    // run does this; a hold from a transient read in another run keeps the
-    // approval the way it always has.
-    if (edited) await dismissApprovals(number, sha, reason);
+    // approval because of the edit itself — its base branch or a tool
+    // attribution line in its body — the approval comes down, so it never
+    // stands over a body this decision has read (#168). A hold from a read
+    // that failed, or a check that has not run, leaves the approval where it
+    // is: no run is scheduled to restore one a transient read took down.
+    if (edited && causedByEdit) await dismissApprovals(number, sha, reason);
     return;
   }
   // The reads above take time, and a push in between moves the head the
@@ -410,7 +411,8 @@ async function alreadyApproved(number, sha) {
 async function dismissApprovals(number, sha, reason) {
   for (const id of await approvalsAt(number, sha)) {
     await github("PUT", `/pulls/${number}/reviews/${id}/dismissals`, {
-      message: `The pull request was edited and no longer earns the approval: ${reason}.`,
+      // The reason can quote pull-request text: one line, bounded.
+      message: `The pull request was edited and no longer earns the approval: ${String(reason).replace(/\s+/g, " ").slice(0, 300)}.`,
     });
     console.log(`staging-approval: dismissed @${REVIEWER}'s approval ${id} on #${number} at ${sha}`);
   }

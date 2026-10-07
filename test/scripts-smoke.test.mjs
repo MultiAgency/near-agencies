@@ -57,14 +57,25 @@ const ENTRIES = [
     stdout: [/staging-approval hold on #1/, /internal 1 member/],
   },
   {
-    // The same run started by an edited pull request (#168): the pull request
-    // holds (it changes no file), and the edit's hold takes down the
+    // The same run started by an edited pull request (#168), whose body now
+    // carries a tool attribution line: the edit's own hold takes down the
     // reviewer's approval standing at its head.
     file: "scripts/staging-approval.mjs",
     stubbed: true,
     event: { action: "edited", pull_request: { number: 1 } },
+    set: { STUB_ATTRIBUTION: "1" },
     code: 0,
-    stdout: [/staging-approval hold on #1/, /dismissed @multai-builder's approval 99 on #1/],
+    stdout: [/staging-approval hold on #1 at \w+: .*tool attribution/, /dismissed @multai-builder's approval 99 on #1/],
+  },
+  {
+    // An edit whose hold is not the edit's doing (the pull request changes no
+    // file) leaves the approval alone.
+    file: "scripts/staging-approval.mjs",
+    stubbed: true,
+    event: { action: "edited", pull_request: { number: 1 } },
+    code: 0,
+    stdout: /staging-approval hold on #1/,
+    notStdout: /dismissed/,
   },
   {
     file: "scripts/registry-backfill.mjs",
@@ -92,7 +103,8 @@ const env = (drop, set) => {
 // before the script does, the token names nothing real (every GitHub read
 // lands on the stub), and the event carries one open pull request so
 // openCandidates picks it up without a network read.
-const stubbedEnv = eventPath => env([], {
+const stubbedEnv = (eventPath, set = {}) => env([], {
+  ...set,
   NODE_OPTIONS: `--import ${pathToFileURL(join(ROOT, "test/fixtures/github-decide-stub.mjs")).href}`,
   GITHUB_TOKEN: "test-token",
   SANDBOX_REPO: "MultiAgency/near-agencies",
@@ -101,7 +113,7 @@ const stubbedEnv = eventPath => env([], {
 });
 
 for (const entry of ENTRIES) {
-  test(`${entry.file}${entry.event ? ` (${entry.event.action} event)` : ""} exits ${entry.code} on its smoke input, with no load-time crash`, () => {
+  test(`${entry.file}${entry.event ? ` (${entry.event.action} event${entry.set ? ", edit-caused hold" : ""})` : ""} exits ${entry.code} on its smoke input, with no load-time crash`, () => {
     let eventDir = null;
     try {
       if (entry.stubbed) {
@@ -111,13 +123,14 @@ for (const entry of ENTRIES) {
         }));
       }
       const run = spawnSync(process.execPath, [join(ROOT, entry.file), ...(entry.args ?? [])], {
-        env: entry.stubbed ? stubbedEnv(join(eventDir, "event.json")) : env(entry.drop),
+        env: entry.stubbed ? stubbedEnv(join(eventDir, "event.json"), entry.set) : env(entry.drop),
         encoding: "utf8",
         timeout: TIMEOUT_MS,
       });
       assert.equal(run.status, entry.code, `${entry.file}: stderr was:\n${run.stderr}`);
       for (const pattern of [].concat(entry.stderr ?? [])) assert.match(run.stderr, pattern);
       for (const pattern of [].concat(entry.stdout ?? [])) assert.match(run.stdout, pattern);
+      for (const pattern of [].concat(entry.notStdout ?? [])) assert.doesNotMatch(run.stdout, pattern);
       assert.doesNotMatch(String(run.stderr), CRASH);
     } finally {
       if (eventDir) rmSync(eventDir, { recursive: true, force: true });

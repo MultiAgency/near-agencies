@@ -495,6 +495,26 @@ describe("an edited pull request body (#168)", () => {
     assert.equal(stagingApproval(passing({ body: "## Plan\n\nFix the thing, with no footer." })).outcome, "approve");
   });
 
+  test("only a hold the edit itself caused is marked for dismissal, never a read that failed", () => {
+    const attributed = stagingApproval(passing({ body: "Fix.\n\nCo-Authored-By: Claude <noreply@anthropic.com>" }));
+    assert.equal(attributed.edited, true);
+    assert.equal(stagingApproval(passing({ base: "main" })).edited, true, "a base branch edited away from staging");
+    for (const over of [
+      { internal: null },
+      { roster: { status: "unreadable" }, internal: [] },
+      { test: null },
+      { test: "pending" },
+      { verdict: null },
+      { paths: [] },
+      { body: null },
+    ]) {
+      const held = stagingApproval(passing(over));
+      assert.equal(held.outcome, "hold", JSON.stringify(over));
+      assert.notEqual(held.edited, true, `${JSON.stringify(over)} is not the edit's doing`);
+    }
+    assert.notEqual(stagingApproval(passing()).edited, true);
+  });
+
   test("the reviewer's approvals standing at this head are the ones to dismiss, and no others", () => {
     const review = (id, login, state, commit_id) => ({ id, user: { login }, state, commit_id });
     const reviews = [
