@@ -250,6 +250,8 @@ async function harness() {
       await execFile("git", ["fetch", "--depth=1", remote, branch], { cwd: seed });
       return (await execFile("git", ["show", "-s", "--format=%B", "FETCH_HEAD"], { cwd: seed })).stdout;
     },
+    parentsOf: async (remote, branch) =>
+      (await execFile("git", ["--git-dir", remote, "rev-list", "--parents", "-n", "1", branch])).stdout.trim().split(" ").length - 1,
     cleanup: async () => {
       await board.close();
       await rm(dir, { recursive: true, force: true });
@@ -280,6 +282,25 @@ export async function* query({ options, prompt }) {
   await writeFile(join(options.cwd, "deliverable.md"), "the comment draft the old habit left loose\\n");
   yield { type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command: "npm test" } }] } };
   yield { type: "result", subtype: "error_max_turns", num_turns: 61, total_cost_usd: 2.41, result: "" };
+}
+`;
+
+// A resumed run that rewrites its own history, as agency-builder's fifth run
+// on kanban-sandbox#66 did on 2026-10-07 (a rebase onto staging): the saved
+// commit it started from is replaced, so a plain push is not a fast-forward.
+const SCENARIO_RESUMES_REWRITES = `
+import { execFile } from "node:child_process";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { promisify } from "node:util";
+const run = promisify(execFile);
+export async function* query({ options, prompt }) {
+  await writeFile(join(process.env.SCENARIO_OUT, "prompt.txt"), prompt);
+  await run("git", ["reset", "--soft", "HEAD~1"], { cwd: options.cwd, env: process.env });
+  await writeFile(join(options.cwd, "MORE.md"), "step two, rewritten\\n");
+  await run("git", ["add", "-A"], { cwd: options.cwd, env: process.env });
+  await run("git", ["commit", "-m", "step: redone on a rewritten history"], { cwd: options.cwd, env: process.env });
+  yield { type: "result", subtype: "error_max_turns", num_turns: 61, total_cost_usd: 1.1, result: "" };
 }
 `;
 
@@ -568,6 +589,25 @@ describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
       const tip = await h.tipMessage(h.upstream, "wip/task-58");
       assert.match(tip, /^wip: task #58 run 1 saved unfinished \(the revision round opened by comment 9001\)/,
         "the ledger starts over: this round's first unfinished run");
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  test("a resumed run that rewrote its history still saves, as a merge that keeps the save it resumed", async () => {
+    const h = await harness();
+    try {
+      await h.spawn(SCENARIO_STOPS);
+      const started = (await h.gitCalls()).length;
+      const { stdout } = await h.spawn(SCENARIO_RESUMES_REWRITES);
+      assert.equal(/handed back/.test(stdout), false, "a rewritten history is this run's own work: no hand-back");
+      const pushes = (await h.gitCalls()).slice(started).filter(wipPush);
+      assert.match(pushes.at(-1), /^git push origin HEAD:refs\/heads\/wip\/task-58$/, "a fast-forward: nothing forced");
+      assert.equal(await h.parentsOf(h.upstream, "wip/task-58"), 2, "the save is a merge of this run's work and the save it resumed");
+      const tip = await h.tipMessage(h.upstream, "wip/task-58");
+      assert.match(tip, /^wip: task #58 run 2 saved unfinished/,
+        "the save landed, and the count carries on from the save it resumed, though the rewrite dropped that commit");
+      assert.deepEqual(h.board.state.posts, []);
     } finally {
       await h.cleanup();
     }

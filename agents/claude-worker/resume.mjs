@@ -100,8 +100,8 @@ export function savedRun(message) {
  * `{ sha, tree, record }`: the ledger the next run reads its attempt
  * numbers and saved trees from. Commits without a record — the model's own
  * checkpoints — are not saves. `round` keeps a foreign save out. */
-export async function savedChain({ cwd, round, run = promisify(execFile) }) {
-  const { stdout } = await run("git", ["log", "--format=%H%x1f%T%x1f%B%x1e"], { cwd, timeout: GIT_TIMEOUT_MS });
+export async function savedChain({ cwd, round, run = promisify(execFile), from = "HEAD" }) {
+  const { stdout } = await run("git", ["log", "--format=%H%x1f%T%x1f%B%x1e", from], { cwd, timeout: GIT_TIMEOUT_MS });
   const saves = [];
   for (const entry of stdout.split("\x1e")) {
     const [sha, tree, message] = entry.trimStart().split("\x1f");
@@ -224,7 +224,7 @@ export async function setupResume({ remote, forkFetch = null, baseBranch, n, res
  * unfinished runs, its saved tree, and the tree the previous save holds.
  * Nothing here touches a pull request branch: the only ref written is
  * `wip/task-<n>`. */
-export async function saveUnfinished({ remote, n, round, resumed, cwd, repo, run = promisify(execFile), subtype, isError, turns, cost }) {
+export async function saveUnfinished({ remote, n, round, resumed, resumedFrom, cwd, repo, run = promisify(execFile), subtype, isError, turns, cost }) {
   // A run that did not start from the round's saved branch must not overwrite
   // it: the branch is the ledger the next run resumes and counts from. This
   // run's own lookup found it and then lost it — its setup failed and
@@ -236,8 +236,13 @@ export async function saveUnfinished({ remote, n, round, resumed, cwd, repo, run
     const kept = await resumableWork({ remote, n, round, run });
     if (kept) return { skipped: true, tip: kept.tip, record: kept.record };
   }
-  const before = await savedChain({ cwd, round, run });
-  const runNumber = before.length + 1;
+  // The ledger is read from the save this run resumed, not from HEAD: a run
+  // that rewrote its history (a rebase, a reset) may have dropped the earlier
+  // save commits, and counting from its own chain would start the attempts
+  // over and the bound would never trip. Each save records its run number,
+  // so the newest one carries the count forward.
+  const before = await savedChain({ cwd, round, run, from: resumedFrom ?? "HEAD" });
+  const runNumber = (before[0]?.record.run ?? before.length) + 1;
   const { failed, ran } = await failingChecks({ repo, cwd, run });
   const message = saveMessage({
     n, run: runNumber, round, subtype, isError, turns, cost,
@@ -253,11 +258,32 @@ export async function saveUnfinished({ remote, n, round, resumed, cwd, repo, run
   const drafts = [".board", "deliverable.md", "handoff.md", "pr-body.md"];
   await run("git", ["add", "-A", "--", ".", ...drafts.map(d => `:!${d}`)], { cwd, timeout: GIT_TIMEOUT_MS });
   await run("git", ["commit", "--allow-empty", "--message", message], { cwd, timeout: GIT_TIMEOUT_MS });
+  // A run that started from the saved branch may have left it: rewritten its
+  // history, or checked out another commit altogether. Its save must still
+  // land, and must never drop the saves it resumed, so when HEAD no longer
+  // descends from the resumed tip, the save becomes a merge of both: the tree
+  // is this run's, the first parent its own history, the second the resumed
+  // save. The push stays a fast-forward, no save is ever overwritten, and a
+  // push the remote refuses (someone else saved meanwhile) still hands back.
+  if (resumedFrom && !await isAncestor({ cwd, run, ancestor: resumedFrom })) {
+    const { stdout: merged } = await run("git", ["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-p", resumedFrom, "-m", message], { cwd, timeout: GIT_TIMEOUT_MS });
+    await run("git", ["reset", "--soft", merged.trim()], { cwd, timeout: GIT_TIMEOUT_MS });
+  }
   const { stdout } = await run("git", ["rev-parse", "HEAD^{tree}"], { cwd, timeout: GIT_TIMEOUT_MS });
   const tree = stdout.trim();
   const args = ["push", ...(resumed ? [] : ["--force"]), "origin", `HEAD:refs/heads/${wipBranchOf(n)}`];
   await run("git", args, { cwd, timeout: GIT_TIMEOUT_MS });
   return { run: runNumber, tree, previousTree: before[0]?.tree ?? null, message };
+}
+
+/** Whether `ancestor` is HEAD or one of its ancestors in the clone. */
+async function isAncestor({ cwd, run, ancestor }) {
+  try {
+    await run("git", ["merge-base", "--is-ancestor", ancestor, "HEAD"], { cwd, timeout: GIT_TIMEOUT_MS });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** The tip of `task-<n>` on the delivery remote: its commit id, `null` when
