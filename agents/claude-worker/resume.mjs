@@ -57,16 +57,16 @@ export const RUN_RECORD_PREFIX = "multiagency-run: ";
 
 /** The message of a save commit: the run it records on the title line, the
  * failing checks in the body, and the record itself as one JSON line. */
-export function saveMessage({ n, run, round, subtype, turns, cost, checks, checksTotal }) {
+export function saveMessage({ n, run, round, subtype, turns, cost, checks, ran, checksTotal }) {
   const ended = subtype === "thrown" || turns === undefined
     ? "the model run ended without a result"
     : `${subtype} after ${turns} turns at $${Number(cost ?? 0).toFixed(2)}`;
   const roundNote = round ? `revision round ${round}` : "the first round";
   const failed = checks ?? [];
-  const unchecked = checksTotal - failed.length;
+  const untried = checksTotal - (ran ?? checksTotal);
   const checksNote = failed.length
-    ? `Checks: ${failed.join(", ")} failed${unchecked > 0 ? `; ${unchecked} ${unchecked === 1 ? "check was" : "checks were"} not run` : ""}.`
-    : `Checks: all ${checksTotal} passed.`;
+    ? `Checks: ${failed.join(", ")} failed${untried > 0 ? `; ${untried} ${untried === 1 ? "check was" : "checks were"} not run` : ""}.`
+    : `Checks: all ${ran ?? checksTotal} passed.`;
   const record = { task: n, run, round, subtype, ...(turns === undefined ? {} : { turns, cost }), checks: failed };
   return [
     `wip: task #${n} run ${run} saved unfinished (${roundNote}): ${ended}`,
@@ -121,10 +121,14 @@ export function handBackReason({ saves, sameTree }) {
 
 /** Which of the repository's registry checks fail, run in order with a
  * timeout each and stopping at the first failure — the one check standing
- * between the work and a delivery. An empty list means they all passed. */
+ * between the work and a delivery. `failed` lists the failing checks (empty
+ * when they all passed) and `ran` how many ran, so the note can say what a
+ * stop left untried. */
 export async function failingChecks({ repo, cwd, run = promisify(execFile) }) {
   const failed = [];
+  let ran = 0;
   for (const check of repo.checks) {
+    ran++;
     try {
       await run("bash", ["-c", check], { cwd, timeout: CHECK_TIMEOUT_MS });
     } catch {
@@ -132,7 +136,7 @@ export async function failingChecks({ repo, cwd, run = promisify(execFile) }) {
       break;
     }
   }
-  return failed;
+  return { failed, ran };
 }
 
 /** Whether an unfinished run of task `n` on revision round `round` has saved
@@ -214,10 +218,10 @@ export async function setupResume({ remote, forkFetch = null, baseBranch, n, res
 export async function saveUnfinished({ remote, n, round, resumed, cwd, repo, run = promisify(execFile), subtype, turns, cost }) {
   const before = await savedChain({ cwd, round, run });
   const runNumber = before.length + 1;
+  const { failed, ran } = await failingChecks({ repo, cwd, run });
   const message = saveMessage({
     n, run: runNumber, round, subtype, turns, cost,
-    checks: await failingChecks({ repo, cwd, run }),
-    checksTotal: repo.checks.length,
+    checks: failed, ran, checksTotal: repo.checks.length,
   });
   await run("git", ["add", "-A"], { cwd, timeout: GIT_TIMEOUT_MS });
   await run("git", ["commit", "--allow-empty", "--message", message], { cwd, timeout: GIT_TIMEOUT_MS });
