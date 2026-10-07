@@ -135,7 +135,7 @@ describe("allowed tools per CODE_ACCESS", () => {
     assert.deepEqual(allowedTools("branch", near, n, login), [
       ...base,
       "Bash(git clone --branch staging https://github.com/MultiAgency/near-agencies.git .)",
-      "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git commit:*)",
+      "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git rm:*)", "Bash(git commit:*)",
       "Bash(git push -u origin task-14)",
       "Bash(npm ci)", "Bash(npm run check)", "Bash(npm test)",
       "Bash(gh pr create:*)", "Bash(gh pr view:*)",
@@ -149,7 +149,7 @@ describe("allowed tools per CODE_ACCESS", () => {
       "Bash(git clone https://github.com/near-builder/near-agencies.git .)",
       "Bash(git fetch https://github.com/MultiAgency/near-agencies.git staging)",
       "Bash(gh repo fork MultiAgency/near-agencies --clone=false)",
-      "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git commit:*)",
+      "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git rm:*)", "Bash(git commit:*)",
       "Bash(git push -u origin task-14)",
       "Bash(npm ci)", "Bash(npm run check)", "Bash(npm test)",
       "Bash(gh pr create:*)", "Bash(gh pr view:*)",
@@ -162,7 +162,7 @@ describe("allowed tools per CODE_ACCESS", () => {
       "Bash(git clone https://github.com/near-builder/legion-social.git .)",
       "Bash(git fetch https://github.com/MultiAgency/legion-social.git staging)",
       "Bash(gh repo fork MultiAgency/legion-social --clone=false)",
-      "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git commit:*)",
+      "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git rm:*)", "Bash(git commit:*)",
       "Bash(git push -u origin task-7)",
       ...legion.checks.map(c => `Bash(${c})`),
       "Bash(gh pr create:*)", "Bash(gh pr view:*)",
@@ -187,6 +187,19 @@ describe("allowed tools per CODE_ACCESS", () => {
       assert.equal(tools.some(t => t.includes("gh api")), false,
         "gh api approves, closes, relabels and deletes whatever the token can; hashing is deliverable_sha256's job");
     }
+  });
+
+  test("a code task can delete files: git rm in every code mode, and never a bare rm (#195)", () => {
+    // kanban-sandbox#74 (#195) had seven files to delete. Write and Edit can't
+    // delete one, and the allowlist had no way to, so two runs ended on a
+    // blocker and handed the task back. git rm touches tracked files in the
+    // task's own clone only, which Edit could already empty.
+    for (const [access, repo] of [["branch", near], ["fork", near], ["fork", legion]]) {
+      const tools = allowedTools(access, repo, n, login);
+      assert.equal(tools.includes("Bash(git rm:*)"), true, `${access} ${repo.name}`);
+      assert.equal(tools.includes("Bash(rm:*)"), false, "a bare rm reaches past the clone");
+    }
+    assert.equal(allowedTools(null, near, n, login).includes("Bash(git rm:*)"), false, "no code mode, no git");
   });
 
   test("no mode hands Claude the whole shell, a force-push or an arbitrary clone", () => {
@@ -274,6 +287,12 @@ describe("the shipping instructions", () => {
       for (const check of repo.checks) {
         assert.equal(text.includes(`\`${check}\``), true, `${repo.name}: ${check}`);
       }
+    }
+  });
+
+  test("the instructions say how to delete a file (#195)", () => {
+    for (const [repo, access] of shipping) {
+      assert.match(ship(access, repo, 14, "near-builder", false).join("\n"), /`git rm <path>`/, `${repo.name} ${access}`);
     }
   });
 

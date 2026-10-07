@@ -304,7 +304,7 @@ export function ship(access, repo, n, login, revision, reviewed, resumed = false
               ? `\`git checkout -b ${branch} FETCH_HEAD\`: the fetch left ${repo.base}'s tip in FETCH_HEAD, and the task branch starts there.`
               : `\`git checkout -b ${branch}\`: it starts at ${repo.base}, which the clone checked out.`,
         ]),
-    `Make the change there: keep it focused, add tests, and make ${pass} pass.`,
+    `Make the change there: keep it focused, add tests, and make ${pass} pass. To delete a file, \`git rm <path>\`: the Write and Edit tools can't delete one.`,
     // Checkpoints (#169): a run that stops unfinished leaves its steps behind
     // for the next run, which starts from the branch those commits sit on.
     `Work in steps, and \`git commit\` locally after each one that leaves ${pass} passing: \`git add\` only that step's files — never the \`.board/\` comment drafts — and write the message so it says what the step did and what it has left — a run that stops unfinished leaves its finished steps somewhere the next run can take them up.`,
@@ -358,7 +358,9 @@ export function allowedTools(access, repo, n, login, reviewed) {
       `Bash(git fetch ${upstream} ${repo.base})`,
       `Bash(gh repo fork ${repo.name} --clone=false)`,
     ] : []),
-    "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git commit:*)",
+    // git rm deletes a tracked file in this clone only (#195): Write and Edit
+    // can't delete one, and a bare rm would reach past the clone.
+    "Bash(git checkout:*)", "Bash(git add:*)", "Bash(git rm:*)", "Bash(git commit:*)",
     `Bash(git push -u origin task-${n})`,
     ...repo.checks.map(c => `Bash(${c})`),
     "Bash(gh pr create:*)", "Bash(gh pr view:*)",
