@@ -60,6 +60,7 @@ for (const name of cases) {
       ...process.env, PATH: `${bin}:${process.env.PATH}`, EVAL_CASE: dir, EVAL_OUT: out,
       REPO, PR: String(spec.pr), HEAD_SHA: spec.head, GH_TOKEN: "eval",
     };
+    execFileSync("bash", ["-e", "-c", config.pull], { cwd: ws, env, stdio: "ignore" });
     execFileSync("bash", ["-e", "-c", config.earlierRounds], { cwd: ws, env, stdio: "ignore" });
 
     const prompt = interpolate(config.prompt, {

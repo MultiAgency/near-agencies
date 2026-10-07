@@ -19,11 +19,18 @@ describe("the ai-review evals read the workflow itself", () => {
     assert.match(config.post, /gh pr comment "\$PR" -R "\$REPO" --body-file summary\.md/);
   });
 
-  test("the review itself can't post a comment, read past its checkout, or keep credentials", () => {
+  test("the review itself runs no command, reads nothing past its checkout, and the checkout keeps no credentials", () => {
+    // Any gh command can print the environment's secrets (--jq 'env.X' needs
+    // no shell), so the model holds no Bash rule at all.
     const tools = splitArgs(config.claudeArgs)[splitArgs(config.claudeArgs).indexOf("--allowedTools") + 1].split(",");
-    assert.ok(!tools.some(t => t.startsWith("Bash(gh pr comment")), tools.join(","));
+    assert.ok(!tools.some(t => t.startsWith("Bash")), tools.join(","));
     for (const name of ["Read", "Grep", "Glob"]) assert.ok(tools.includes(`${name}(./**)`) && !tools.includes(name), name);
-    assert.match(readFileSync(new URL("../.github/workflows/ai-review.yml", import.meta.url), "utf8"), /persist-credentials: false/);
+    assert.match(config.pull, /gh pr diff "\$PR" -R "\$REPO" > review\/pr\.diff/);
+    // Within the checkout step itself, not anywhere in the file.
+    const text = readFileSync(new URL("../.github/workflows/ai-review.yml", import.meta.url), "utf8");
+    const checkout = text.match(/^(\s*)- uses: actions\/checkout@.*\n((?:\1  .*\n|\s*\n)*)/m);
+    assert.ok(checkout, "no checkout step");
+    assert.match(checkout[2], /^\s+persist-credentials: false$/m);
   });
 
   test("the evals know every expression the prompt uses, and refuse an unknown one", () => {
