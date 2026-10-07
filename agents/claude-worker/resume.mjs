@@ -100,8 +100,8 @@ export function savedRun(message) {
  * `{ sha, tree, record }`: the ledger the next run reads its attempt
  * numbers and saved trees from. Commits without a record — the model's own
  * checkpoints — are not saves. `round` keeps a foreign save out. */
-export async function savedChain({ cwd, round, run = promisify(execFile) }) {
-  const { stdout } = await run("git", ["log", "--format=%H%x1f%T%x1f%B%x1e"], { cwd, timeout: GIT_TIMEOUT_MS });
+export async function savedChain({ cwd, round, run = promisify(execFile), from = "HEAD" }) {
+  const { stdout } = await run("git", ["log", "--format=%H%x1f%T%x1f%B%x1e", from], { cwd, timeout: GIT_TIMEOUT_MS });
   const saves = [];
   for (const entry of stdout.split("\x1e")) {
     const [sha, tree, message] = entry.trimStart().split("\x1f");
@@ -236,8 +236,13 @@ export async function saveUnfinished({ remote, n, round, resumed, resumedFrom, c
     const kept = await resumableWork({ remote, n, round, run });
     if (kept) return { skipped: true, tip: kept.tip, record: kept.record };
   }
-  const before = await savedChain({ cwd, round, run });
-  const runNumber = before.length + 1;
+  // The ledger is read from the save this run resumed, not from HEAD: a run
+  // that rewrote its history (a rebase, a reset) may have dropped the earlier
+  // save commits, and counting from its own chain would start the attempts
+  // over and the bound would never trip. Each save records its run number,
+  // so the newest one carries the count forward.
+  const before = await savedChain({ cwd, round, run, from: resumedFrom ?? "HEAD" });
+  const runNumber = (before[0]?.record.run ?? before.length) + 1;
   const { failed, ran } = await failingChecks({ repo, cwd, run });
   const message = saveMessage({
     n, run: runNumber, round, subtype, isError, turns, cost,

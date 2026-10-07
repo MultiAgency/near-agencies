@@ -283,8 +283,6 @@ export async function* query({ options, prompt }) {
 }
 `;
 
-// A resumed run: another checkpoint on top of what it found, then the turn
-// limit again — the tree moves, so the attempts are not spent.
 // A resumed run that rewrites its own history, as agency-builder's fifth run
 // on kanban-sandbox#66 did on 2026-10-07 (a rebase onto staging): the saved
 // commit it started from is replaced, so a plain push is not a fast-forward.
@@ -304,6 +302,8 @@ export async function* query({ options, prompt }) {
 }
 `;
 
+// A resumed run: another checkpoint on top of what it found, then the turn
+// limit again — the tree moves, so the attempts are not spent.
 const SCENARIO_RESUMES = `
 import { execFile } from "node:child_process";
 import { writeFile } from "node:fs/promises";
@@ -602,7 +602,8 @@ describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
       const pushes = (await h.gitCalls()).slice(started).filter(wipPush);
       assert.match(pushes.at(-1), /^git push --force-with-lease=refs\/heads\/wip\/task-58:[0-9a-f]{40} origin HEAD:refs\/heads\/wip\/task-58$/);
       const tip = await h.tipMessage(h.upstream, "wip/task-58");
-      assert.match(tip, /^wip: task #58 run \d+ saved unfinished/, "the save landed");
+      assert.match(tip, /^wip: task #58 run 2 saved unfinished/,
+        "the save landed, and the count carries on from the save it resumed, though the rewrite dropped that commit");
       assert.deepEqual(h.board.state.posts, []);
     } finally {
       await h.cleanup();
