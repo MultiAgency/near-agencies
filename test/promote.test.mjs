@@ -304,6 +304,48 @@ describe("settling assignments", () => {
   });
 });
 
+// #166: `ready` is not a guarded label, so a task whose dependency is still
+// open can carry it (a stranger with triage swaps `blocked` for `ready`), and
+// the claim settlers never looked at the dependencies.
+describe("a claim on a task whose dependencies are not done", () => {
+  const claim = (number, id, login) => ({
+    id, user: { login }, body: "/claim",
+    created_at: "2026-09-30T21:00:00Z", updated_at: "2026-09-30T21:00:00Z",
+    html_url: `https://github.com/MultiAgency/kanban-sandbox/issues/${number}#issuecomment-${id}`,
+  });
+  const replies = (fake, number) => fake.comments.filter(c => c.number === number).map(c => c.body);
+  const dependent = (number, dependsOn, assignees = []) => seatIssue(number, ["ready", "skill:writing", "agent-eligible"], dependsOn, assignees);
+
+  test("a /claim is refused naming the open dependencies, and assigns no one", async () => {
+    const issues = { 10: seatIssue(10, ["in-progress"]), 11: seatIssue(11, ["in-progress"]), 60: dependent(60, [10, 11]) };
+    issues[11].state = "closed";
+    const fake = await runCycle(board({ open: [issues[60]], issues, threads: { 60: [claim(60, 9201, "multi-agency")] } }));
+
+    assert.deepEqual(fake.assigns, []);
+    assert.deepEqual(fake.reactions[9201], [{ user: { login: "multi-agency" }, content: "-1" }]);
+    assert.deepEqual(replies(fake, 60), ["@multi-agency can't claim this task: its dependencies #10 aren't done yet."]);
+    assert.deepEqual(labelWrites(fake, 60), [], "the task is never moved to in-progress");
+  });
+
+  test("a GitHub assignment is removed and refused the same way", async () => {
+    const issues = { 10: seatIssue(10, ["in-progress"]), 61: dependent(61, [10], ["multi-agency"]) };
+    const fake = await runCycle(board({ open: [issues[61]], issues }));
+
+    assert.deepEqual(fake.unassigns, [{ number: 61, login: "multi-agency" }]);
+    assert.deepEqual(replies(fake, 61), ["@multi-agency can't claim this task: its dependencies #10 aren't done yet."]);
+    assert.deepEqual(labelWrites(fake, 61), []);
+  });
+
+  test("once every dependency is closed, a claim is accepted as before", async () => {
+    const issues = { 10: seatIssue(10, ["in-progress"]), 62: dependent(62, [10]) };
+    issues[10].state = "closed";
+    const fake = await runCycle(board({ open: [issues[62]], issues, threads: { 62: [claim(62, 9202, "multi-agency")] } }));
+
+    assert.deepEqual(fake.assigns, [{ number: 62, login: "multi-agency" }]);
+    assert.ok(replies(fake, 62)[0].startsWith("Claimed by @multi-agency."), replies(fake, 62)[0]);
+  });
+});
+
 describe("tidying closed seats", () => {
   test("a closed seat keeps none of ready, blocked or in-progress", async () => {
     const issues = {
@@ -418,8 +460,10 @@ describe("closing a seat on its handoff", () => {
 
 describe("refusing a claim on one's own delivered work", () => {
   // skill.md §2: don't claim the review of a task you delivered. The review
-  // seat's dependency #40 was delivered by @jlwaugh.
-  const dependency = (assignees = []) => seatIssue(40, [], [], assignees);
+  // seat's dependency #40 was delivered by @jlwaugh, so it is closed: a task
+  // is ready only once its dependencies are done, and a claim on one whose
+  // dependencies are open is refused before this rule is asked (#166).
+  const dependency = (assignees = []) => ({ ...seatIssue(40, [], [], assignees), state: "closed", closed_at: "2026-09-30T20:30:00Z" });
   const record = (id, by, login) => ({
     id, user: { login: by }, body: `Claimed by @${login}. Once the work is signed off, 1 USDC is paid to \`x.testnet\`.`,
     created_at: "2026-09-30T20:00:00Z", updated_at: "2026-09-30T20:00:00Z",

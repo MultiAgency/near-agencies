@@ -55,7 +55,10 @@ const serveDependency = (assignees = [], records = [], closedAt = null) => {
       return json({
         number: 10,
         assignees: assignees.map(login => ({ login })),
-        ...(closedAt ? { state: "closed", closed_at: closedAt } : {}),
+        // A claimable task's dependencies are done, so it reads closed; a
+        // close time is given only where a test needs the closing handoff.
+        state: "closed",
+        ...(closedAt ? { closed_at: closedAt } : {}),
       });
     }
     if (get && u.pathname === "/repos/MultiAgency/kanban-sandbox/issues/10/comments") return json(records);
