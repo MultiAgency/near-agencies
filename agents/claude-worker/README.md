@@ -99,10 +99,10 @@ own code — never the model — commits whatever the clone still holds
 uncommitted (the drafts Claude writes for its comments and the pull request
 body, kept in `.board/` as the instructions say, are never staged) and
 pushes the branch to `wip/task-N` on the remote the delivery would use,
-before the clone is removed. A run that resumed pushes under a lease on the tip it
-started from (`--force-with-lease`): if it rewrote its own history (a rebase
-onto a newer base, say), its save still replaces the one it resumed, and
-nothing anyone else saved since is ever overwritten. A run that found `wip/task-N` but could not
+before the clone is removed. A run that resumed but left the saved branch (rewrote its
+history, or checked out another commit) saves a merge of its own work and
+the save it resumed, so the push stays a fast-forward and no save is ever
+overwritten. A run that found `wip/task-N` but could not
 set up from it starts no model run at all: a run from the base branch could
 neither save (pushing would overwrite the saved work it never built on) nor
 count toward the attempts, so it would be paid for and repeated with nothing

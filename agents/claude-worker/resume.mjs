@@ -258,20 +258,32 @@ export async function saveUnfinished({ remote, n, round, resumed, resumedFrom, c
   const drafts = [".board", "deliverable.md", "handoff.md", "pr-body.md"];
   await run("git", ["add", "-A", "--", ".", ...drafts.map(d => `:!${d}`)], { cwd, timeout: GIT_TIMEOUT_MS });
   await run("git", ["commit", "--allow-empty", "--message", message], { cwd, timeout: GIT_TIMEOUT_MS });
+  // A run that started from the saved branch may have left it: rewritten its
+  // history, or checked out another commit altogether. Its save must still
+  // land, and must never drop the saves it resumed, so when HEAD no longer
+  // descends from the resumed tip, the save becomes a merge of both: the tree
+  // is this run's, the first parent its own history, the second the resumed
+  // save. The push stays a fast-forward, no save is ever overwritten, and a
+  // push the remote refuses (someone else saved meanwhile) still hands back.
+  if (resumedFrom && !await isAncestor({ cwd, run, ancestor: resumedFrom })) {
+    const { stdout: merged } = await run("git", ["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-p", resumedFrom, "-m", message], { cwd, timeout: GIT_TIMEOUT_MS });
+    await run("git", ["reset", "--soft", merged.trim()], { cwd, timeout: GIT_TIMEOUT_MS });
+  }
   const { stdout } = await run("git", ["rev-parse", "HEAD^{tree}"], { cwd, timeout: GIT_TIMEOUT_MS });
   const tree = stdout.trim();
-  // A run that started from the saved branch may have rewritten its own
-  // history (a rebase onto a newer base, an amended commit), so a plain push
-  // can be refused as not a fast-forward: that is this run's own work, and it
-  // replaces the save it started from, but only while the remote branch still
-  // stands where this run found it (the lease), so nothing anyone else saved
-  // is overwritten.
-  const mode = !resumed ? ["--force"]
-    : resumedFrom ? [`--force-with-lease=refs/heads/${wipBranchOf(n)}:${resumedFrom}`]
-    : [];
-  const args = ["push", ...mode, "origin", `HEAD:refs/heads/${wipBranchOf(n)}`];
+  const args = ["push", ...(resumed ? [] : ["--force"]), "origin", `HEAD:refs/heads/${wipBranchOf(n)}`];
   await run("git", args, { cwd, timeout: GIT_TIMEOUT_MS });
   return { run: runNumber, tree, previousTree: before[0]?.tree ?? null, message };
+}
+
+/** Whether `ancestor` is HEAD or one of its ancestors in the clone. */
+async function isAncestor({ cwd, run, ancestor }) {
+  try {
+    await run("git", ["merge-base", "--is-ancestor", ancestor, "HEAD"], { cwd, timeout: GIT_TIMEOUT_MS });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** The tip of `task-<n>` on the delivery remote: its commit id, `null` when

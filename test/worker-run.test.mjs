@@ -250,6 +250,8 @@ async function harness() {
       await execFile("git", ["fetch", "--depth=1", remote, branch], { cwd: seed });
       return (await execFile("git", ["show", "-s", "--format=%B", "FETCH_HEAD"], { cwd: seed })).stdout;
     },
+    parentsOf: async (remote, branch) =>
+      (await execFile("git", ["--git-dir", remote, "rev-list", "--parents", "-n", "1", branch])).stdout.trim().split(" ").length - 1,
     cleanup: async () => {
       await board.close();
       await rm(dir, { recursive: true, force: true });
@@ -527,8 +529,8 @@ describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
       assert.match(prompt, /multiagency-run: /, "with the run's record in it");
       const pushes = (await h.gitCalls()).filter(wipPush);
       assert.equal(pushes.length, pushesBefore + 1, "the resumed save pushed once more");
-      assert.match(pushes.at(-1), /^git push --force-with-lease=refs\/heads\/wip\/task-58:[0-9a-f]{40} origin HEAD:refs\/heads\/wip\/task-58$/,
-        "under a lease on the tip it resumed: it replaces only the save it started from");
+      assert.match(pushes.at(-1), /^git push origin HEAD:refs\/heads\/wip\/task-58$/,
+        "no force: the remote tip is this chain's own ancestor");
       const tip = await h.tipMessage(h.upstream, "wip/task-58");
       assert.match(tip, /^wip: task #58 run 2 saved unfinished/);
       assert.deepEqual(h.board.state.posts, [], "progress keeps the attempts unspent");
@@ -592,7 +594,7 @@ describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
     }
   });
 
-  test("a resumed run that rewrote its history still saves, under a lease on the tip it started from", async () => {
+  test("a resumed run that rewrote its history still saves, as a merge that keeps the save it resumed", async () => {
     const h = await harness();
     try {
       await h.spawn(SCENARIO_STOPS);
@@ -600,7 +602,8 @@ describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
       const { stdout } = await h.spawn(SCENARIO_RESUMES_REWRITES);
       assert.equal(/handed back/.test(stdout), false, "a rewritten history is this run's own work: no hand-back");
       const pushes = (await h.gitCalls()).slice(started).filter(wipPush);
-      assert.match(pushes.at(-1), /^git push --force-with-lease=refs\/heads\/wip\/task-58:[0-9a-f]{40} origin HEAD:refs\/heads\/wip\/task-58$/);
+      assert.match(pushes.at(-1), /^git push origin HEAD:refs\/heads\/wip\/task-58$/, "a fast-forward: nothing forced");
+      assert.equal(await h.parentsOf(h.upstream, "wip/task-58"), 2, "the save is a merge of this run's work and the save it resumed");
       const tip = await h.tipMessage(h.upstream, "wip/task-58");
       assert.match(tip, /^wip: task #58 run 2 saved unfinished/,
         "the save landed, and the count carries on from the save it resumed, though the rewrite dropped that commit");
