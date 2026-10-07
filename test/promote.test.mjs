@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, test } from "node:test";
+import { readFileSync } from "node:fs";
 
 process.env.GITHUB_TOKEN = "test-token";
-const { cycle, coordinatorHealth } = await import("../lib/coordinator.mjs");
-const { fence } = await import("../lib/github.mjs");
+const { cycle, coordinatorHealth, releaseDecision } = await import("../lib/coordinator.mjs");
+const { fence, fenced } = await import("../lib/github.mjs");
+const { seat, handoffProblem } = await import("../lib/seats.mjs");
+const { byGithub } = await import("../lib/roster.mjs");
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
@@ -62,6 +65,8 @@ const board = ({ open = [], closes = [], issues = {}, closedByLabel = {}, thread
       state.reactions[id] = [...(state.reactions[id] ?? []), { user: { login: "multi-agency" }, content: JSON.parse(options.body).content }];
       return json({});
     }
+    const commentRead = u.pathname.match(`${REPO}/issues/comments/(\\d+)$`);
+    if (commentRead && method === "GET" && commentRead[1] === "404404") return json({ message: "Not Found" }, 404);
     const assignees = u.pathname.match(`${REPO}/issues/(\\d+)/assignees$`);
     if (assignees) {
       const login = JSON.parse(options.body).assignees[0];
@@ -336,6 +341,21 @@ describe("a claim on a task whose dependencies are not done", () => {
     assert.deepEqual(labelWrites(fake, 61), []);
   });
 
+  test("a dependency a stranger closed is reopened and still blocks the claim, as it blocks promote", async () => {
+    const issues = { 10: { ...seatIssue(10, ["in-progress"]), state: "closed", closed_at: "2026-09-30T20:00:00Z", closed_by: { login: "stranger" } }, 63: dependent(63, [10]) };
+    const fake = await runCycle(board({ open: [issues[63]], issues, threads: { 63: [claim(63, 9203, "multi-agency")] } }));
+
+    assert.deepEqual(fake.assigns, []);
+    assert.ok(fake.patches.some(p => p.number === 10 && p.state === "open"), "the stranger's close is undone");
+    assert.deepEqual(replies(fake, 63), ["@multi-agency can't claim this task: its dependencies #10 aren't done yet."]);
+  });
+
+  test("a dependency the bot closed counts as done", async () => {
+    const issues = { 10: { ...seatIssue(10, ["in-progress"]), state: "closed", closed_at: "2026-09-30T20:00:00Z", closed_by: { login: "multi-agency" } }, 64: dependent(64, [10]) };
+    const fake = await runCycle(board({ open: [issues[64]], issues, threads: { 64: [claim(64, 9204, "multi-agency")] } }));
+    assert.deepEqual(fake.assigns, [{ number: 64, login: "multi-agency" }]);
+  });
+
   test("once every dependency is closed, a claim is accepted as before", async () => {
     const issues = { 10: seatIssue(10, ["in-progress"]), 62: dependent(62, [10]) };
     issues[10].state = "closed";
@@ -408,6 +428,56 @@ describe("releasing a stale claim", () => {
     assert.ok(released(second, 75), "thirty hours into a round nobody answered");
   });
 
+  const pinned = (number, id, url, at) => said(number, id, "jlwaugh", "**Handoff:** done\n\n" + fence("handoff", { payout: { account_id: "reviewer.agency.testnet" }, deliverable: { url, sha256: "0".repeat(64) } }), at);
+
+  test("a handoff whose deliverable can never be read holds nothing: a malformed link, a deleted comment", async () => {
+    for (const [number, url] of [[77, "not-a-link"], [78, "https://github.com/MultiAgency/kanban-sandbox/issues/78#issuecomment-404404"]]) {
+      const thread = [claimedRecord(number, 9400 + number, ago(72)), pinned(number, 9500 + number, url, ago(71))];
+      const seat = taken(number, thread, { auto: true });
+      const fake = await runCycle(board({ open: [seat], issues: { [number]: seat }, threads: { [number]: thread } }));
+      assert.ok(released(fake, number), url);
+      assert.ok(fake.comments.some(c => c.number === number && /can't close the task: the deliverable/.test(c.body)), `${url} is refused, not thrown`);
+    }
+  });
+
+  test("a deliverable read that fails for now holds the claim for the next sweep", async () => {
+    const url = "https://github.com/MultiAgency/kanban-sandbox/issues/79#issuecomment-777";
+    const thread = [claimedRecord(79, 9479, ago(72)), pinned(79, 9579, url, ago(71))];
+    const seat = taken(79, thread, { auto: true });
+    // The decision alone: the stub answers the deliverable read with a 500.
+    globalThis.fetch = board({ open: [seat], issues: { 79: seat }, threads: { 79: thread } }).fetch;
+    const decision = await releaseDecision({ ...seat, number: 79, updatedAt: seat.updated_at, assignees: ["jlwaugh"], dependsOn: [] });
+    assert.equal(decision.release, false);
+    assert.match(decision.why, /a handoff that passes the checks holds it/);
+  });
+
+  // A review seat: the reviewer claimed it three days ago and is waiting on a
+  // revision round of the work seat it reviews.
+  const reviewSeat = (number, thread) => {
+    const seat = seatIssue(number, ["in-progress", "skill:review", "agent-eligible"], [40], ["jlwaugh"]);
+    seat.updated_at = ago(72);
+    return seat;
+  };
+  const workSeat = () => ({ ...seatIssue(40, ["in-progress"], [], ["writer"]), updated_at: ago(1) });
+
+  test("a review seat is not released while its reviewer waits on a revision round", async () => {
+    const routed = said(40, 9601, "multi-agency", "**Changes requested** by @jlwaugh, reviewing in #80.\n\n" + fence("changes", { review: 80, requested_by: "jlwaugh", request: "u" }), ago(2));
+    const notice = said(80, 9602, "multi-agency", "@jlwaugh, round 2 of #40 is in: https://example.test/x. It passed the handoff checks: sign it off here, or ask for another round.", ago(2));
+    const claim = claimedRecord(80, 9600, ago(72));
+
+    const seat = reviewSeat(80);
+    const idle = await runCycle(board({ open: [seat], issues: { 80: seat, 40: workSeat() }, threads: { 80: [claim], 40: [] } }));
+    assert.ok(released(idle, 80), "no round under way: released after the limit");
+
+    const withRound = reviewSeat(81);
+    const underWay = await runCycle(board({ open: [withRound], issues: { 81: withRound, 40: workSeat() }, threads: { 81: [claimedRecord(81, 9610, ago(72))], 40: [{ ...routed, id: 9611, body: routed.body.replace("#80", "#81").replace('"review": 80', '"review": 81') }] } }));
+    assert.equal(released(underWay, 81), false, "the routed round on the work seat restarts its reviewer's clock");
+
+    const withNotice = reviewSeat(82);
+    const noticed = await runCycle(board({ open: [withNotice], issues: { 82: withNotice, 40: workSeat() }, threads: { 82: [claimedRecord(82, 9620, ago(72)), { ...notice, id: 9621, body: notice.body.replace("#40", "#40") }], 40: [] } }));
+    assert.equal(released(noticed, 82), false, "the round's arrival notice restarts it too");
+  });
+
   test("a handoff, a claim record or a round from a stranger counts for nothing", async () => {
     const thread = [
       claimedRecord(76, 9314, ago(72)),
@@ -417,6 +487,39 @@ describe("releasing a stale claim", () => {
     const seat = taken(76, thread);
     const fake = await runCycle(board({ open: [seat], issues: { 76: seat }, threads: { 76: thread } }));
     assert.ok(released(fake, 76));
+  });
+});
+
+// The real shapes, captured 2026-10-05 (#130) and trimmed to what the sweep
+// reads: kanban-sandbox#58 and its comments — claimed by @agency-builder at
+// 16:21:37Z, its handoff at 16:35:41Z — as the board served them
+// (test/fixtures/auto-issue-58*.json).
+describe("releasing the captured task #58", () => {
+  const fixture = name => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
+  const issue58 = fixture("auto-issue-58.json");
+  const thread = fixture("auto-issue-58-comments.json");
+  const CLAIMED = Date.parse("2026-10-05T16:21:37Z");
+  const decide = async (comments, now) => {
+    globalThis.fetch = board({ open: [issue58], issues: { 58: issue58 }, threads: { 58: comments } }).fetch;
+    return releaseDecision(seat(issue58), { now });
+  };
+  const hours = h => CLAIMED + h * 3600_000;
+
+  test("with no handoff the claim stands for 24 hours from its record, whatever was said since", async () => {
+    const claimOnly = thread.filter(c => /^(\/claim|Claimed by)/.test(c.body.trim()));
+    assert.equal(claimOnly.length, 2, "the real /claim and the bot's record");
+    assert.equal((await decide(claimOnly, hours(23))).release, false);
+    assert.equal((await decide(claimOnly, hours(25))).release, true);
+    // The issue's own clock reads the last comment: not the claim's.
+    const chatter = [...claimOnly, { ...thread[2], id: 1, body: "Still on it.", created_at: new Date(hours(24)).toISOString() }];
+    assert.equal((await decide(chatter, hours(25))).release, true, "a comment an hour ago restarts nothing");
+  });
+
+  test("the real handoff, a pull request delivery of an auto task, holds the claim only if it passes", async () => {
+    const decision = await decide(thread, hours(48));
+    const handoff = thread.find(c => fenced(c.body, "handoff"));
+    const problem = await handoffProblem(fenced(handoff.body, "handoff"), byGithub("agency-builder"));
+    assert.equal(decision.release, problem !== null, `${problem ?? "the handoff passes"}: ${decision.why}`);
   });
 });
 
