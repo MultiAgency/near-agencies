@@ -1119,6 +1119,21 @@ describe("claiming an auto job's task on its source issue (#189)", () => {
     assert.doesNotMatch(regThreads[SOURCE].at(-1).body, /can't claim/);
   });
 
+  test("a source issue that can't be read for its claimant falls back to the board's own assignee, not a thrown error (#189 F1)", async () => {
+    reset();
+    boardIssues[890] = autoEpic(890, 900);
+    boardIssues[900] = autoTask(900, 890, { assignees: ["agency-builder"] });
+    boardThreads[`${BOARD}#900`] = [];
+    // No registry entry for the source issue at all: GET 404s, the same as a
+    // deleted issue or GitHub down, so engagement-state.mjs's sourceClaimedBy
+    // must catch it rather than let it throw loadEngagement out of the cycle.
+    regIssues[REG] = [];
+    serveBoard();
+    const engagement = await loadEngagement(890);
+    const task = engagement.members.find(m => m.issue === 900);
+    assert.deepEqual(task.claimedBy, ["agency-builder"], "the board's own assignee is the fallback");
+  });
+
   test("refuseLateSourceClaims answers a late /claim on the issue \"claimed first\", and one on the board points back to it", async () => {
     reset();
     boardIssues[890] = autoEpic(890, 900);
@@ -1142,7 +1157,7 @@ describe("claiming an auto job's task on its source issue (#189)", () => {
     boardIssues[900] = autoTask(900, 890, { assignees: ["agency-builder"] });
     boardThreads[`${BOARD}#900`] = [];
     regIssues[REG] = [registryIssue(600, { assignees: ["agency-builder"] })];
-    regTimeline[SOURCE] = [{ event: "assigned", actor: { login: "agency-builder" }, created_at: "2000-01-01T00:00:00Z" }];
+    regTimeline[SOURCE] = [{ event: "assigned", actor: { login: "agency-builder" }, assignee: { login: "agency-builder" }, created_at: "2000-01-01T00:00:00Z" }];
     serveBoard();
     await releaseIfStale(seat(boardIssues[900]));
     assert.equal(boardIssues[900].assignees.length, 0);
@@ -1156,7 +1171,7 @@ describe("claiming an auto job's task on its source issue (#189)", () => {
     reset();
     boardIssues[900] = autoTask(900, 890, { assignees: ["agency-builder"] });
     regIssues[REG] = [registryIssue(600, { assignees: ["agency-builder"] })];
-    regTimeline[SOURCE] = [{ event: "assigned", actor: { login: "agency-builder" }, created_at: "2026-10-05T03:00:00Z" }];
+    regTimeline[SOURCE] = [{ event: "assigned", actor: { login: "agency-builder" }, assignee: { login: "agency-builder" }, created_at: "2026-10-05T03:00:00Z" }];
     serveBoard();
     const atIssue = await releaseDecision(seat(boardIssues[900]));
     assert.equal(atIssue.since, Date.parse("2026-10-05T03:00:00Z"), "the issue's own assignment is the clock");
@@ -1172,6 +1187,22 @@ describe("claiming an auto job's task on its source issue (#189)", () => {
     const fallback = await releaseDecision(seat(boardIssues[900]));
     assert.equal(fallback.since, Date.parse("2000-01-01T00:00:00Z"));
     assert.equal(fallback.release, true);
+  });
+
+  test("a later assignee's own \"assigned\" event, refused and undone by refuseLateSourceClaims, does not restart the clock (#189 F4)", async () => {
+    reset();
+    boardIssues[900] = autoTask(900, 890, { assignees: ["agency-builder"] });
+    regIssues[REG] = [registryIssue(600, { assignees: ["agency-builder"] })];
+    // The accepted claimant's own event is old; a later, refused assignee's
+    // event — GitHub records it whether or not this code then undoes it — is
+    // newer, and must not outrank the claimant's own when it is not theirs.
+    regTimeline[SOURCE] = [
+      { event: "assigned", actor: { login: "agency-builder" }, assignee: { login: "agency-builder" }, created_at: "2000-01-01T00:00:00Z" },
+      { event: "assigned", actor: { login: "latecomer" }, assignee: { login: "latecomer" }, created_at: "2026-10-05T03:00:00Z" },
+    ];
+    serveBoard();
+    const decision = await releaseDecision(seat(boardIssues[900]));
+    assert.equal(decision.since, Date.parse("2000-01-01T00:00:00Z"), "only the accepted claimant's own assignment sets the clock");
   });
 });
 
