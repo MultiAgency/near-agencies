@@ -3,7 +3,7 @@ import { afterEach, describe, test } from "node:test";
 
 process.env.GITHUB_TOKEN = "test-token";
 const { digest, fence, fenced } = await import("../lib/github.mjs");
-const { unreadableHandoff } = await import("../lib/seats.mjs");
+const { handoffProblem, unreadableHandoff } = await import("../lib/seats.mjs");
 const { pendingHandoff } = await import("../lib/coordinator.mjs");
 const { prepareHandoff } = await import("../lib/handoff.mjs");
 
@@ -34,6 +34,30 @@ describe("a handoff that cannot be read", () => {
   test("a readable handoff, and ordinary comments, are not flagged", () => {
     assert.equal(unreadableHandoff(block({ payout: { account_id: "a.testnet" } })), null);
     assert.equal(unreadableHandoff("Thanks, looking at it now."), null);
+  });
+});
+
+describe("handoffProblem on an auto job's task, whose claimant needs no roster (#189 F3)", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = realFetch; });
+  const url = "https://github.com/MultiAgency/kanban-sandbox/issues/900#issuecomment-5";
+  const serve = body => {
+    globalThis.fetch = async u => new URL(u).pathname.endsWith("/issues/comments/5")
+      ? new Response(JSON.stringify({ id: 5, body }))
+      : new Response("{}", { status: 404 });
+  };
+
+  test("an off-roster claimant's handoff with no edit since passes", async () => {
+    const body = "**Deliverable**\n\nDone.";
+    serve(body);
+    const problem = await handoffProblem({ links: [url], deliverable: { url, sha256: digest(body) }, verification: ["Check it"] }, null, { source: true });
+    assert.equal(problem, null);
+  });
+
+  test("an off-roster claimant's pinned deliverable, edited since, is still caught: roster or not, the pin protects it", async () => {
+    serve("**Deliverable**\n\nEdited after the handoff pinned it.");
+    const problem = await handoffProblem({ links: [url], deliverable: { url, sha256: digest("**Deliverable**\n\nDone.") }, verification: ["Check it"] }, null, { source: true });
+    assert.match(problem, /edited after the handoff/);
   });
 });
 
@@ -233,5 +257,22 @@ describe("preparing a handoff", () => {
     const long = "An opening line that runs well past the forty characters a reader needs here";
     github(task(["in-progress", "skill:research"]), { user: { login: "multi-agency" }, body: long });
     assert.match((await ask()).error, /^That link is to your comment starting `An opening line that runs well past[^`]*…`\. Use the one that starts with \*\*Deliverable\*\*\.$/);
+  });
+
+  test("an auto job's task needs no roster: a claimant off it still gets a handoff, with no payout account (#189 F3)", async () => {
+    const autoTerms = fence("terms", { engagement: 32, amount: "0", source: "MultiAgency/kanban-sandbox#900" });
+    const autoTask = task(["in-progress", "skill:research"], {
+      body: `Part of job #32.\n\nDepends on:\n- [ ] #36\n- [ ] #37\n\n${autoTerms}`,
+      assignees: [{ login: "stranger" }],
+    });
+    github(autoTask, { user: { login: "stranger" }, body: work });
+    const { comment, problem, task: t } = await ask();
+    assert.equal(problem, null);
+    assert.equal(t.claimant, "stranger");
+    assert.deepEqual(fenced(comment, "handoff"), {
+      links: [deliverable],
+      deliverable: { url: deliverable, sha256: digest(work) },
+      verification: ["Check each claim's link", "Check the recovery section"],
+    });
   });
 });

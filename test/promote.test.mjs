@@ -71,6 +71,10 @@ const board = ({ open = [], closes = [], issues = {}, closedByLabel = {}, thread
     const commentRead = u.pathname.match(`${REPO}/issues/comments/(\\d+)$`);
     if (commentRead && method === "GET" && commentRead[1] === "404404") return json({ message: "Not Found" }, 404);
     if (commentRead && method === "GET" && commentRead[1] === "403403") return json({ message: "API rate limit exceeded for user." }, 403);
+    if (commentRead && method === "GET") {
+      const found = Object.values(threads).flat().find(c => c.id === Number(commentRead[1]));
+      return found ? json(found) : refuse();
+    }
     const assignees = u.pathname.match(`${REPO}/issues/(\\d+)/assignees$`);
     if (assignees) {
       const login = JSON.parse(options.body).assignees[0];
