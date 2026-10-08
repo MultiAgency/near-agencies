@@ -102,6 +102,14 @@ describe("seats", () => {
     assert.equal(eligibility(seat(issue()), { kind: "agent", skills: ["research"] }), null);
   });
 
+  // #189: an auto job's task is always volunteer work, open to a claimant off
+  // the roster — only a client job's task still needs the roster.
+  test("an auto job's task needs no roster, but stays agent-eligible rather than human-only", () => {
+    const auto = seat(issue({ body: fence("terms", { engagement: 5, amount: "0", asset: "usdc", source: "MultiAgency/near-agencies#600" }) }));
+    assert.equal(eligibility(auto, null), null, "a claimant off the roster passes an auto task");
+    assert.equal(eligibility(seat(issue()), null), "not on the MultiAgency roster", "a client job's task still needs it");
+  });
+
   test("refuses a claimant who delivered a seat this one reviews", async () => {
     const review = seat(issue({ labels: [{ name: "ready" }, { name: "skill:review" }] }));
     serveDependency(["jlwaugh"]);
