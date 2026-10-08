@@ -215,6 +215,7 @@ function serveBoard() {
         user: { login: BOT },
         state: "open",
         html_url: `https://github.com/${BOARD}/issues/${800 + created.length}`,
+        assignees: [],
         ...opened,
         labels: opened.labels.map(name => ({ name })),
       };
@@ -607,6 +608,49 @@ describe("opening auto jobs", () => {
     await settle();
     assert.equal(created.length, 6);
     assert.equal(fenced(created[4].body, "engagement").source, `${REG}#630`);
+  });
+});
+
+describe("the house agent needs no claim (#189)", () => {
+  afterEach(() => { delete process.env.HOUSE_AGENT; });
+
+  test("HOUSE_AGENT is assigned on the source issue when the job opens, and the next claim sweep mirrors it onto the board task", async () => {
+    reset();
+    roles.jlwaugh = "admin";
+    regIssues[REG] = [registryIssue(600)];
+    regTimeline[`${REG}#600`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
+    serveBoard();
+    process.env.HOUSE_AGENT = "agency-builder";
+    await settle();
+    assert.deepEqual(regIssues[REG][0].assignees.map(a => a.login), ["agency-builder"]);
+    const task = created[1];
+    assert.equal(task.assignees.length, 0, "the board task is mirrored by the next claim sweep, not this one");
+    await settleSourceClaim(seat(boardIssues[task.number]), BOT);
+    assert.deepEqual(boardIssues[task.number].assignees.map(a => a.login), ["agency-builder"]);
+    assert.ok(boardIssues[task.number].labels.some(l => l.name === "in-progress"));
+  });
+
+  test("with HOUSE_AGENT unset, the source issue is assigned to no one", async () => {
+    reset();
+    roles.jlwaugh = "admin";
+    regIssues[REG] = [registryIssue(601)];
+    regTimeline[`${REG}#601`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
+    serveBoard();
+    await settle();
+    assert.equal(regIssues[REG][0].assignees.length, 0);
+  });
+
+  test("someone already claimed it before a restart runs: the house agent does not override", async () => {
+    reset();
+    roles.jlwaugh = "admin";
+    regIssues[REG] = [registryIssue(600)];
+    regTimeline[`${REG}#600`] = [labeled("jlwaugh", "2026-10-05T00:01:00Z")];
+    serveBoard();
+    await settle(); // opens the job, HOUSE_AGENT unset
+    regIssues[REG][0].assignees = [{ login: "someone" }];
+    process.env.HOUSE_AGENT = "agency-builder";
+    await settle(); // a restart: the job already stands, and finishAutoJob runs again
+    assert.deepEqual(regIssues[REG][0].assignees.map(a => a.login), ["someone"]);
   });
 });
 
