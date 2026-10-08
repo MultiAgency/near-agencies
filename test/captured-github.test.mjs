@@ -23,6 +23,13 @@ describe("a captured task issue", () => {
     assert.deepEqual(s.dependsOn, []);
   });
 
+  // repoAssign and repoUnassign (lib/github.mjs, #189, #212 F7) read and
+  // write this same field, on another repository's issue: GitHub returns it
+  // shaped exactly like this, a login per assignee, whichever repository asks.
+  test("carries its assignee the same shape repoAssign and repoUnassign hand back", () => {
+    assert.deepEqual(task.assignees.map(a => a.login), ["agency-builder"]);
+  });
+
   test("appears in the open task list as claimed work on its job", () => {
     const [entry] = taskList([seat(task)]);
     assert.equal(entry.job, 57);
