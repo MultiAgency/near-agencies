@@ -12,6 +12,7 @@ const captured = name => JSON.parse(readFileSync(new URL(`./fixtures/github/${na
 const task = captured("task-issue-58.json");
 const job = captured("job-issue-57.json");
 const pull = captured("pull-139.json");
+const reactions = captured("comment-5998533446-reactions.json");
 
 describe("a captured task issue", () => {
   test("reads as a seat: terms, labels, skills, assignee", () => {
@@ -58,6 +59,20 @@ describe("a captured comment list", () => {
       for (const field of ["id", "body", "html_url", "created_at", "updated_at"]) assert.ok(field in c, `comment lacks ${field}`);
       assert.equal(typeof c.user.login, "string");
     }
+  });
+});
+
+describe("a captured reaction list", () => {
+  // repoReactionsOf (lib/github.mjs, #212 F5) returns this array, for
+  // whichever repository's comment it is asked for; repoReact creates one
+  // element of it, the same shape.
+  test("is an array of reactions with the fields repoReact and repoReactionsOf read", () => {
+    assert.ok(Array.isArray(reactions) && reactions.length > 0);
+    for (const r of reactions) {
+      for (const field of ["id", "content", "created_at"]) assert.ok(field in r, `reaction lacks ${field}`);
+      assert.equal(typeof r.user.login, "string");
+    }
+    assert.equal(reactions[0].content, "+1");
   });
 });
 
