@@ -76,7 +76,10 @@ async function tick() {
 }
 
 async function claim(seat) {
-  if (eligibility(seat, builder) || !profileFor(seat)) return;
+  // An auto job's task claims only on its source issue, never on the board
+  // (#189): a /claim here is refused with a pointer to it, so this connector
+  // leaves it for the house agent or a claim made there instead.
+  if (seat.terms?.source || eligibility(seat, builder) || !profileFor(seat)) return;
   const thread = await comments(seat.number);
   if (thread.some(c => c.user.login === login && isClaim(c))) return;
   await comment(seat.number, "/claim");

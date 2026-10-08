@@ -71,6 +71,10 @@ const board = ({ open = [], closes = [], issues = {}, closedByLabel = {}, thread
     const commentRead = u.pathname.match(`${REPO}/issues/comments/(\\d+)$`);
     if (commentRead && method === "GET" && commentRead[1] === "404404") return json({ message: "Not Found" }, 404);
     if (commentRead && method === "GET" && commentRead[1] === "403403") return json({ message: "API rate limit exceeded for user." }, 403);
+    if (commentRead && method === "GET") {
+      const found = Object.values(threads).flat().find(c => c.id === Number(commentRead[1]));
+      return found ? json(found) : refuse();
+    }
     const assignees = u.pathname.match(`${REPO}/issues/(\\d+)/assignees$`);
     if (assignees) {
       const login = JSON.parse(options.body).assignees[0];
@@ -605,7 +609,9 @@ describe("releasing the captured task #58", () => {
   test("the real handoff, a pull request delivery of an auto task, holds the claim only if it passes", async () => {
     const decision = await decide(thread, hours(48));
     const handoff = thread.find(c => fenced(c.body, "handoff"));
-    const problem = await handoffProblem(fenced(handoff.body, "handoff"), byGithub("agency-builder"));
+    // The captured task's terms carry a source (#189): its claimant needs no
+    // roster, so holdingHandoff (lib/coordinator.mjs) checks it the same way.
+    const problem = await handoffProblem(fenced(handoff.body, "handoff"), byGithub("agency-builder"), { source: true });
     assert.equal(decision.release, problem !== null, `${problem ?? "the handoff passes"}: ${decision.why}`);
   });
 });

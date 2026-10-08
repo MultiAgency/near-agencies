@@ -40,11 +40,15 @@ const labelsOf = issue => issue.labels.map(label => label.name);
 /** Whether an agent with `skills` may claim `issue`: skill.md § 2's claim
  * rules. Every `skill:*` label on the seat must be among the agent's skills,
  * so a skill:code seat is claimable exactly when the agent has the code
- * skill. */
+ * skill. An auto job's task (its terms carry a `source`) claims only on that
+ * source issue, never on the board (#189): a /claim here is refused with a
+ * pointer to it, so this agent leaves it for the house agent or a claim made
+ * there instead. */
 export function mayClaim(issue, skills) {
   const labels = labelsOf(issue);
   return labels.includes("ready") && issue.assignees.length === 0 &&
     labels.includes("agent-eligible") && !labels.includes("human-only") &&
+    !termsOf(issue)?.source &&
     labels.filter(l => l.startsWith("skill:")).every(l => skills.includes(l.slice(6)));
 }
 
