@@ -324,10 +324,12 @@ exactly as before — reads need no token), `HOUSE_AGENT` (the GitHub login the
 coordinator assigns on an auto job's source issue whenever it stands open
 with no claimant — when the job opens, and again on every later claim sweep
 that finds it so, so a released task or one already `ready` before this was
-set is picked up too — staging: `agency-builder`, which has write on
-near-agencies; unset, an auto job's task waits for someone to claim it on the
-issue, since neither the worker nor the connector claims one on the board,
-§189), and `COORDINATOR` as above: the
+set is picked up too, once `HOUSE_AGENT_GRACE_HOURS` (default 1) have passed
+since the issue last changed, so the sweep right after a release does not
+hand the task straight back to its own just-released claim — staging:
+`agency-builder`, which has write on near-agencies; unset, an auto job's task
+waits for someone to claim it on the issue, since neither the worker nor the
+connector claims one on the board, §189), and `COORDINATOR` as above: the
 coordinator must run in
 exactly one place. The x402 routes stay off unless a facilitator is configured.
 

@@ -52,7 +52,7 @@ const reset = () => {
 };
 
 // A registry issue labelled for the agents, with the events its trigger reads.
-const registryIssue = (number, { title = "Build the internal dashboard", body = "Please build the internal dashboard, volunteer work, this week at the latest.", assignees = [], created_at = "2026-10-05T00:00:00Z", state = "open" } = {}) => ({
+const registryIssue = (number, { title = "Build the internal dashboard", body = "Please build the internal dashboard, volunteer work, this week at the latest.", assignees = [], created_at = "2026-10-05T00:00:00Z", updated_at = created_at, state = "open" } = {}) => ({
   number,
   user: { login: "someone" },
   title,
@@ -60,6 +60,7 @@ const registryIssue = (number, { title = "Build the internal dashboard", body = 
   labels: [{ name: "ready-for-agent" }],
   assignees: assignees.map(login => ({ login })),
   created_at,
+  updated_at,
   html_url: `https://github.com/${REG}/issues/${number}`,
   body,
   pull_request: undefined,
@@ -663,25 +664,48 @@ describe("the house agent needs no claim (#189)", () => {
     labels: [{ name: "ready" }, { name: "skill:code" }, { name: "agent-eligible" }],
   });
 
-  test("a claim sweep on a ready task with no claimant falls to the house agent (#212 F7)", async () => {
+  // hoursAgo/fromNow build timestamps relative to the real clock rather than
+  // a fixed date, since HOUSE_AGENT_GRACE_MS compares against Date.now().
+  const hoursAgo = h => new Date(Date.now() - h * 3600_000).toISOString();
+
+  test("a claim sweep on a ready task with no claimant assigns the house agent, validated like any other assignee on the next sweep (#212 F7, F8)", async () => {
     reset();
     boardIssues[890] = autoEpic(890, 900);
     boardIssues[900] = readyTask(900, 890);
-    regIssues[REG] = [registryIssue(600)];
+    regIssues[REG] = [registryIssue(600, { updated_at: hoursAgo(2) })];
     serveBoard();
     process.env.HOUSE_AGENT = "agency-builder";
     await settleSourceClaim(seat(boardIssues[900]), BOT);
     assert.deepEqual(regIssues[REG][0].assignees.map(a => a.login), ["agency-builder"], "the house agent takes the released or pre-deploy issue");
-    assert.deepEqual(boardIssues[900].assignees.map(a => a.login), ["agency-builder"], "mirrored onto the board task in the same sweep");
+    assert.equal(boardIssues[900].assignees.length, 0, "not accepted at once: the next sweep's assignee check validates it first");
+    assert.ok(boardIssues[900].labels.some(l => l.name === "ready"), "the task waits, still ready, until validated");
+
+    await settleSourceClaim(seat(boardIssues[900]), BOT);
+    assert.deepEqual(boardIssues[900].assignees.map(a => a.login), ["agency-builder"], "mirrored once the assignment passes the same checks any assignee faces");
     assert.ok(boardIssues[900].labels.some(l => l.name === "in-progress"));
-    assert.match(regThreads[SOURCE].at(-1).body, /^Claimed by @agency-builder\./);
+    assert.match(boardThreads[`${BOARD}#900`].at(-1).body, /^Claimed by @agency-builder\./);
+  });
+
+  test("a claim sweep right after a release waits out the grace period before reassigning the house agent (#212 F8)", async () => {
+    reset();
+    boardIssues[890] = autoEpic(890, 900);
+    boardIssues[900] = readyTask(900, 890);
+    // releaseIfStale's own unassign and release comment land on the issue
+    // moments before this sweep runs, so its updated_at is this fresh.
+    regIssues[REG] = [registryIssue(600, { updated_at: hoursAgo(0) })];
+    serveBoard();
+    process.env.HOUSE_AGENT = "agency-builder";
+    await settleSourceClaim(seat(boardIssues[900]), BOT);
+    assert.equal(regIssues[REG][0].assignees.length, 0, "still within the grace period, so nobody is reassigned yet");
+    assert.equal(boardIssues[900].assignees.length, 0);
+    assert.ok(boardIssues[900].labels.some(l => l.name === "ready"), "the task waits for the grace period to pass");
   });
 
   test("with HOUSE_AGENT unset, a claim sweep on a ready task with no claimant leaves it alone", async () => {
     reset();
     boardIssues[890] = autoEpic(890, 900);
     boardIssues[900] = readyTask(900, 890);
-    regIssues[REG] = [registryIssue(600)];
+    regIssues[REG] = [registryIssue(600, { updated_at: hoursAgo(2) })];
     serveBoard();
     await settleSourceClaim(seat(boardIssues[900]), BOT);
     assert.equal(regIssues[REG][0].assignees.length, 0);
@@ -693,11 +717,27 @@ describe("the house agent needs no claim (#189)", () => {
     reset();
     boardIssues[890] = autoEpic(890, 900);
     boardIssues[900] = readyTask(900, 890);
-    regIssues[REG] = [registryIssue(600, { assignees: ["newcomer"] })];
+    regIssues[REG] = [registryIssue(600, { assignees: ["newcomer"], updated_at: hoursAgo(2) })];
     serveBoard();
     process.env.HOUSE_AGENT = "agency-builder";
     await settleSourceClaim(seat(boardIssues[900]), BOT);
     assert.deepEqual(regIssues[REG][0].assignees.map(a => a.login), ["newcomer"]);
+  });
+
+  test("an unmet dependency still refuses the house agent, rather than skipping the check that gates every other claimant (#212 F8)", async () => {
+    reset();
+    boardIssues[889] = { number: 889, state: "open" };
+    boardIssues[890] = autoEpic(890, 900);
+    boardIssues[900] = { ...readyTask(900, 890), body: `${readyTask(900, 890).body}\n\n- [ ] #889` };
+    regIssues[REG] = [registryIssue(600, { updated_at: hoursAgo(2) })];
+    serveBoard();
+    process.env.HOUSE_AGENT = "agency-builder";
+    await settleSourceClaim(seat(boardIssues[900]), BOT); // assigns the house agent on the issue
+    assert.deepEqual(regIssues[REG][0].assignees.map(a => a.login), ["agency-builder"]);
+    await settleSourceClaim(seat(boardIssues[900]), BOT); // the next sweep validates it like any assignee
+    assert.equal(regIssues[REG][0].assignees.length, 0, "refused and unassigned, not blindly accepted");
+    assert.equal(boardIssues[900].assignees.length, 0, "never mirrored onto the board");
+    assert.match(regThreads[SOURCE].at(-1).body, /@agency-builder can't claim this task: its dependencies #889 aren't done yet\./);
   });
 });
 
