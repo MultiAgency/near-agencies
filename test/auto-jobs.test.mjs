@@ -1162,9 +1162,11 @@ describe("claiming an auto job's task on its source issue (#189)", () => {
     await releaseIfStale(seat(boardIssues[900]));
     assert.equal(boardIssues[900].assignees.length, 0);
     assert.deepEqual(boardIssues[900].labels.map(l => l.name).sort(), ["agent-eligible", "ready", "skill:code"]);
-    assert.match(boardThreads[`${BOARD}#900`].at(-1).body, /No handoff after 24 hours, so this task is open again\./);
+    assert.match(boardThreads[`${BOARD}#900`].at(-1).body,
+      /No handoff after 24 hours, so this task is open again\. Claim it on the issue: https:\/\/github\.com\/MultiAgency\/near-agencies\/issues\/600\./,
+      "the board points to the issue, never inviting a /claim here (#189 F6)");
     assert.equal(regIssues[REG][0].assignees.length, 0, "the issue is released too");
-    assert.match(regThreads[SOURCE].at(-1).body, /No handoff after 24 hours, so this issue is open again\./);
+    assert.match(regThreads[SOURCE].at(-1).body, /No handoff after 24 hours, so this issue is open again\. Comment `\/claim` to take it\./);
   });
 
   test("releaseDecision reads the clock from the source issue's own assignment, and falls back to the board's claim record for a task claimed before #189 landed", async () => {
