@@ -605,7 +605,9 @@ describe("releasing the captured task #58", () => {
   test("the real handoff, a pull request delivery of an auto task, holds the claim only if it passes", async () => {
     const decision = await decide(thread, hours(48));
     const handoff = thread.find(c => fenced(c.body, "handoff"));
-    const problem = await handoffProblem(fenced(handoff.body, "handoff"), byGithub("agency-builder"));
+    // The captured task's terms carry a source (#189): its claimant needs no
+    // roster, so holdingHandoff (lib/coordinator.mjs) checks it the same way.
+    const problem = await handoffProblem(fenced(handoff.body, "handoff"), byGithub("agency-builder"), { source: true });
     assert.equal(decision.release, problem !== null, `${problem ?? "the handoff passes"}: ${decision.why}`);
   });
 });

@@ -774,8 +774,13 @@ describe("a spawned cron run of worker.mjs, end to end (#169)", () => {
     try {
       const folder = async () => JSON.parse(await readFile(join(h.dir, "scenario-out", "folder.json"), "utf8"));
       const seat = h.board.state.seats[0];
+      // The captured seat's terms carry a `source`: an auto job's task,
+      // which claims only on its source issue, never on the board (#189).
+      // Strip it for this claim scenario, which is about .board/ handling,
+      // not that claim.
+      const claimableBody = seat.body.replace(/,\n\s*"source": "[^"]*"/, "");
       // A claim run clones nothing: the worker makes the drafts folder.
-      h.board.state.seats = [{ ...seat, assignees: [], labels: [{ name: "ready" }, { name: "agent-eligible" }, { name: "skill:code" }] }];
+      h.board.state.seats = [{ ...seat, body: claimableBody, assignees: [], labels: [{ name: "ready" }, { name: "agent-eligible" }, { name: "skill:code" }] }];
       const claimed = await h.spawn(SCENARIO_FOLDER);
       assert.match(claimed.stdout, /worker: claim #/);
       assert.deepEqual(await folder(), [".board"]);
