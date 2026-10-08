@@ -652,6 +652,53 @@ describe("the house agent needs no claim (#189)", () => {
     await settle(); // a restart: the job already stands, and finishAutoJob runs again
     assert.deepEqual(regIssues[REG][0].assignees.map(a => a.login), ["someone"]);
   });
+
+  // A task `ready` with no claimant and no assignee on its issue — released
+  // by releaseIfStale, or already `ready` from before HOUSE_AGENT was set —
+  // reaches no claimer on the board (#212 F2) and no fresh finishAutoJob call
+  // (the job already opened): only settleSourceClaim's own sweep can pick it
+  // up again (#212 F7).
+  const readyTask = (taskNumber, epicNumber) => ({
+    ...autoTask(taskNumber, epicNumber, { assignees: [] }),
+    labels: [{ name: "ready" }, { name: "skill:code" }, { name: "agent-eligible" }],
+  });
+
+  test("a claim sweep on a ready task with no claimant falls to the house agent (#212 F7)", async () => {
+    reset();
+    boardIssues[890] = autoEpic(890, 900);
+    boardIssues[900] = readyTask(900, 890);
+    regIssues[REG] = [registryIssue(600)];
+    serveBoard();
+    process.env.HOUSE_AGENT = "agency-builder";
+    await settleSourceClaim(seat(boardIssues[900]), BOT);
+    assert.deepEqual(regIssues[REG][0].assignees.map(a => a.login), ["agency-builder"], "the house agent takes the released or pre-deploy issue");
+    assert.deepEqual(boardIssues[900].assignees.map(a => a.login), ["agency-builder"], "mirrored onto the board task in the same sweep");
+    assert.ok(boardIssues[900].labels.some(l => l.name === "in-progress"));
+    assert.match(regThreads[SOURCE].at(-1).body, /^Claimed by @agency-builder\./);
+  });
+
+  test("with HOUSE_AGENT unset, a claim sweep on a ready task with no claimant leaves it alone", async () => {
+    reset();
+    boardIssues[890] = autoEpic(890, 900);
+    boardIssues[900] = readyTask(900, 890);
+    regIssues[REG] = [registryIssue(600)];
+    serveBoard();
+    await settleSourceClaim(seat(boardIssues[900]), BOT);
+    assert.equal(regIssues[REG][0].assignees.length, 0);
+    assert.equal(boardIssues[900].assignees.length, 0);
+    assert.ok(boardIssues[900].labels.some(l => l.name === "ready"), "the task waits, still ready");
+  });
+
+  test("an eligible claimant still wins over the house agent", async () => {
+    reset();
+    boardIssues[890] = autoEpic(890, 900);
+    boardIssues[900] = readyTask(900, 890);
+    regIssues[REG] = [registryIssue(600, { assignees: ["newcomer"] })];
+    serveBoard();
+    process.env.HOUSE_AGENT = "agency-builder";
+    await settleSourceClaim(seat(boardIssues[900]), BOT);
+    assert.deepEqual(regIssues[REG][0].assignees.map(a => a.login), ["newcomer"]);
+  });
 });
 
 describe("closing an auto task on the merge", () => {
