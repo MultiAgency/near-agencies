@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { afterEach, describe, test } from "node:test";
 import { readFileSync } from "node:fs";
 
-import { autoJobsHealth, closeIfHandedOff, coordinatorHealth, planAutoJobRounds, settleAutoChangeRequests, settleAutoJobRounds, settleAutoJobs, settlePayouts } from "../lib/coordinator.mjs";
+import { autoJobsHealth, closeIfHandedOff, coordinatorHealth, planAutoJobRounds, releaseDecision, releaseIfStale, refuseLateSourceClaims, settleAutoChangeRequests, settleAutoJobRounds, settleAutoJobs, settlePayouts, settleSourceClaim } from "../lib/coordinator.mjs";
 import { listEngagements, loadEngagement } from "../lib/engagement-state.mjs";
 import { fence, fenced } from "../lib/github.mjs";
 import { ledgerOf } from "../lib/ledger.mjs";
 import { USDC } from "../lib/near.mjs";
+import { seat } from "../lib/seats.mjs";
 import { teamProblem } from "../lib/team.mjs";
 
 // Requests go only to the fetch stubs below; the token just has to resolve.
@@ -229,10 +230,27 @@ function serveBoard() {
     if ((m = /^\/repos\/([^/]+)\/([^/]+)\/issues\/(\d+)\/labels\/([^/]+)$/.exec(u.pathname)) && method === "DELETE") {
       if (labelFails) { labelFails -= 1; return json({ message: "boom" }, 403); }
       const key = `${m[1]}/${m[2]}`;
-      const found = (regIssues[key] ?? []).find(i => i.number === Number(m[3]));
+      const found = key === BOARD ? boardIssues[Number(m[3])] : (regIssues[key] ?? []).find(i => i.number === Number(m[3]));
       if (!found) return json({ message: "Not Found" }, 404);
       found.labels = found.labels.filter(l => l.name !== decodeURIComponent(m[4]));
       return json(found.labels);
+    }
+    if ((m = /^\/repos\/([^/]+)\/([^/]+)\/issues\/(\d+)\/labels$/.exec(u.pathname)) && method === "POST") {
+      const key = `${m[1]}/${m[2]}`;
+      const found = key === BOARD ? boardIssues[Number(m[3])] : (regSingle[`${key}#${m[3]}`] ?? (regIssues[key] ?? []).find(i => i.number === Number(m[3])));
+      const names = JSON.parse(options.body).labels;
+      if (found) found.labels.push(...names.map(name => ({ name })));
+      return json(found?.labels ?? []);
+    }
+    if ((m = /^\/repos\/([^/]+)\/([^/]+)\/issues\/(\d+)\/assignees$/.exec(u.pathname))) {
+      const key = `${m[1]}/${m[2]}`;
+      const found = key === BOARD ? boardIssues[Number(m[3])] : (regSingle[`${key}#${m[3]}`] ?? (regIssues[key] ?? []).find(i => i.number === Number(m[3])));
+      const logins = JSON.parse(options.body).assignees;
+      if (found) {
+        if (method === "POST") for (const login of logins) if (!found.assignees.some(a => a.login === login)) found.assignees.push({ login });
+        if (method === "DELETE") found.assignees = found.assignees.filter(a => !logins.includes(a.login));
+      }
+      return json(found ?? {});
     }
     if ((m = /^\/repos\/([^/]+)\/([^/]+)\/issues\/(\d+)\/comments$/.exec(u.pathname))) {
       const key = `${m[1]}/${m[2]}#${m[3]}`;
@@ -975,6 +993,141 @@ describe("the race problem #119 recorded", () => {
     assert.match(boardThreads[`${BOARD}#900`].at(-1).body, /@agency-builder, the pull request your handoff links is merged, so this task is done\./);
     assert.equal(boardIssues[890].state, "open", "the job completes through the payout sweep, not this one");
     assert.equal(boardThreads[`${BOARD}#900`].filter(c => c.body.includes("**Superseded:**")).length, 0);
+  });
+});
+
+describe("claiming an auto job's task on its source issue (#189)", () => {
+  // A seat `ready` for its first claim: no board assignee yet.
+  const readyTask = (taskNumber, epicNumber, over = {}) => ({
+    ...autoTask(taskNumber, epicNumber, { assignees: [], ...over }),
+    labels: [{ name: "ready" }, { name: "skill:code" }, { name: "agent-eligible" }],
+  });
+  const say = (id, login, body, at = "2026-10-05T01:00:00Z") => ({ id, user: { login }, body, created_at: at, updated_at: at });
+
+  test("a /claim on the source issue claims it, mirrored onto the board task", async () => {
+    reset();
+    boardIssues[890] = autoEpic(890, 900);
+    boardIssues[900] = readyTask(900, 890);
+    regIssues[REG] = [registryIssue(600)];
+    regThreads[SOURCE] = [say(1, "newcomer", "/claim")];
+    serveBoard();
+    await settleSourceClaim(seat(boardIssues[900]), BOT);
+    assert.deepEqual(regIssues[REG][0].assignees.map(a => a.login), ["newcomer"], "the issue is assigned, roster or not");
+    assert.match(regThreads[SOURCE].at(-1).body, /^Claimed by @newcomer\./);
+    assert.deepEqual(reactions.find(r => r.id === 1), { id: 1, user: { login: BOT }, content: "+1" });
+    assert.deepEqual(boardIssues[900].assignees.map(a => a.login), ["newcomer"], "the board task copies the issue's assignee");
+    assert.deepEqual(boardIssues[900].labels.map(l => l.name).sort(), ["agent-eligible", "in-progress", "skill:code"]);
+    assert.match(boardThreads[`${BOARD}#900`].at(-1).body, /^Claimed by @newcomer\./);
+  });
+
+  test("a second /claim on the source issue is refused naming the winner, and marked seen", async () => {
+    reset();
+    boardIssues[890] = autoEpic(890, 900);
+    boardIssues[900] = readyTask(900, 890);
+    regIssues[REG] = [registryIssue(600)];
+    regThreads[SOURCE] = [say(1, "newcomer", "/claim"), say(2, "other", "/claim")];
+    serveBoard();
+    await settleSourceClaim(seat(boardIssues[900]), BOT);
+    assert.match(regThreads[SOURCE].at(-1).body, /@other can't claim this task: @newcomer claimed it first\./);
+    assert.deepEqual(reactions.find(r => r.id === 2).content, "-1");
+    assert.deepEqual(regIssues[REG][0].assignees.map(a => a.login), ["newcomer"]);
+
+    // A restart answers neither claim again.
+    const before = regThreads[SOURCE].length;
+    await settleSourceClaim(seat(boardIssues[900]), BOT);
+    assert.equal(regThreads[SOURCE].length, before, "both claims were already answered");
+  });
+
+  test("a /claim on the board task itself is refused with a pointer to the issue", async () => {
+    reset();
+    boardIssues[890] = autoEpic(890, 900);
+    boardIssues[900] = readyTask(900, 890);
+    boardThreads[`${BOARD}#900`] = [say(1, "jlwaugh", "/claim")];
+    regIssues[REG] = [registryIssue(600)];
+    serveBoard();
+    await settleSourceClaim(seat(boardIssues[900]), BOT);
+    assert.match(boardThreads[`${BOARD}#900`].at(-1).body,
+      /^@jlwaugh can't claim this task here: claim it on the issue: https:\/\/github\.com\/MultiAgency\/near-agencies\/issues\/600\./);
+    assert.equal(boardIssues[900].assignees.length, 0, "nothing claimed on the board");
+  });
+
+  test("a native assignment on the source issue claims it the same way, refusing a second assignee", async () => {
+    reset();
+    boardIssues[890] = autoEpic(890, 900);
+    boardIssues[900] = readyTask(900, 890);
+    regIssues[REG] = [registryIssue(600, { assignees: ["agency-builder", "jlwaugh"] })];
+    serveBoard();
+    await settleSourceClaim(seat(boardIssues[900]), BOT);
+    assert.deepEqual(regIssues[REG][0].assignees.map(a => a.login), ["agency-builder"], "the loser is unassigned");
+    assert.match(regThreads[SOURCE]?.at(-1)?.body ?? "", /@jlwaugh can't claim this task: @agency-builder claimed it first\./);
+    assert.deepEqual(boardIssues[900].assignees.map(a => a.login), ["agency-builder"]);
+  });
+
+  test("a claimant off the roster is accepted: an auto job's task needs none", async () => {
+    reset();
+    boardIssues[890] = autoEpic(890, 900);
+    boardIssues[900] = readyTask(900, 890);
+    regIssues[REG] = [registryIssue(600)];
+    regThreads[SOURCE] = [say(1, "stranger", "/claim")];
+    serveBoard();
+    await settleSourceClaim(seat(boardIssues[900]), BOT);
+    assert.deepEqual(regIssues[REG][0].assignees.map(a => a.login), ["stranger"]);
+    assert.doesNotMatch(regThreads[SOURCE].at(-1).body, /can't claim/);
+  });
+
+  test("refuseLateSourceClaims answers a late /claim on the issue \"claimed first\", and one on the board points back to it", async () => {
+    reset();
+    boardIssues[890] = autoEpic(890, 900);
+    boardIssues[900] = autoTask(900, 890, { assignees: ["agency-builder"] });
+    regIssues[REG] = [registryIssue(600, { assignees: ["agency-builder"] })];
+    regThreads[SOURCE] = [say(1, "latecomer", "/claim"), say(2, "agency-builder", "/claim")];
+    boardThreads[`${BOARD}#900`] = [say(3, "another", "/claim")];
+    serveBoard();
+    await refuseLateSourceClaims(seat(boardIssues[900]), BOT);
+    assert.match(regThreads[SOURCE].find(c => /latecomer can't/.test(c.body)).body,
+      /@latecomer can't claim this task: @agency-builder claimed it first\./);
+    assert.deepEqual(reactions.find(r => r.id === 1).content, "-1");
+    assert.deepEqual(reactions.find(r => r.id === 2).content, "+1", "the claimant's own repeat claim is marked processed, not refused");
+    assert.match(boardThreads[`${BOARD}#900`].at(-1).body,
+      /^@another can't claim this task here: claim it on the issue: https:\/\/github\.com\/MultiAgency\/near-agencies\/issues\/600\./);
+  });
+
+  test("releaseIfStale releases the source issue too: unassigned and told it is open again", async () => {
+    reset();
+    boardIssues[890] = autoEpic(890, 900);
+    boardIssues[900] = autoTask(900, 890, { assignees: ["agency-builder"] });
+    boardThreads[`${BOARD}#900`] = [];
+    regIssues[REG] = [registryIssue(600, { assignees: ["agency-builder"] })];
+    regTimeline[SOURCE] = [{ event: "assigned", actor: { login: "agency-builder" }, created_at: "2000-01-01T00:00:00Z" }];
+    serveBoard();
+    await releaseIfStale(seat(boardIssues[900]));
+    assert.equal(boardIssues[900].assignees.length, 0);
+    assert.deepEqual(boardIssues[900].labels.map(l => l.name).sort(), ["agent-eligible", "ready", "skill:code"]);
+    assert.match(boardThreads[`${BOARD}#900`].at(-1).body, /No handoff after 24 hours, so this task is open again\./);
+    assert.equal(regIssues[REG][0].assignees.length, 0, "the issue is released too");
+    assert.match(regThreads[SOURCE].at(-1).body, /No handoff after 24 hours, so this issue is open again\./);
+  });
+
+  test("releaseDecision reads the clock from the source issue's own assignment, and falls back to the board's claim record for a task claimed before #189 landed", async () => {
+    reset();
+    boardIssues[900] = autoTask(900, 890, { assignees: ["agency-builder"] });
+    regIssues[REG] = [registryIssue(600, { assignees: ["agency-builder"] })];
+    regTimeline[SOURCE] = [{ event: "assigned", actor: { login: "agency-builder" }, created_at: "2026-10-05T03:00:00Z" }];
+    serveBoard();
+    const atIssue = await releaseDecision(seat(boardIssues[900]));
+    assert.equal(atIssue.since, Date.parse("2026-10-05T03:00:00Z"), "the issue's own assignment is the clock");
+
+    // No assigned event recorded on the issue yet (a claim made on the board
+    // before #189 landed): the board's own "Claimed by" record is the clock.
+    reset();
+    boardIssues[900] = autoTask(900, 890, { assignees: ["agency-builder"] });
+    boardThreads[`${BOARD}#900`] = [say(1, BOT, "Claimed by @agency-builder.", "2000-01-01T00:00:00Z")];
+    regIssues[REG] = [registryIssue(600, { assignees: [] })];
+    regTimeline[SOURCE] = [];
+    serveBoard();
+    const fallback = await releaseDecision(seat(boardIssues[900]));
+    assert.equal(fallback.since, Date.parse("2000-01-01T00:00:00Z"));
+    assert.equal(fallback.release, true);
   });
 });
 
