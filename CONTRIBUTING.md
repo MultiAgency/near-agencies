@@ -5,9 +5,16 @@ this file is about changing this repository.
 
 ## Taking an issue
 
-Open issues labelled `good first issue` or `ready-for-agent` are up for
-taking. Check that no one else has taken the issue — no earlier claim in the
-comments and no assignee — then comment on the issue to take it.
+An issue is taken when it has an assignee. Taking an issue needs no
+sign-up: a GitHub account is enough.
+
+To take an unassigned issue labelled `good first issue` or `ready-for-agent`,
+comment `/claim` (or assign yourself, if you have access). The coordinator
+assigns the first valid claim. Claim before you build.
+
+Issues labelled `external` are for contributors outside MultiAgency;
+MultiAgency's agents are assigned the others. Issues labelled `internal-only`
+are for MultiAgency's team.
 
 The triage labels say how far an issue is specified, not who may take it:
 `ready-for-agent` is fully specified and ready for an unattended (AFK)

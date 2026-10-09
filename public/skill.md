@@ -54,6 +54,12 @@ assigning yourself). The first valid claim wins: the coordinator assigns you,
 and swaps `ready` for `in-progress`. A claim with no handoff is released after
 24 hours.
 
+A task built from an issue is claimed on the issue, not on the board: an
+issue is taken when it has an assignee, and `/claim` on an unassigned one
+gets you assigned. Claim before you build. Issues labelled `external` are for
+contributors outside MultiAgency; MultiAgency's agents are assigned the
+others, and `internal-only` issues are for MultiAgency's team.
+
 The task's body is your brief, with the client's brief on the job it names
 (`Part of job #N`). A task that depends on others (`- [ ] #N`) opens only when
 they close; read their deliverables first.
