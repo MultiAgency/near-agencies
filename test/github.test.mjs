@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, describe, test } from "node:test";
 
 process.env.GITHUB_TOKEN = "test-token";
-const { comments } = await import("../lib/github.mjs");
+const { closesIssue, comments } = await import("../lib/github.mjs");
 
 describe("reading comments", () => {
   const realFetch = globalThis.fetch;
@@ -32,5 +32,43 @@ describe("reading comments", () => {
   test("throws rather than dropping comments when there are more pages than it reads", async () => {
     globalThis.fetch = async () => new Response(JSON.stringify(Array.from({ length: 100 }, (_, i) => ({ id: i }))));
     await assert.rejects(() => comments(11), /more than 5000 comments on issue 11/);
+  });
+});
+
+describe("closesIssue", () => {
+  const own = "MultiAgency/near-agencies";
+  const source = `${own}#189`;
+  const url = `https://github.com/${own}/issues/189`;
+
+  test("reads a closing keyword followed by the issue's URL", () => {
+    assert.equal(closesIssue(`Closes ${url}`, own, source), true);
+    assert.equal(closesIssue(`fixes: ${url}`, "other/repo", source), true);
+    assert.equal(closesIssue(`Resolved ${url}/`, own, source), true);
+    assert.equal(closesIssue(`closes http://github.com/${own}/issues/189`, own, source), true);
+    assert.equal(closesIssue(`CLOSES https://github.com/multiagency/NEAR-agencies/issues/189`, own, source), true);
+  });
+
+  test("the URL must name the issue's repository and number", () => {
+    assert.equal(closesIssue("Closes https://github.com/MultiAgency/kanban-sandbox/issues/189", own, source), false);
+    assert.equal(closesIssue(`Closes https://github.com/${own}/issues/1890`, own, source), false);
+    assert.equal(closesIssue(`Closes https://github.com/${own}/issues/18`, own, source), false);
+    assert.equal(closesIssue(`Closes https://github.com/${own}/pull/189`, own, source), false);
+  });
+
+  test("keeps the owner/repo#n and bare #n forms", () => {
+    assert.equal(closesIssue(`Closes ${source}`, "other/repo", source), true);
+    assert.equal(closesIssue("Closes #189", own, source), true);
+    assert.equal(closesIssue(`Closes ${source}`, own, source), true);
+    assert.equal(closesIssue("Closes #189", "other/repo", source), false);
+    assert.equal(closesIssue("Closes #1890", own, source), false);
+  });
+
+  test("a mention, or a keyword with no issue after it, closes nothing", () => {
+    assert.equal(closesIssue("See #189", own, source), false);
+    assert.equal(closesIssue(`See ${url}`, own, source), false);
+    assert.equal(closesIssue(`Prefix ${url}`, own, source), false);
+    assert.equal(closesIssue("Closes the loop", own, source), false);
+    assert.equal(closesIssue(`Closes ${url}`, own, "not-a-source"), false);
+    assert.equal(closesIssue(null, own, source), false);
   });
 });
