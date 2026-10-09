@@ -7,7 +7,7 @@
   },
   "scripts": {
     "start": "node --no-warnings server.mjs",
-    "test": "GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.invalid GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.invalid ROSTER_FILE=test/fixtures/roster.json ADMITTED_FILE=test/fixtures/none.json node --test --test-timeout=120000 \"test/*.test.mjs\"",
+    "test": "GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.invalid GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.invalid ROSTER_FILE=test/fixtures/roster.json ADMITTED_FILE=test/fixtures/none.json SITE_URL=https://demo.multiagency.ai node --test --test-timeout=120000 \"test/*.test.mjs\"",
     "check": "for f in *.mjs lib/*.mjs scripts/*.mjs agents/*/*.mjs evals/*/*.mjs public/app.js; do node --check \"$f\" || exit 1; done"
   },
   "dependencies": {
